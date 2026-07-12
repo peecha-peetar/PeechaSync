@@ -1,0 +1,14 @@
+{
+  "ftpHost": "peecha.ir",
+  "ftpHostAlt": "server38e.irwebspace.com",
+  "ftpPort": 21,
+  "ftpUser": "YOUR_FTP_USER",
+  "ftpPassword": "YOUR_FTP_PASSWORD",
+  "remotePluginDir": "public_html/wp-content/plugins/peecha-license-manager",
+  "remoteClientMirrorDir": "public_html/wp-content/uploads/peecha-sync-updates",
+  "siteUrl": "https://peecha.ir",
+  "githubRepo": "shehnm/PeechaSync",
+  "usePassive": true,
+  "useFtps": false,
+  "openBrowserAfterDeploy": false
+}

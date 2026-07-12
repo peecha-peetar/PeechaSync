@@ -1,0 +1,14 @@
+PyQt5==5.15.11
+pyodbc==5.3.0
+requests==2.32.5
+WooCommerce==3.0.0
+cryptography==46.0.3
+PyInstaller==6.17.0
+psutil==7.2.2
+Pillow==12.1.1
+pillow-heif==1.4.0
+ImageHash==4.3.2
+arabic-reshaper==3.0.1
+python-bidi==0.6.11
+openpyxl==3.1.5
+qrcode==8.2
