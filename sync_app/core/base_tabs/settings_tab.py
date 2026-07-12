@@ -135,6 +135,44 @@ class WooTestWorker(QObject):
             self.finished.emit()
 
 
+class PrestaShopTestWorker(QObject):
+    """Worker غیرهمزمان برای تست اتصال پرستاشاپ (Webservice API)."""
+    log = pyqtSignal(str)
+    success = pyqtSignal(str)
+    error = pyqtSignal(str)
+    finished = pyqtSignal()
+
+    def __init__(self, config):
+        super().__init__()
+        self.config = dict(config or {})
+
+    def run(self):
+        try:
+            from sync_app.core.ps_sync_helper import check_prestashop_connection
+
+            cfg = dict(self.config)
+            url = (cfg.get("PS_URL") or "").strip()
+            key = (cfg.get("PS_API_KEY") or "").strip()
+            if not url:
+                raise Exception("آدرس پرستاشاپ خالی است.")
+            if not key:
+                raise Exception("کلید Webservice API وارد نشده است.")
+
+            self.log.emit(f"در حال تست اتصال به {url} ...")
+            ok, msg, currency = check_prestashop_connection(cfg)
+            if ok:
+                self.log.emit(f"✅ {msg}")
+                if currency and currency != "N/A":
+                    self.log.emit(f"واحد پول پیش‌فرض سایت: {currency}")
+                self.success.emit(msg)
+                return
+            self.error.emit(msg)
+        except Exception as e:
+            self.error.emit(str(e))
+        finally:
+            self.finished.emit()
+
+
 class SqlDbListWorker(QObject):
     """بارگذاری لیست دیتابیس‌ها بدون قفل UI"""
     log = pyqtSignal(str)
@@ -517,6 +555,8 @@ class SettingsTab(QWidget):
         self.theme_changed_callback = None
         self._wc_thread = None
         self._wc_worker = None
+        self._ps_thread = None
+        self._ps_worker = None
         self._wc_setup_thread = None
         self._wc_setup_worker = None
         self._sql_test_thread = None
@@ -1281,6 +1321,25 @@ class SettingsTab(QWidget):
         self.wp_test_button.setMinimumHeight(38)
         self.wp_test_button.clicked.connect(self.test_wp_app_password)
 
+        # --- پلتفرم فروشگاه: ووکامرس یا پرستاشاپ ---
+        self.store_platform_combo = QComboBox()
+        self.store_platform_combo.addItem("ووکامرس (WooCommerce)", "woocommerce")
+        self.store_platform_combo.addItem("پرستاشاپ (PrestaShop)", "prestashop")
+        self.store_platform_combo.setMinimumHeight(38)
+        _current_platform = str(self.config.get("STORE_PLATFORM") or "woocommerce")
+        _platform_idx = self.store_platform_combo.findData(_current_platform)
+        self.store_platform_combo.setCurrentIndex(_platform_idx if _platform_idx >= 0 else 0)
+
+        platform_help = QLabel(
+            "فیلدهای زیر مخصوص ووکامرس‌اند و اگر پلتفرم روی پرستاشاپ باشد استفاده نمی‌شوند — "
+            "برای پرستاشاپ، آدرس و کلید Webservice را در بخش «پرستاشاپ» پایین‌تر وارد کنید."
+        )
+        platform_help.setStyleSheet("color:#64748b; font-size:10px;")
+        platform_help.setWordWrap(True)
+
+        wc_form_layout.addRow(QLabel("پلتفرم فروشگاه:"), self.store_platform_combo)
+        wc_form_layout.addRow(QLabel(""), platform_help)
+
         wc_form_layout.addRow(QLabel("سایت فعال:"), wc_site_row)
         wc_form_layout.addRow(QLabel("نام پروفایل:"), self.wc_site_name_input)
         wc_form_layout.addRow(QLabel(""), wc_sites_help)
@@ -1327,6 +1386,39 @@ class SettingsTab(QWidget):
         wc_form_layout.addRow(QLabel("واحد پول سایت (فقط نمایش):"), site_currency_row)
         wc_form_layout.addRow(QLabel(""), wc_test_widget)
         wc_form_layout.addRow(QLabel(""), wc_setup_help)
+
+        # --- پرستاشاپ (Webservice API) ---
+        ps_section_label = QLabel("پرستاشاپ (PrestaShop)")
+        ps_section_label.setStyleSheet("font-weight:700; margin-top:10px;")
+        wc_form_layout.addRow(QLabel(""), ps_section_label)
+
+        self.ps_url_input = QLineEdit(self.config.get("PS_URL", ""))
+        self.ps_url_input.setPlaceholderText("https://your-prestashop-store.com")
+        self.ps_api_key_input = PasswordLineEdit(self.config.get("PS_API_KEY", ""))
+        self.ps_api_key_input.setPlaceholderText("کلید Webservice API")
+        self.ps_api_key_input.set_toggle_tooltip_base("کلید Webservice")
+
+        for field in [self.ps_url_input, self.ps_api_key_input]:
+            field.setLayoutDirection(Qt.LeftToRight)
+            field.setAlignment(Qt.AlignLeft)
+            field.setMinimumHeight(38)
+
+        ps_api_help = QLabel(
+            "کلید Webservice: پیشخوان پرستاشاپ → Advanced Parameters → Webservice → Add new webservice key.\n"
+            "دسترسی GET/PUT/POST را برای منابع products، categories و stock_availables فعال کنید.\n"
+            "⚠️ پشتیبانی پرستاشاپ در حال حاضر شامل دسته‌بندی و محصول ساده (بدون واریانت) است."
+        )
+        ps_api_help.setStyleSheet("color:#64748b; font-size:10px;")
+        ps_api_help.setWordWrap(True)
+
+        self.ps_test_button = QPushButton("تست اتصال پرستاشاپ")
+        self.ps_test_button.setMinimumHeight(38)
+        self.ps_test_button.clicked.connect(self.test_ps_connection)
+
+        wc_form_layout.addRow(english_caption("PrestaShop URL:"), self.ps_url_input)
+        wc_form_layout.addRow(english_caption("Webservice API Key:"), self.ps_api_key_input)
+        wc_form_layout.addRow(QLabel(""), ps_api_help)
+        wc_form_layout.addRow(QLabel(""), self.ps_test_button)
 
         self.monitor_group = QGroupBox("مانیتورینگ عملیات اتصال")
         monitor_layout = QVBoxLayout()
@@ -2830,6 +2922,64 @@ class SettingsTab(QWidget):
             "WC_VERIFY_SSL": bool((self.config or {}).get("WC_VERIFY_SSL", False)),
         }
 
+    def _ps_config_from_form(self):
+        return {
+            **(self.config or {}),
+            "PS_URL": self.ps_url_input.text().strip(),
+            "PS_API_KEY": self.ps_api_key_input.text().strip(),
+            "PS_VERIFY_SSL": bool((self.config or {}).get("PS_VERIFY_SSL", False)),
+            "PS_LANG_ID": (self.config or {}).get("PS_LANG_ID", 1),
+            "PS_ROOT_CATEGORY_ID": (self.config or {}).get("PS_ROOT_CATEGORY_ID", 2),
+        }
+
+    def test_ps_connection(self):
+        if self._ps_thread is not None and self._ps_thread.isRunning():
+            self._append_monitor("تست قبلی هنوز در حال اجراست...")
+            return
+
+        if not self._monitor_open:
+            self._animate_monitor_panel(True)
+        self._append_monitor("شروع تست اتصال پرستاشاپ...")
+
+        self.ps_test_button.setEnabled(False)
+        self.ps_test_button.setText("در حال تست اتصال...")
+        self.status_label.setText("در حال تست پرستاشاپ...")
+        self.status_label.setStyleSheet("color: #d97706; font-weight: bold;")
+
+        self._ps_thread = QThread(self)
+        self._ps_worker = PrestaShopTestWorker(self._ps_config_from_form())
+        self._ps_worker.moveToThread(self._ps_thread)
+
+        self._ps_thread.started.connect(self._ps_worker.run)
+        self._ps_worker.log.connect(self._append_monitor)
+        self._ps_worker.success.connect(self._on_ps_test_success)
+        self._ps_worker.error.connect(self._on_ps_test_error)
+        self._ps_worker.finished.connect(self._ps_thread.quit)
+        self._ps_worker.finished.connect(self._ps_worker.deleteLater)
+        self._ps_thread.finished.connect(self._ps_thread.deleteLater)
+        self._ps_thread.finished.connect(self._on_ps_test_finished)
+
+        self._ps_thread.start()
+
+    def _on_ps_test_success(self, message):
+        self._append_monitor(f"✅ {message}")
+        self.status_label.setText("پرستاشاپ متصل است ✅")
+        self.status_label.setStyleSheet("color: #16a34a; font-weight: bold;")
+        QMessageBox.information(self, "موفق", message)
+
+    def _on_ps_test_error(self, error_message):
+        self._append_monitor(f"❌ {error_message}")
+        self.status_label.setText("خطا در اتصال پرستاشاپ ❌")
+        self.status_label.setStyleSheet("color: #dc2626; font-weight: bold;")
+        QMessageBox.critical(self, "خطا در اتصال به پرستاشاپ", str(error_message or ""))
+
+    def _on_ps_test_finished(self):
+        self.ps_test_button.setEnabled(True)
+        self.ps_test_button.setText("تست اتصال پرستاشاپ")
+        self._ps_thread = None
+        self._ps_worker = None
+        self._append_monitor("پایان تست اتصال پرستاشاپ.")
+
     def _sync_header_connectivity(self, wc_ok, wc_msg):
         from sync_app.core.connectivity_guard import find_peecha_launcher
         from sync_app.core.connectivity_service import load_connectivity_cache, save_connectivity_cache
@@ -3819,6 +3969,9 @@ class SettingsTab(QWidget):
                 "LICENSE_API_KEY": license_api_key,
                 "DEFAULT_CUSTOMER_MODE": self.default_customer_mode_combo.currentData() or "website",
                 "DEFAULT_CUSTOMER_CODE": (self.default_customer_code_input.text() or "").strip(),
+                "STORE_PLATFORM": self.store_platform_combo.currentData() or "woocommerce",
+                "PS_URL": self.ps_url_input.text().strip(),
+                "PS_API_KEY": self.ps_api_key_input.text().strip(),
             })
             for _cfg_key, _cb in self._field_sync_checkboxes.items():
                 config_to_save[_cfg_key] = _cb.isChecked()

@@ -1,0 +1,636 @@
+"""
+transport پرستاشاپ (Webservice API) — نگاشت به همون واژگان/شکل JSON که
+wc_sync_helper/wcapi برای ووکامرس برمی‌گردونن، تا کد بالادستی (sync
+محصول/دسته) بین دو پلتفرم تا حد امکان مشترک بمونه.
+
+خواندن (GET) با output_format=JSON — نوشتن (POST/PUT) با XML، چون این
+همون فرمتیه که Webservice API پرستاشاپ برای فیلدهای چندزبانه (name،
+link_rewrite، description) رسمی و همیشه پشتیبانی می‌کنه.
+
+⚠️ این کلاینت بر اساس مستندات رسمی Webservice API نوشته شده و هنوز روی
+یک فروشگاه واقعی پرستاشاپ تست نشده — قبل از استفاده‌ی واقعی حتماً با
+تب تنظیمات → تست اتصال روی سایت واقعی/آزمایشی بررسی شود.
+"""
+
+from __future__ import annotations
+
+import re
+import time
+import xml.etree.ElementTree as ET
+from urllib.parse import unquote
+
+import requests
+
+from sync_app.core.ps_api_helper import get_ps_auth, ps_endpoint, ps_lang_id, ps_store_host
+from sync_app.core.sync_cancel import check_cancelled, SyncCancelled
+
+PS_SYNC_RETRIES = 3
+PS_SYNC_BACKOFF = (2.0, 4.0, 6.0)
+PS_DEFAULT_PARENT_CATEGORY_ID = 2  # "Home" در یک نصب استاندارد تک‌فروشگاهی
+
+
+class PrestaShopAPIError(RuntimeError):
+    pass
+
+
+# ---------------------------------------------------------------------------
+# timeout / retry — همون الگوی wc_call، مستقل از پلتفرم
+# ---------------------------------------------------------------------------
+
+def ps_timeout_pair(config) -> tuple[float, float]:
+    cfg = config or {}
+    try:
+        connect = int(cfg.get("PS_CONNECT_TIMEOUT", 25) or 25)
+    except Exception:
+        connect = 25
+    try:
+        read = int(cfg.get("PS_READ_TIMEOUT", 120) or 120)
+    except Exception:
+        read = 120
+    return (float(max(8, min(connect, 45))), float(max(45, min(read, 180))))
+
+
+def ps_call(label, call_fn, retries=PS_SYNC_RETRIES, backoff=None):
+    from sync_app.core.sync_utils import log
+
+    check_cancelled()
+    waits = backoff if backoff is not None else PS_SYNC_BACKOFF
+    last_error = None
+    for attempt in range(1, retries + 2):
+        try:
+            return call_fn()
+        except SyncCancelled:
+            raise
+        except Exception as err:
+            last_error = err
+            if attempt <= retries:
+                check_cancelled()
+                wait = waits[min(attempt - 1, len(waits) - 1)]
+                log.warning(f"⚠️ {label} — تلاش {attempt} ناموفق ({wait:.0f}s صبر): {err}")
+                time.sleep(wait)
+                check_cancelled()
+    raise last_error
+
+
+# ---------------------------------------------------------------------------
+# XML helpers
+# ---------------------------------------------------------------------------
+
+def _set_text(parent, tag, value):
+    el = ET.SubElement(parent, tag)
+    el.text = "" if value is None else str(value)
+    return el
+
+
+def _set_lang_text(parent, tag, value, lang_id):
+    el = ET.SubElement(parent, tag)
+    lang_el = ET.SubElement(el, "language", {"id": str(lang_id)})
+    lang_el.text = "" if value is None else str(value)
+    return el
+
+
+def _build_xml(resource_name: str, build_fn) -> bytes:
+    root = ET.Element("prestashop")
+    node = ET.SubElement(root, resource_name)
+    build_fn(node)
+    return b'<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(root, encoding="utf-8")
+
+
+def _lang_value(value, lang_id=1) -> str:
+    """مقدار یک فیلد چندزبانه (name/link_rewrite/description) از پاسخ JSON."""
+    if value is None:
+        return ""
+    if isinstance(value, dict):
+        return str(value.get("value") or value.get("#text") or "")
+    if isinstance(value, list):
+        for item in value:
+            if isinstance(item, dict) and str(item.get("id")) == str(lang_id):
+                return str(item.get("value") or "")
+        if value and isinstance(value[0], dict):
+            return str(value[0].get("value") or "")
+        return ""
+    return str(value)
+
+
+def _xml_error_message(raw_text: str) -> str:
+    try:
+        root = ET.fromstring(raw_text)
+    except Exception:
+        clean = re.sub(r"<[^>]+>", " ", raw_text or "")
+        clean = re.sub(r"\s+", " ", clean).strip()
+        return clean[:220]
+    parts = []
+    for err in root.iter("error"):
+        code = (err.findtext("code") or "").strip()
+        msg = (err.findtext("message") or "").strip()
+        parts.append(f"{code}: {msg}" if code else msg)
+    return "; ".join(p for p in parts if p) or "خطای نامشخص پرستاشاپ"
+
+
+def _ps_error_message(response) -> str:
+    status = int(getattr(response, "status_code", 0) or 0)
+    text = (getattr(response, "text", None) or "").strip()
+    if not text:
+        return f"HTTP {status}"
+    try:
+        data = response.json()
+        if isinstance(data, dict) and data.get("errors"):
+            errs = data["errors"]
+            if isinstance(errs, list):
+                msgs = [str(e.get("message") or e) for e in errs if isinstance(e, dict)] or [str(errs)]
+            else:
+                msgs = [str(errs)]
+            return f"HTTP {status} — " + "; ".join(msgs)
+    except Exception:
+        pass
+    return f"HTTP {status} — {_xml_error_message(text)}"
+
+
+# ---------------------------------------------------------------------------
+# transport پایه
+# ---------------------------------------------------------------------------
+
+def ps_rest_request(
+    config,
+    method: str,
+    resource: str,
+    *,
+    params=None,
+    xml_body: bytes | None = None,
+    timeout=None,
+):
+    cfg = config or {}
+    url = ps_endpoint(cfg.get("PS_URL", ""), resource)
+    if not url:
+        raise PrestaShopAPIError("PS_URL خالی است.")
+    auth = get_ps_auth(cfg)
+    if not auth[0]:
+        raise PrestaShopAPIError("PS_API_KEY خالی است.")
+    verify = bool(cfg.get("PS_VERIFY_SSL", False))
+    req_timeout = timeout if timeout is not None else ps_timeout_pair(cfg)
+
+    query = dict(params or {})
+    headers = {"Accept": "application/json"}
+    data = None
+    if method.upper() == "GET":
+        query.setdefault("output_format", "JSON")
+    if xml_body is not None:
+        headers["Content-Type"] = "text/xml; charset=utf-8"
+        data = xml_body
+
+    return requests.request(
+        method.upper(),
+        url,
+        auth=auth,
+        params=query,
+        data=data,
+        timeout=req_timeout,
+        verify=verify,
+        headers=headers,
+    )
+
+
+def _raise_for_status(response, label: str):
+    status = int(getattr(response, "status_code", 0) or 0)
+    if 200 <= status < 300:
+        return
+    raise PrestaShopAPIError(f"{label}: {_ps_error_message(response)}")
+
+
+def _response_json(response, label: str):
+    _raise_for_status(response, label)
+    try:
+        return response.json()
+    except Exception as exc:
+        raise PrestaShopAPIError(f"{label}: پاسخ JSON نامعتبر — {exc}") from exc
+
+
+def _response_xml_id(response, label: str) -> int:
+    """id ساخته‌شده از پاسخ XML یک POST — پاسخ نوشتن همیشه XML است."""
+    _raise_for_status(response, label)
+    text = (getattr(response, "text", None) or "").strip()
+    try:
+        root = ET.fromstring(text)
+        id_text = root.findtext(".//id")
+        if id_text and id_text.strip().isdigit():
+            return int(id_text.strip())
+    except Exception:
+        pass
+    raise PrestaShopAPIError(f"{label}: id در پاسخ یافت نشد.")
+
+
+# ---------------------------------------------------------------------------
+# دسته‌بندی‌ها
+# ---------------------------------------------------------------------------
+
+def _category_to_wc_shape(entry: dict, lang_id: int) -> dict:
+    return {
+        "id": int(entry.get("id") or 0),
+        "name": _lang_value(entry.get("name"), lang_id),
+        "slug": _lang_value(entry.get("link_rewrite"), lang_id),
+        "parent": int(entry.get("id_parent") or 0),
+    }
+
+
+def ps_list_categories(config, *, timeout=None) -> list[dict]:
+    """همه دسته‌ها — شکل {id, name, slug, parent} مثل fetch_wc_slug_map."""
+    cfg = config or {}
+    lang_id = ps_lang_id(cfg)
+    out: list[dict] = []
+    offset = 0
+    page_size = 100
+    while True:
+        check_cancelled()
+        resp = ps_call(
+            f"دریافت categories offset={offset}",
+            lambda o=offset: ps_rest_request(
+                cfg, "GET", "categories",
+                params={"limit": f"{o},{page_size}"},
+                timeout=timeout,
+            ),
+        )
+        data = _response_json(resp, "دریافت categories")
+        batch = data.get("categories") or []
+        if not batch:
+            break
+        for entry in batch:
+            if isinstance(entry, dict) and entry.get("id"):
+                out.append(_category_to_wc_shape(entry, lang_id))
+        if len(batch) < page_size:
+            break
+        offset += page_size
+    return out
+
+
+def ps_fetch_slug_map(config, *, timeout=None, cancel_check=None) -> dict:
+    """شکل خروجی مثل fetch_wc_slug_map: {slug: {id, name, slug, parent}}."""
+    out = {}
+    for cat in ps_list_categories(config, timeout=timeout):
+        slug = unquote((cat.get("slug") or "").strip().lower())
+        if not slug:
+            continue
+        out[slug] = cat
+        if cancel_check:
+            cancel_check()
+    return out
+
+
+def ps_get_category(config, category_id: int, *, timeout=None) -> dict:
+    cfg = config or {}
+    lang_id = ps_lang_id(cfg)
+    resp = ps_call(
+        f"دریافت دسته #{category_id}",
+        lambda: ps_rest_request(cfg, "GET", f"categories/{int(category_id)}", timeout=timeout),
+    )
+    data = _response_json(resp, f"دریافت دسته #{category_id}")
+    entry = data.get("category") or {}
+    return _category_to_wc_shape(entry, lang_id)
+
+
+def ps_create_category(config, *, name: str, slug: str, parent: int = 0, timeout=None) -> dict:
+    cfg = config or {}
+    lang_id = ps_lang_id(cfg)
+    parent_id = int(parent or cfg.get("PS_ROOT_CATEGORY_ID") or PS_DEFAULT_PARENT_CATEGORY_ID)
+
+    def _build(node):
+        _set_text(node, "id_parent", parent_id)
+        _set_lang_text(node, "name", name, lang_id)
+        _set_lang_text(node, "link_rewrite", slug, lang_id)
+        _set_text(node, "active", 1)
+
+    body = _build_xml("category", _build)
+    resp = ps_call(
+        f"ایجاد دسته '{name}'",
+        lambda: ps_rest_request(cfg, "POST", "categories", xml_body=body, timeout=timeout),
+    )
+    new_id = _response_xml_id(resp, f"ایجاد دسته '{name}'")
+    return {"id": new_id, "name": name, "slug": slug, "parent": parent_id}
+
+
+def ps_update_category(
+    config, category_id: int, *, name: str | None = None, slug: str | None = None,
+    parent: int | None = None, timeout=None,
+) -> dict:
+    """PUT کامل — چون Webservice پرستاشاپ فیلد ست‌نشده رو خالی می‌کنه، اول رکورد فعلی خونده می‌شه."""
+    cfg = config or {}
+    lang_id = ps_lang_id(cfg)
+    current = ps_get_category(cfg, category_id, timeout=timeout)
+    final_name = name if name is not None else current.get("name")
+    final_slug = slug if slug is not None else current.get("slug")
+    final_parent = int(parent if parent is not None else (current.get("parent") or 0)) or PS_DEFAULT_PARENT_CATEGORY_ID
+
+    def _build(node):
+        _set_text(node, "id", int(category_id))
+        _set_text(node, "id_parent", final_parent)
+        _set_lang_text(node, "name", final_name, lang_id)
+        _set_lang_text(node, "link_rewrite", final_slug, lang_id)
+        _set_text(node, "active", 1)
+
+    body = _build_xml("category", _build)
+    resp = ps_call(
+        f"به‌روزرسانی دسته #{category_id}",
+        lambda: ps_rest_request(cfg, "PUT", f"categories/{int(category_id)}", xml_body=body, timeout=timeout),
+    )
+    _raise_for_status(resp, f"به‌روزرسانی دسته #{category_id}")
+    return {"id": int(category_id), "name": final_name, "slug": final_slug, "parent": final_parent}
+
+
+# ---------------------------------------------------------------------------
+# محصولات ساده (Phase 1 — بدون combination/واریانت)
+# ---------------------------------------------------------------------------
+
+def _product_to_wc_shape(entry: dict, lang_id: int, *, stock_quantity: int | None = None) -> dict:
+    active = str(entry.get("active") or "0") == "1"
+    visibility = str(entry.get("visibility") or "both")
+    return {
+        "id": int(entry.get("id") or 0),
+        "sku": str(entry.get("reference") or "").strip(),
+        "name": _lang_value(entry.get("name"), lang_id),
+        "type": "simple",
+        "status": "publish" if active else "draft",
+        "catalog_visibility": "visible" if visibility != "none" else "hidden",
+        "regular_price": str(entry.get("price") or "0"),
+        "manage_stock": stock_quantity is not None,
+        "stock_quantity": stock_quantity,
+        "categories": [{"id": int(entry.get("id_category_default") or 0)}] if entry.get("id_category_default") else [],
+        "images": [],
+    }
+
+
+def ps_find_product_by_reference(config, sku: str, *, timeout=None) -> dict | None:
+    cfg = config or {}
+    lang_id = ps_lang_id(cfg)
+    sku = str(sku or "").strip()
+    if not sku:
+        return None
+    resp = ps_call(
+        f"جستجوی SKU {sku}",
+        lambda: ps_rest_request(
+            cfg, "GET", "products",
+            params={"filter[reference]": f"[{sku}]", "limit": "0,5"},
+            timeout=timeout,
+        ),
+    )
+    data = _response_json(resp, f"جستجوی SKU {sku}")
+    rows = data.get("products") or []
+    for row in rows:
+        if isinstance(row, dict) and str(row.get("id") or ""):
+            full = ps_get_product(cfg, int(row["id"]), timeout=timeout)
+            if full and full.get("sku") == sku:
+                return full
+    return None
+
+
+def ps_get_product(config, product_id: int, *, timeout=None) -> dict | None:
+    cfg = config or {}
+    lang_id = ps_lang_id(cfg)
+    resp = ps_call(
+        f"دریافت محصول #{product_id}",
+        lambda: ps_rest_request(cfg, "GET", f"products/{int(product_id)}", timeout=timeout),
+    )
+    if getattr(resp, "status_code", 0) == 404:
+        return None
+    data = _response_json(resp, f"دریافت محصول #{product_id}")
+    entry = data.get("product") or {}
+    if not entry.get("id"):
+        return None
+    stock_id, qty = ps_get_stock_available(cfg, int(product_id), timeout=timeout)
+    return _product_to_wc_shape(entry, lang_id, stock_quantity=qty)
+
+
+def _visibility_from_wc(catalog_visibility: str) -> str:
+    return "none" if (catalog_visibility or "").strip() == "hidden" else "both"
+
+
+def ps_create_product(
+    config, *, sku: str, name: str, price, description: str = "",
+    category_ids: list[int] | None = None, active: bool = True,
+    catalog_visibility: str = "visible", timeout=None,
+) -> dict:
+    cfg = config or {}
+    lang_id = ps_lang_id(cfg)
+    cat_ids = [int(c) for c in (category_ids or []) if int(c or 0) > 0]
+    default_cat = cat_ids[-1] if cat_ids else int(cfg.get("PS_ROOT_CATEGORY_ID") or PS_DEFAULT_PARENT_CATEGORY_ID)
+
+    def _build(node):
+        _set_text(node, "reference", sku)
+        _set_lang_text(node, "name", name, lang_id)
+        _set_lang_text(node, "link_rewrite", _slugify_reference(sku), lang_id)
+        if description:
+            _set_lang_text(node, "description", description, lang_id)
+        _set_text(node, "price", f"{float(price or 0):.6f}")
+        _set_text(node, "active", 1 if active else 0)
+        _set_text(node, "state", 1)
+        _set_text(node, "visibility", _visibility_from_wc(catalog_visibility))
+        _set_text(node, "id_category_default", default_cat)
+        if cat_ids:
+            assoc = ET.SubElement(node, "associations")
+            cats_node = ET.SubElement(assoc, "categories")
+            for cid in cat_ids:
+                cat_node = ET.SubElement(cats_node, "category")
+                _set_text(cat_node, "id", cid)
+
+    body = _build_xml("product", _build)
+    resp = ps_call(
+        f"ایجاد محصول {sku}",
+        lambda: ps_rest_request(cfg, "POST", "products", xml_body=body, timeout=timeout),
+    )
+    new_id = _response_xml_id(resp, f"ایجاد محصول {sku}")
+    return {"id": new_id, "sku": sku, "name": name, "type": "simple"}
+
+
+def ps_update_product(
+    config, product_id: int, *, sku: str | None = None, name: str | None = None,
+    price=None, description: str | None = None, category_ids: list[int] | None = None,
+    active: bool | None = None, catalog_visibility: str | None = None, timeout=None,
+) -> dict:
+    cfg = config or {}
+    lang_id = ps_lang_id(cfg)
+    resp = ps_call(
+        f"دریافت محصول #{product_id} برای به‌روزرسانی",
+        lambda: ps_rest_request(cfg, "GET", f"products/{int(product_id)}", timeout=timeout),
+    )
+    current = _response_json(resp, f"دریافت محصول #{product_id}").get("product") or {}
+
+    final_sku = sku if sku is not None else str(current.get("reference") or "")
+    final_name = name if name is not None else _lang_value(current.get("name"), lang_id)
+    final_price = price if price is not None else current.get("price")
+    final_active = int(current.get("active") or 0) if active is None else (1 if active else 0)
+    current_visibility = str(current.get("visibility") or "both")
+    final_visibility = (
+        current_visibility if catalog_visibility is None else _visibility_from_wc(catalog_visibility)
+    )
+    cat_ids = [int(c) for c in (category_ids or []) if int(c or 0) > 0]
+    default_cat = cat_ids[-1] if cat_ids else int(current.get("id_category_default") or PS_DEFAULT_PARENT_CATEGORY_ID)
+
+    def _build(node):
+        _set_text(node, "id", int(product_id))
+        _set_text(node, "reference", final_sku)
+        _set_lang_text(node, "name", final_name, lang_id)
+        _set_lang_text(
+            node, "link_rewrite",
+            _lang_value(current.get("link_rewrite"), lang_id) or _slugify_reference(final_sku),
+            lang_id,
+        )
+        if description is not None:
+            _set_lang_text(node, "description", description, lang_id)
+        _set_text(node, "price", f"{float(final_price or 0):.6f}")
+        _set_text(node, "active", final_active)
+        _set_text(node, "state", 1)
+        _set_text(node, "visibility", final_visibility)
+        _set_text(node, "id_category_default", default_cat)
+        if cat_ids:
+            assoc = ET.SubElement(node, "associations")
+            cats_node = ET.SubElement(assoc, "categories")
+            for cid in cat_ids:
+                cat_node = ET.SubElement(cats_node, "category")
+                _set_text(cat_node, "id", cid)
+
+    body = _build_xml("product", _build)
+    resp2 = ps_call(
+        f"به‌روزرسانی محصول #{product_id}",
+        lambda: ps_rest_request(cfg, "PUT", f"products/{int(product_id)}", xml_body=body, timeout=timeout),
+    )
+    _raise_for_status(resp2, f"به‌روزرسانی محصول #{product_id}")
+    return {"id": int(product_id), "sku": final_sku, "name": final_name, "type": "simple"}
+
+
+def _slugify_reference(sku: str) -> str:
+    text = re.sub(r"[^a-zA-Z0-9]+", "-", str(sku or "").strip()).strip("-").lower()
+    return text or "product"
+
+
+# ---------------------------------------------------------------------------
+# موجودی (stock_availables) — همیشه یک رکورد جدا از محصول
+# ---------------------------------------------------------------------------
+
+def ps_get_stock_available(config, product_id: int, *, product_attribute_id: int = 0, timeout=None):
+    """(stock_available_id, quantity) برای یک محصول ساده (بدون combination)."""
+    cfg = config or {}
+    resp = ps_call(
+        f"دریافت موجودی محصول #{product_id}",
+        lambda: ps_rest_request(
+            cfg, "GET", "stock_availables",
+            params={
+                "filter[id_product]": f"[{int(product_id)}]",
+                "filter[id_product_attribute]": f"[{int(product_attribute_id)}]",
+                "limit": "0,1",
+            },
+            timeout=timeout,
+        ),
+    )
+    data = _response_json(resp, f"دریافت موجودی محصول #{product_id}")
+    rows = data.get("stock_availables") or []
+    if not rows:
+        return None, None
+    row = rows[0]
+    sid = int(row.get("id") or 0)
+    if not sid:
+        return None, None
+    full = ps_call(
+        f"دریافت رکورد موجودی #{sid}",
+        lambda: ps_rest_request(cfg, "GET", f"stock_availables/{sid}", timeout=timeout),
+    )
+    full_data = _response_json(full, f"دریافت رکورد موجودی #{sid}").get("stock_available") or {}
+    qty = int(full_data.get("quantity") or 0)
+    return sid, qty
+
+
+def ps_set_stock_quantity(config, product_id: int, quantity: int, *, product_attribute_id: int = 0, timeout=None) -> bool:
+    cfg = config or {}
+    sid, _qty = ps_get_stock_available(cfg, product_id, product_attribute_id=product_attribute_id, timeout=timeout)
+    if not sid:
+        raise PrestaShopAPIError(
+            f"رکورد stock_availables برای محصول #{product_id} یافت نشد "
+            "(محصول باید قبلاً روی پرستاشاپ ساخته شده باشد)."
+        )
+
+    def _build(node):
+        _set_text(node, "id", sid)
+        _set_text(node, "id_product", int(product_id))
+        _set_text(node, "id_product_attribute", int(product_attribute_id))
+        _set_text(node, "quantity", int(quantity))
+
+    body = _build_xml("stock_available", _build)
+    resp = ps_call(
+        f"به‌روزرسانی موجودی محصول #{product_id}",
+        lambda: ps_rest_request(cfg, "PUT", f"stock_availables/{sid}", xml_body=body, timeout=timeout),
+    )
+    _raise_for_status(resp, f"به‌روزرسانی موجودی محصول #{product_id}")
+    return True
+
+
+# ---------------------------------------------------------------------------
+# تصویر محصول (multipart POST) — پایه برای فازهای بعدی
+# ---------------------------------------------------------------------------
+
+def ps_upload_product_image(config, product_id: int, image_data: bytes, filename: str, *, timeout=None) -> int:
+    cfg = config or {}
+    url = ps_endpoint(cfg.get("PS_URL", ""), f"images/products/{int(product_id)}")
+    if not url:
+        raise PrestaShopAPIError("PS_URL خالی است.")
+    auth = get_ps_auth(cfg)
+    verify = bool(cfg.get("PS_VERIFY_SSL", False))
+    req_timeout = timeout if timeout is not None else ps_timeout_pair(cfg)
+    files = {"image": (filename or "image.jpg", image_data, "application/octet-stream")}
+    resp = requests.post(url, auth=auth, files=files, timeout=req_timeout, verify=verify)
+    _raise_for_status(resp, f"آپلود تصویر محصول #{product_id}")
+    try:
+        root = ET.fromstring(resp.text)
+        id_text = root.findtext(".//id")
+        if id_text and id_text.strip().isdigit():
+            return int(id_text.strip())
+    except Exception:
+        pass
+    raise PrestaShopAPIError(f"آپلود تصویر محصول #{product_id}: id در پاسخ یافت نشد.")
+
+
+# ---------------------------------------------------------------------------
+# تست اتصال
+# ---------------------------------------------------------------------------
+
+def check_prestashop_connection(config=None, update_config_status=True):
+    """(ok, message, currency) — شبیه check_woocommerce_connection."""
+    cfg = config or {}
+    ps_url = (cfg.get("PS_URL") or "").strip()
+    ps_key = (cfg.get("PS_API_KEY") or "").strip()
+    currency_code = "N/A"
+
+    if not ps_url or not ps_key:
+        return False, "تنظیمات API پرستاشاپ کامل نیستند (آدرس/کلید Webservice).", currency_code
+
+    try:
+        resp = ps_rest_request(cfg, "GET", "", params={"limit": "0,1"})
+        if resp.status_code == 401:
+            return False, "کلید Webservice پرستاشاپ نامعتبر است یا دسترسی Webservice غیرفعال است.", currency_code
+        if resp.status_code >= 400:
+            return False, _ps_error_message(resp), currency_code
+
+        try:
+            langs_resp = ps_rest_request(cfg, "GET", "languages", params={"limit": "0,1"})
+            if langs_resp.status_code == 200:
+                pass
+        except Exception:
+            pass
+
+        try:
+            cur_resp = ps_rest_request(
+                cfg, "GET", "currencies",
+                params={"filter[id_default]": "[1]"} if False else {},
+            )
+            if cur_resp.status_code == 200:
+                data = cur_resp.json()
+                rows = data.get("currencies") or []
+                if rows:
+                    currency_code = str(rows[0].get("iso_code") or "N/A").upper()
+        except Exception:
+            pass
+
+        host = ps_store_host(cfg)
+        return True, f"اتصال موفق. سایت: {host or ps_url}", currency_code
+    except requests.exceptions.Timeout:
+        return False, "زمان اتصال به پرستاشاپ به پایان رسید (Timeout).", currency_code
+    except requests.exceptions.RequestException as req_err:
+        return False, f"خطای شبکه/پروتکل: {req_err}", currency_code
+    except Exception as e:
+        return False, f"خطای کلی اتصال پرستاشاپ: {e}", currency_code

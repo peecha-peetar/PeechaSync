@@ -16,7 +16,6 @@ from sync_app.core.category_resolver import (
     build_code_index_from_slug_map,
     dejavu_category_slug,
     extract_code_from_wc_slug,
-    fetch_wc_slug_map,
     load_category_map,
     resolve_wc_category_id,
     save_category_map,
@@ -87,7 +86,9 @@ def prepare_category_context(config, *, fetch_live: bool = True, timeout: int = 
     slug_map: dict = {}
     if fetch_live and config:
         try:
-            slug_map = fetch_wc_slug_map(config, timeout=timeout)
+            from sync_app.core.integrations.commerce_provider import fetch_store_slug_map
+
+            slug_map = fetch_store_slug_map(config, timeout=timeout)
         except Exception:
             slug_map = {}
 

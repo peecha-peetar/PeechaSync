@@ -32,11 +32,11 @@ try:
         prepare_category_context,
         sort_categories_for_sync,
     )
-    from sync_app.core.wc_sync_helper import (
-        apply_network_overrides,
-        build_wcapi,
-        wc_call_config,
-        wc_rest_json,
+    from sync_app.core.wc_sync_helper import apply_network_overrides, wc_call_config
+    from sync_app.core.integrations.commerce_provider import (
+        is_prestashop,
+        store_platform_label,
+        store_rest_json,
     )
     from sync_app.core.scripts.sync_fullproduct import patch_product_categories
     from sync_app.core.sync_cancel import check_cancelled, SyncCancelled
@@ -65,6 +65,18 @@ except ImportError:
 # 🔧 توابع اصلی
 # ---------------------------------------------------------
 def create_woocommerce_api(config):
+    if is_prestashop(config):
+        cfg = config or {}
+        url = cfg.get('PS_URL')
+        key = cfg.get('PS_API_KEY')
+        if not isinstance(url, str) or not url.strip():
+            log.error("❌ تنظیم PS_URL خالی یا نامعتبر است.")
+            return None
+        if not isinstance(key, str) or not key.strip():
+            log.error("❌ تنظیم PS_API_KEY خالی یا نامعتبر است.")
+            return None
+        return True
+
     cfg = wc_api_config_for_sdk(config or {})
     url = cfg.get('WC_URL')
     ck = cfg.get('WC_CONSUMER_KEY')
@@ -81,6 +93,8 @@ def create_woocommerce_api(config):
         return None
 
     apply_network_overrides(config or {})
+    from sync_app.core.wc_sync_helper import build_wcapi
+
     return build_wcapi(config or {})
 
 
@@ -211,7 +225,7 @@ def _category_put_payload(category, code_to_wc_id: dict, config=None, *, is_crea
 def _put_category_update(config, wc_id, payload, name, update_failed) -> bool:
     try:
         def _update(cid=wc_id, body=payload, cat_name=name):
-            return wc_rest_json(
+            return store_rest_json(
                 config,
                 "PUT",
                 f"products/categories/{cid}",
@@ -361,7 +375,7 @@ def sync_categories_to_woocommerce(categories_to_sync, config=None):
         while True:
             check_cancelled()
             def _fetch_page(p=page):
-                data = wc_rest_json(
+                data = store_rest_json(
                     config,
                     "GET",
                     "products/categories",
@@ -416,7 +430,7 @@ def sync_categories_to_woocommerce(categories_to_sync, config=None):
             """slug دستهٔ موجود را به cat-XXXX برسان تا دفعهٔ بعد با slug پیدا شود."""
             try:
                 def _put(c=cid, payload=data):
-                    return wc_rest_json(
+                    return store_rest_json(
                         config,
                         "PUT",
                         f"products/categories/{c}",
@@ -441,7 +455,7 @@ def sync_categories_to_woocommerce(categories_to_sync, config=None):
                     full_payload = _category_put_payload(category, code_map, is_create=True)
 
                     def _create(payload=full_payload, cat_name=name):
-                        return wc_rest_json(
+                        return store_rest_json(
                             config,
                             "POST",
                             "products/categories",
@@ -588,7 +602,7 @@ def main():
         log.info(f"📦 دسته‌بندی‌های آماده برای همگام‌سازی: {len(categories_to_sync)}")
 
         if not create_woocommerce_api(config):
-            log.error("❌ تنظیمات WooCommerce ناقص است. URL/Key/Secret را بررسی کنید.")
+            log.error(f"❌ تنظیمات {store_platform_label(config)} ناقص است. URL/Key/Secret را بررسی کنید.")
             return {"synced": 0, "failed": [], "total": 0}
 
         result = sync_categories_to_woocommerce(categories_to_sync, config)

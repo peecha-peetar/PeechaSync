@@ -468,8 +468,25 @@ def _enrich_wc_failure(config: dict, last_err: str) -> tuple[str, str]:
     return f"ووکامرس آفلاین: {last_err}", category
 
 
+def _probe_ps_once(config: dict | None, *, fast: bool = False) -> tuple[bool, str, float]:
+    from sync_app.core.ps_sync_helper import check_prestashop_connection
+
+    t0 = time.perf_counter()
+    ok, msg, _currency = check_prestashop_connection(config or {})
+    ms = (time.perf_counter() - t0) * 1000
+    if ok:
+        return True, f"پرستاشاپ آنلاین ({ms:.0f}ms)", ms
+    return False, msg, ms
+
+
 def _probe_wc_once(config: dict | None, *, fast: bool = False) -> tuple[bool, str, float]:
     config = config or {}
+
+    from sync_app.core.integrations.commerce_provider import is_prestashop
+
+    if is_prestashop(config):
+        return _probe_ps_once(config, fast=fast)
+
     apply_network_overrides(config)
 
     base = normalize_wc_store_url(config.get("WC_URL", ""))

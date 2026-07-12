@@ -25,11 +25,15 @@ try:
     )
     from sync_app.core.wc_sync_helper import (
         apply_network_overrides,
-        build_wcapi,
         wc_call,
         format_wc_network_error,
         wc_parse_json,
-        warm_wc_connection,
+    )
+    from sync_app.core.integrations.commerce_provider import (
+        build_store_api,
+        is_prestashop,
+        store_platform_label,
+        warm_store_connection,
     )
     from sync_app.core.product_woo_map_helper import (
         load_product_woo_map,
@@ -381,9 +385,10 @@ def _apply_product_categories(
 def patch_product_categories(config=None):
     """دسته محصولات را با map زنده Woo روی محصولات اعمال کن."""
     config = config or load_secure_config(None) or {}
-    apply_network_overrides(config)
-    wcapi = build_wcapi(config)
-    warm_wc_connection(wcapi)
+    if not is_prestashop(config):
+        apply_network_overrides(config)
+    wcapi = build_store_api(config)
+    warm_store_connection(wcapi, config)
 
     ctx = prepare_category_context(config, fetch_live=True)
     cat_map = ctx["category_map"]
@@ -475,9 +480,11 @@ def patch_product_categories(config=None):
 
 def main():
     raw_config = load_secure_config(None) or {}
-    apply_network_overrides(raw_config)
-    wcapi = build_wcapi(raw_config)
-    warm_wc_connection(wcapi)
+    ps_mode = is_prestashop(raw_config)
+    if not ps_mode:
+        apply_network_overrides(raw_config)
+    wcapi = build_store_api(raw_config)
+    warm_store_connection(wcapi, raw_config)
 
     conn, _, _ = open_sql_connection(raw_config, timeout=10)
     PRICE_COL = raw_config.get("PRICE_LIST_COLUMN", "Sel_Price")
@@ -579,6 +586,16 @@ def main():
         # می‌شه) اصلاً نباید مستقل به ووکامرس ارسال بشن.
         and not is_secondary(raw_config, str(row[0]).strip())
     ]
+
+    if ps_mode:
+        skipped_variable = [row for row in rows_to_process if str(row[0]).strip() in variable_codes]
+        if skipped_variable:
+            log.warning(
+                f"⚠️ {len(skipped_variable)} محصول متغیر (واریانت‌دار) رد شد — "
+                "sync متغیرها برای پرستاشاپ هنوز پیاده‌سازی نشده (فقط محصول ساده)."
+            )
+        rows_to_process = [row for row in rows_to_process if str(row[0]).strip() not in variable_codes]
+
     _total_to_process = len(rows_to_process)
 
     def _stock_lookup(sku: str) -> int:
@@ -702,9 +719,11 @@ def main():
                     categories = applied_cats
                     cat_id = primary_category_id(categories)
 
-            _sync_product_images_if_needed(
-                wcapi, sku, saved_pid, upsert_data, erp_images_by_sku.get(sku, []), raw_config
-            )
+            if not ps_mode:
+                # انتقال خودکار تصویر ERP → پرستاشاپ هنوز پیاده‌سازی نشده (فاز بعدی).
+                _sync_product_images_if_needed(
+                    wcapi, sku, saved_pid, upsert_data, erp_images_by_sku.get(sku, []), raw_config
+                )
 
             kind = "متغیر" if has_variants else "ساده"
             cat_note = f"دسته={cat_id}" if cat_id else "بدون دسته"
