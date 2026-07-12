@@ -101,6 +101,11 @@ def _lang_value(value, lang_id=1) -> str:
     if value is None:
         return ""
     if isinstance(value, dict):
+        if "value" not in value and "#text" not in value and "language" in value:
+            # روی برخی نصب‌های تک‌زبانه پرستاشاپ، فیلد چندزبانه به‌جای لیست
+            # مستقیم [{"id":"1","value":"..."}] این‌طور برمی‌گرده:
+            # {"language": {"id":"1","value":"..."}} یا {"language": [...]}
+            return _lang_value(value.get("language"), lang_id)
         return str(value.get("value") or value.get("#text") or "")
     if isinstance(value, list):
         for item in value:
@@ -333,6 +338,14 @@ def ps_list_categories(config, *, timeout=None) -> list[dict]:
             break
         for entry in batch:
             if isinstance(entry, dict) and entry.get("id"):
+                shaped_probe = _category_to_wc_shape(entry, lang_id)
+                if not shaped_probe.get("slug"):
+                    from sync_app.core.sync_utils import log
+
+                    log.warning(
+                        f"🔎 [تشخیص] دسته #{entry.get('id')} slug خالی برگشت — "
+                        f"name خام={entry.get('name')!r} | link_rewrite خام={entry.get('link_rewrite')!r}"
+                    )
                 out.append(_category_to_wc_shape(entry, lang_id))
         if len(batch) < page_size:
             break
