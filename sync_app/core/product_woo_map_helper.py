@@ -261,10 +261,13 @@ def verify_product_saved(wcapi, product_id: int, sku: str = "") -> dict:
 
 
 def resolve_wc_product_id(wcapi, sku: str, product_map: dict | None = None, *, log_step=None):
-    """id ووکامرس برای sync واریانت."""
+    """id فروشگاه (ووکامرس یا پرستاشاپ) برای sync واریانت."""
+    from sync_app.core.integrations.commerce_provider import store_platform_label
+
+    label = store_platform_label({"STORE_PLATFORM": _current_platform()})
     pid, _ = resolve_existing_product_id(wcapi, sku, product_map)
     if pid and log_step:
-        log_step(f"محصول {sku} → Woo #{pid}")
+        log_step(f"محصول {sku} → {label} #{pid}")
     elif log_step:
-        log_step(f"محصول {sku} در Woo نیست — ابتدا از تب «محصولات» ارسال کنید")
+        log_step(f"محصول {sku} در {label} نیست — ابتدا از تب «محصولات» ارسال کنید")
     return pid

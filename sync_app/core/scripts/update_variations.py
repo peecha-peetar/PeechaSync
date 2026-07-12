@@ -1880,6 +1880,141 @@ def sync_product_variations(
         return False
 
 
+def _build_variation_targets(conn, selected_groups, config):
+    """محصولات واقعاً متغیر (سایز/رنگ) در ERP، بر اساس زیرگروه‌های انتخاب‌شده."""
+    dim_labels = _fetch_attribute_labels_list(conn)
+
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT A_Code, A_Name, Sel_Price, Sel_Price2, Sel_Price3, Sel_Price4, Sel_Price5 "
+        "FROM Article WHERE LEN(A_Code) >= 4"
+    )
+    rows = cursor.fetchall()
+    cursor.close()
+
+    disabled_products = set(config.get("DISABLED_PRODUCT_SKUS", []) or [])
+    from sync_app.core.variation_query import load_variable_a_codes
+    variable_codes = load_variable_a_codes(cursor2 := conn.cursor())
+    cursor2.close()
+    targets = []
+    skipped_simple = 0
+    for row in rows:
+        a_code = str(row[0]).strip()
+        if a_code in disabled_products:
+            continue
+        if not is_product_enabled(a_code, config):
+            continue
+        if not any(a_code.startswith(group) for group in selected_groups):
+            continue
+        # نکته‌ی مهم (رفع باگ قبلی): این ماژول فقط برای محصولاتی که تو
+        # ERP واقعاً متغیر (چند سایز/رنگ) هستن اجرا بشه — قبلاً روی همه‌ی
+        # محصولات (حتی ساده) اجرا می‌شد و باعث می‌شد ووکامرس اشتباهی
+        # برچسب «متغیر» به محصولات ساده بده.
+        if a_code not in variable_codes:
+            skipped_simple += 1
+            continue
+        targets.append(row)
+
+    return dim_labels, targets, skipped_simple
+
+
+def _main_prestashop(config, selected_groups, price_col):
+    from sync_app.core.integrations.commerce_provider import build_store_api, warm_store_connection
+    from sync_app.core.ps_variation_helper import ps_sync_product_variations
+    from sync_app.core.article_price import apply_price_markup
+
+    _log_step("پرستاشاپ: ساخت اتصال...")
+    api = build_store_api(config)
+    warm_store_connection(api, config)
+    conn = None
+    stats = {"ok": 0, "failed": 0, "skipped": 0, "failed_skus": [], "network_error": False}
+
+    try:
+        conn, _, _ = open_sql_connection(config, timeout=10)
+
+        _log_step("مرحله ۱/۲: خواندن محصولات از SQL...")
+        dim_labels, targets, skipped_simple = _build_variation_targets(conn, selected_groups, config)
+        if skipped_simple:
+            log.info(f"ℹ️ {skipped_simple} محصول ساده (بدون سایز/رنگ) از این مرحله رد شدن — نیازی به واریانت ندارن.")
+
+        product_map = _load_product_woo_map()
+
+        total = len(targets)
+        _log_step(f"مرحله ۲/۲: همگام {total} محصول (پرستاشاپ)...")
+        if total == 0:
+            log.warning("⚠️ محصولی برای گروه‌های انتخاب‌شده یافت نشد.")
+            return stats
+
+        for idx, row in enumerate(targets, start=1):
+            check_cancelled()
+            a_code = str(row[0]).strip()
+            name = str(row[1]).strip()
+            _log_step(f"محصول {idx}/{total}: {a_code} ({name})")
+            raw_price = _resolve_article_price(row, price_col)
+            erp_variations, attr_map = fetch_variations_from_db(
+                conn,
+                a_code,
+                raw_price,
+                dim_labels[0] if dim_labels else "سایز",
+                dim_labels[1] if len(dim_labels) > 1 else "",
+                dim_labels[2] if len(dim_labels) > 2 else "",
+                config=config,
+            )
+            if not erp_variations:
+                stats["skipped"] += 1
+                continue
+
+            product_id = _resolve_product_id(api, a_code, product_map)
+            if not product_id:
+                stats["failed"] += 1
+                stats["failed_skus"].append(a_code)
+                continue
+
+            base_price = _apply_price(apply_price_markup(raw_price, config, is_sale=False), config)
+            ok = ps_sync_product_variations(
+                config, product_id, erp_variations, attr_map, base_price, a_code=a_code,
+            )
+            if ok:
+                stats["ok"] += 1
+            else:
+                stats["failed"] += 1
+                stats["failed_skus"].append(a_code)
+
+    except SyncCancelled as exc:
+        log.warning(f"⏹ {exc}")
+        raise RuntimeError(str(exc)) from exc
+    except Exception as exc:
+        log.error(f"🛑 خطای بحرانی: {exc}")
+        raise RuntimeError(str(exc)) from exc
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    ok_count = stats["ok"]
+    fail_count = stats["failed"]
+    skip_count = stats["skipped"]
+    summary = f"📊 پایان همگام‌سازی متغیرها: {ok_count} موفق"
+    if skip_count:
+        summary += f"، {skip_count} بدون واریانت"
+    if fail_count:
+        summary += f"، {fail_count} ناموفق"
+    log.info(summary)
+
+    if fail_count > 0 and ok_count == 0:
+        sku_list = "، ".join(stats["failed_skus"][:8])
+        raise RuntimeError(
+            f"هیچ واریانتی همگام نشد ({fail_count} خطا).\n"
+            f"SKU: {sku_list}\n\n"
+            "۱) تب «تطبیق» -> «محصول»: کد والد (مثلاً 0301001) -> پرستاشاپ\n"
+            "۲) ابتدا از تب «محصولات» محصول والد را ارسال کنید"
+        )
+
+    return stats
+
+
 def main():
     global _LAST_VARIATION_NETWORK_ERROR
     _LAST_VARIATION_NETWORK_ERROR = ""
@@ -1894,6 +2029,10 @@ def main():
         log.warning("⚠️ هیچ زیرگروهی انتخاب نشده — از تب دسته‌بندی انتخاب کنید.")
         return
 
+    from sync_app.core.integrations.commerce_provider import is_prestashop
+    if is_prestashop(config):
+        return _main_prestashop(config, selected_groups, price_col)
+
     apply_network_overrides(config)
     wcapi = build_wcapi(config)
     warm_wc_connection(wcapi)
@@ -1903,7 +2042,7 @@ def main():
     try:
         conn, _, _ = open_sql_connection(config, timeout=10)
 
-        dim_labels = _fetch_attribute_labels_list(conn)
+        dim_labels, targets, skipped_simple = _build_variation_targets(conn, selected_groups, config)
         only_attrs = list(dim_labels)
 
         from sync_app.core.wc_attr_cache import load_wc_attr_cache
@@ -1922,38 +2061,6 @@ def main():
             save_wc_attr_cache(global_ids, term_lookup, dim_labels)
 
         product_map = _load_product_woo_map()
-
-        _log_step("مرحله ۳/۴: خواندن محصولات از SQL...")
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT A_Code, A_Name, Sel_Price, Sel_Price2, Sel_Price3, Sel_Price4, Sel_Price5 "
-            "FROM Article WHERE LEN(A_Code) >= 4"
-        )
-        rows = cursor.fetchall()
-        cursor.close()
-
-        disabled_products = set(config.get("DISABLED_PRODUCT_SKUS", []) or [])
-        from sync_app.core.variation_query import load_variable_a_codes
-        variable_codes = load_variable_a_codes(cursor2 := conn.cursor())
-        cursor2.close()
-        targets = []
-        skipped_simple = 0
-        for row in rows:
-            a_code = str(row[0]).strip()
-            if a_code in disabled_products:
-                continue
-            if not is_product_enabled(a_code, config):
-                continue
-            if not any(a_code.startswith(group) for group in selected_groups):
-                continue
-            # نکته‌ی مهم (رفع باگ قبلی): این ماژول فقط برای محصولاتی که تو
-            # ERP واقعاً متغیر (چند سایز/رنگ) هستن اجرا بشه — قبلاً روی همه‌ی
-            # محصولات (حتی ساده) اجرا می‌شد و باعث می‌شد ووکامرس اشتباهی
-            # برچسب «متغیر» به محصولات ساده بده.
-            if a_code not in variable_codes:
-                skipped_simple += 1
-                continue
-            targets.append(row)
 
         if skipped_simple:
             log.info(f"ℹ️ {skipped_simple} محصول ساده (بدون سایز/رنگ) از این مرحله رد شدن — نیازی به واریانت ندارن.")

@@ -468,7 +468,16 @@ def ps_get_product(config, product_id: int, *, timeout=None) -> dict | None:
     entry = _unwrap_dict(data, "product")
     if not entry.get("id"):
         return None
-    stock_id, qty = ps_get_stock_available(cfg, int(product_id), timeout=timeout)
+    try:
+        _stock_id, qty = ps_get_stock_available(cfg, int(product_id), timeout=timeout)
+    except Exception as exc:
+        from sync_app.core.sync_utils import log
+
+        log.warning(
+            f"⚠️ دریافت موجودی محصول #{product_id} ناموفق بود ({exc}) — "
+            "شناسایی محصول بدون موجودی ادامه می‌یابد (از تکراری‌سازی جلوگیری می‌شود)"
+        )
+        qty = None
     return _product_to_wc_shape(entry, lang_id, stock_quantity=qty)
 
 
@@ -579,7 +588,13 @@ def _slugify_reference(sku: str) -> str:
 # ---------------------------------------------------------------------------
 
 def ps_get_stock_available(config, product_id: int, *, product_attribute_id: int = 0, timeout=None):
-    """(stock_available_id, quantity) برای یک محصول ساده (بدون combination)."""
+    """(stock_available_id, quantity) برای یک محصول ساده (بدون combination).
+
+    با display=full در همون درخواست لیست‌گیری، quantity هم برمی‌گرده — یک
+    GET جدا برای هر رکورد موجودی لازم نیست. قبلاً یک درخواست دوم به
+    stock_availables/{id} می‌رفت که روی برخی فروشگاه‌ها گاهی 404 برمی‌گردوند
+    و باعث می‌شد جستجوی محصول با خطا مواجه بشه و محصول تکراری ساخته بشه.
+    """
     cfg = config or {}
     resp = ps_call(
         f"دریافت موجودی محصول #{product_id}",
@@ -588,6 +603,7 @@ def ps_get_stock_available(config, product_id: int, *, product_attribute_id: int
             params={
                 "filter[id_product]": f"[{int(product_id)}]",
                 "filter[id_product_attribute]": f"[{int(product_attribute_id)}]",
+                "display": "full",
                 "limit": "0,1",
             },
             timeout=timeout,
@@ -601,12 +617,7 @@ def ps_get_stock_available(config, product_id: int, *, product_attribute_id: int
     sid = int(row.get("id") or 0)
     if not sid:
         return None, None
-    full = ps_call(
-        f"دریافت رکورد موجودی #{sid}",
-        lambda: ps_rest_request(cfg, "GET", f"stock_availables/{sid}", timeout=timeout),
-    )
-    full_data = _response_json(full, f"دریافت رکورد موجودی #{sid}").get("stock_available") or {}
-    qty = int(full_data.get("quantity") or 0)
+    qty = int(row.get("quantity") or 0)
     return sid, qty
 
 
