@@ -61,7 +61,11 @@ def ps_list_attribute_groups(config, *, timeout=None) -> list[dict]:
         resp = ps_call(
             f"دریافت گروه‌های ویژگی offset={offset}",
             lambda o=offset: ps_rest_request(
-                cfg, "GET", "product_options", params={"limit": f"{o},{page_size}"}, timeout=timeout
+                cfg, "GET", "product_options",
+                # بدون display=full فقط id برمی‌گرده — name خالی می‌مونه و
+                # گروه موجود هیچ‌وقت با نام پیدا نمی‌شه (ساخت گروه تکراری).
+                params={"limit": f"{o},{page_size}", "display": "full"},
+                timeout=timeout,
             ),
         )
         data = _response_json(resp, "دریافت گروه‌های ویژگی")
@@ -126,7 +130,13 @@ def ps_list_attribute_values(config, group_id: int, *, timeout=None) -> list[dic
         f"دریافت مقادیر گروه ویژگی #{group_id}",
         lambda: ps_rest_request(
             cfg, "GET", "product_option_values",
-            params={"filter[id_attribute_group]": f"[{int(group_id)}]", "limit": "0,1000"},
+            # display=full لازمه وگرنه name خالی برمی‌گرده و مقدار موجود
+            # همیشه «پیدا نشد» حساب می‌شه (مقدار ویژگی تکراری ساخته می‌شه).
+            params={
+                "filter[id_attribute_group]": f"[{int(group_id)}]",
+                "limit": "0,1000",
+                "display": "full",
+            },
             timeout=timeout,
         ),
     )

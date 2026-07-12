@@ -319,7 +319,11 @@ def ps_list_categories(config, *, timeout=None) -> list[dict]:
             f"دریافت categories offset={offset}",
             lambda o=offset: ps_rest_request(
                 cfg, "GET", "categories",
-                params={"limit": f"{o},{page_size}"},
+                # بدون display=full، Webservice پرستاشاپ توی حالت لیست فقط id
+                # برمی‌گردونه (name/link_rewrite خالی می‌مونه) — باعث می‌شد
+                # دسته‌های موجود همیشه «پیدا نشد» به حساب بیان و هر بار از نو
+                # ساخته بشن (دسته‌بندی تکراری).
+                params={"limit": f"{o},{page_size}", "display": "full"},
                 timeout=timeout,
             ),
         )
