@@ -587,15 +587,6 @@ def main():
         and not is_secondary(raw_config, str(row[0]).strip())
     ]
 
-    if ps_mode:
-        skipped_variable = [row for row in rows_to_process if str(row[0]).strip() in variable_codes]
-        if skipped_variable:
-            log.warning(
-                f"⚠️ {len(skipped_variable)} محصول متغیر (واریانت‌دار) رد شد — "
-                "sync متغیرها برای پرستاشاپ هنوز پیاده‌سازی نشده (فقط محصول ساده)."
-            )
-        rows_to_process = [row for row in rows_to_process if str(row[0]).strip() not in variable_codes]
-
     _total_to_process = len(rows_to_process)
 
     def _stock_lookup(sku: str) -> int:
@@ -608,7 +599,8 @@ def main():
     # می‌شه (نتیجه خراب نمی‌شه، ولی چندبار الکی API/DB صدا زده می‌شه).
     if any(str(row[0]).strip() in variable_codes for row in rows_to_process):
         _attribute_labels()
-        _ensure_wc_attr_cache()
+        if not ps_mode:
+            _ensure_wc_attr_cache()
 
     stats_lock = threading.Lock()
     map_lock = threading.Lock()
@@ -732,12 +724,7 @@ def main():
                     f"✅ محصول {kind} {sku} → Woo #{saved_pid}. "
                     f"قیمت پایه={price} (نمایش سایت از واریانت‌ها) | {cat_note}"
                 )
-                from sync_app.core.scripts.update_variations import (
-                    sync_variation_prices_quick,
-                    sync_product_variations,
-                    should_skip_full_variation_sync,
-                    fetch_variations_from_db,
-                )
+                from sync_app.core.scripts.update_variations import fetch_variations_from_db
 
                 dim_labels = _attribute_labels()
                 erp_variations, attr_map = fetch_variations_from_db(
@@ -749,55 +736,73 @@ def main():
                     dim_labels[2] if len(dim_labels) > 2 else "",
                     config=raw_config,
                 )
-                quick_saved = sync_variation_prices_quick(
-                    wcapi,
-                    local_conn,
-                    raw_config,
-                    sku,
-                    raw_price,
-                    local_map,
-                    size_label=dim_labels[0] if dim_labels else None,
-                    color_label=dim_labels[1] if len(dim_labels) > 1 else None,
-                    variations=erp_variations,
-                )
-                if quick_saved >= len(erp_variations) and erp_variations:
-                    skip_full = True
-                elif (
-                    quick_saved > 0
-                    and saved_pid
-                    and erp_variations
-                ):
-                    skip_full = should_skip_full_variation_sync(
-                        wcapi,
-                        saved_pid,
-                        erp_variations,
-                        attr_map,
-                        a_code=sku,
+
+                if ps_mode:
+                    from sync_app.core.ps_variation_helper import ps_sync_product_variations
+
+                    var_ok = ps_sync_product_variations(
+                        raw_config, saved_pid, erp_variations, attr_map, price, a_code=sku,
                     )
+                    if not var_ok:
+                        log.warning(
+                            f"⚠️ واریانت‌های {sku} روی پرستاشاپ کامل ارسال نشد — لاگ بالا را ببینید."
+                        )
                 else:
-                    skip_full = False
-                if not skip_full:
-                    log.info(f"▸ [{sku}] مسیر کامل واریانت (ساخت/به‌روز)...")
-                    product_name = str(row[1]).strip()
-                    gids, terms = _ensure_wc_attr_cache()
-                    var_ok = sync_product_variations(
+                    from sync_app.core.scripts.update_variations import (
+                        sync_variation_prices_quick,
+                        sync_product_variations,
+                        should_skip_full_variation_sync,
+                    )
+
+                    quick_saved = sync_variation_prices_quick(
                         wcapi,
                         local_conn,
                         raw_config,
                         sku,
-                        product_name,
                         raw_price,
-                        gids,
                         local_map,
-                        terms,
-                        dim_labels[0] if dim_labels else None,
-                        dim_labels[1] if len(dim_labels) > 1 else None,
+                        size_label=dim_labels[0] if dim_labels else None,
+                        color_label=dim_labels[1] if len(dim_labels) > 1 else None,
+                        variations=erp_variations,
                     )
-                    if not var_ok:
-                        log.warning(
-                            f"⚠️ قیمت واریانت‌های {sku} ارسال نشد — "
-                            "تب «ویژگی‌ها» و «متغیرها» را بررسی کنید."
+                    if quick_saved >= len(erp_variations) and erp_variations:
+                        skip_full = True
+                    elif (
+                        quick_saved > 0
+                        and saved_pid
+                        and erp_variations
+                    ):
+                        skip_full = should_skip_full_variation_sync(
+                            wcapi,
+                            saved_pid,
+                            erp_variations,
+                            attr_map,
+                            a_code=sku,
                         )
+                    else:
+                        skip_full = False
+                    if not skip_full:
+                        log.info(f"▸ [{sku}] مسیر کامل واریانت (ساخت/به‌روز)...")
+                        product_name = str(row[1]).strip()
+                        gids, terms = _ensure_wc_attr_cache()
+                        var_ok = sync_product_variations(
+                            wcapi,
+                            local_conn,
+                            raw_config,
+                            sku,
+                            product_name,
+                            raw_price,
+                            gids,
+                            local_map,
+                            terms,
+                            dim_labels[0] if dim_labels else None,
+                            dim_labels[1] if len(dim_labels) > 1 else None,
+                        )
+                        if not var_ok:
+                            log.warning(
+                                f"⚠️ قیمت واریانت‌های {sku} ارسال نشد — "
+                                "تب «ویژگی‌ها» و «متغیرها» را بررسی کنید."
+                            )
             else:
                 log.info(
                     f"✅ محصول {kind} {sku} → Woo #{saved_pid}. "
