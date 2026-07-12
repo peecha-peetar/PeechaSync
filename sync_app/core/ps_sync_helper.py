@@ -127,8 +127,60 @@ def _xml_error_message(raw_text: str) -> str:
     return "; ".join(p for p in parts if p) or "خطای نامشخص پرستاشاپ"
 
 
+def _peecha_user_agent() -> str:
+    try:
+        from sync_app.core.app_version import APP_VERSION
+
+        return f"PeechaSync/{APP_VERSION}"
+    except Exception:
+        return "PeechaSync/1.0"
+
+
+def ps_response_is_waf_block(response) -> bool:
+    """403/406/429/503 با HTML خام (نه JSON/XML پرستاشاپ) — یعنی فایروال هاست
+    (LiteSpeed/ModSecurity/Cloudflare) قبل از رسیدن درخواست به پرستاشاپ آن را
+    مسدود کرده — نه خطای احراز هویت کلید Webservice."""
+    status = int(getattr(response, "status_code", 0) or 0)
+    if status not in (403, 406, 429, 503):
+        return False
+    raw = (getattr(response, "text", None) or "").lower()
+    if not raw or "<html" not in raw:
+        return False
+    markers = (
+        "litespeed",
+        "mod_security",
+        "modsecurity",
+        "cloudflare",
+        "access denied",
+        "attention required",
+        "proudly powered",
+    )
+    return any(m in raw for m in markers)
+
+
+def ps_waf_block_message(response) -> str:
+    raw = (getattr(response, "text", None) or "").lower()
+    if "litespeed" in raw:
+        who = "فایروال LiteSpeed هاست"
+    elif "cloudflare" in raw:
+        who = "Cloudflare/WAF"
+    else:
+        who = "فایروال (WAF) هاست"
+    return (
+        f"{who} درخواست به /api/ را قبل از رسیدن به پرستاشاپ مسدود کرد "
+        "(این خطای کلید Webservice نیست).\n\n"
+        "بررسی کنید:\n"
+        "۱. پیشخوان پرستاشاپ → Advanced Parameters → Webservice → «Enable PrestaShop's webservice» فعال باشد.\n"
+        "۲. مسیر /api/ در تنظیمات امنیتی هاست (WAF/فایروال) مسدود نشده باشد — از پشتیبانی هاست بخواهید "
+        "مسیر /api/ را برای درخواست‌های REST سفید کنند.\n"
+        "۳. اگر از افزونه‌ی امنیتی (مثل ModSecurity سفارشی) استفاده می‌کنید، User-Agent برنامه‌های خارجی را بلاک نکند."
+    )
+
+
 def _ps_error_message(response) -> str:
     status = int(getattr(response, "status_code", 0) or 0)
+    if ps_response_is_waf_block(response):
+        return ps_waf_block_message(response)
     text = (getattr(response, "text", None) or "").strip()
     if not text:
         return f"HTTP {status}"
@@ -170,7 +222,7 @@ def ps_rest_request(
     req_timeout = timeout if timeout is not None else ps_timeout_pair(cfg)
 
     query = dict(params or {})
-    headers = {"Accept": "application/json"}
+    headers = {"Accept": "application/json", "User-Agent": _peecha_user_agent()}
     data = None
     if method.upper() == "GET":
         query.setdefault("output_format", "JSON")
@@ -573,7 +625,10 @@ def ps_upload_product_image(config, product_id: int, image_data: bytes, filename
     verify = bool(cfg.get("PS_VERIFY_SSL", False))
     req_timeout = timeout if timeout is not None else ps_timeout_pair(cfg)
     files = {"image": (filename or "image.jpg", image_data, "application/octet-stream")}
-    resp = requests.post(url, auth=auth, files=files, timeout=req_timeout, verify=verify)
+    resp = requests.post(
+        url, auth=auth, files=files, timeout=req_timeout, verify=verify,
+        headers={"User-Agent": _peecha_user_agent()},
+    )
     _raise_for_status(resp, f"آپلود تصویر محصول #{product_id}")
     try:
         root = ET.fromstring(resp.text)
