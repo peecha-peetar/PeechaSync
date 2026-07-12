@@ -198,6 +198,28 @@ def _ps_error_message(response) -> str:
     return f"HTTP {status} — {_xml_error_message(text)}"
 
 
+def _unwrap_list(data, key: str) -> list:
+    """
+    برخی نصب‌های پرستاشاپ وقتی فیلتر نتیجه‌ی خالی داره، به‌جای
+    {"key": []} مستقیماً [] برمی‌گردونن — این هر دو شکل رو یکسان می‌کنه.
+    """
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        return data.get(key) or []
+    return []
+
+
+def _unwrap_dict(data, key: str) -> dict:
+    if isinstance(data, dict):
+        inner = data.get(key)
+        if isinstance(inner, dict):
+            return inner
+        if key in data:
+            return {}
+    return data if isinstance(data, dict) else {}
+
+
 # ---------------------------------------------------------------------------
 # transport پایه
 # ---------------------------------------------------------------------------
@@ -302,7 +324,7 @@ def ps_list_categories(config, *, timeout=None) -> list[dict]:
             ),
         )
         data = _response_json(resp, "دریافت categories")
-        batch = data.get("categories") or []
+        batch = _unwrap_list(data, "categories")
         if not batch:
             break
         for entry in batch:
@@ -335,7 +357,7 @@ def ps_get_category(config, category_id: int, *, timeout=None) -> dict:
         lambda: ps_rest_request(cfg, "GET", f"categories/{int(category_id)}", timeout=timeout),
     )
     data = _response_json(resp, f"دریافت دسته #{category_id}")
-    entry = data.get("category") or {}
+    entry = _unwrap_dict(data, "category")
     return _category_to_wc_shape(entry, lang_id)
 
 
@@ -424,7 +446,7 @@ def ps_find_product_by_reference(config, sku: str, *, timeout=None) -> dict | No
         ),
     )
     data = _response_json(resp, f"جستجوی SKU {sku}")
-    rows = data.get("products") or []
+    rows = _unwrap_list(data, "products")
     for row in rows:
         if isinstance(row, dict) and str(row.get("id") or ""):
             full = ps_get_product(cfg, int(row["id"]), timeout=timeout)
@@ -443,7 +465,7 @@ def ps_get_product(config, product_id: int, *, timeout=None) -> dict | None:
     if getattr(resp, "status_code", 0) == 404:
         return None
     data = _response_json(resp, f"دریافت محصول #{product_id}")
-    entry = data.get("product") or {}
+    entry = _unwrap_dict(data, "product")
     if not entry.get("id"):
         return None
     stock_id, qty = ps_get_stock_available(cfg, int(product_id), timeout=timeout)
@@ -572,7 +594,7 @@ def ps_get_stock_available(config, product_id: int, *, product_attribute_id: int
         ),
     )
     data = _response_json(resp, f"دریافت موجودی محصول #{product_id}")
-    rows = data.get("stock_availables") or []
+    rows = _unwrap_list(data, "stock_availables")
     if not rows:
         return None, None
     row = rows[0]
@@ -602,6 +624,11 @@ def ps_set_stock_quantity(config, product_id: int, quantity: int, *, product_att
         _set_text(node, "id_product", int(product_id))
         _set_text(node, "id_product_attribute", int(product_attribute_id))
         _set_text(node, "quantity", int(quantity))
+        # هر دو فیلد رو Webservice پرستاشاپ برای PUT stock_availables اجباری می‌دونه —
+        # depends_on_stock=0 یعنی موجودی مستقیم از quantity میاد (نه انبار پیشرفته)،
+        # out_of_stock=2 یعنی طبق تنظیم پیش‌فرض فروشگاه (Preferences > Products) عمل کن.
+        _set_text(node, "depends_on_stock", 0)
+        _set_text(node, "out_of_stock", 2)
 
     body = _build_xml("stock_available", _build)
     resp = ps_call(
@@ -675,7 +702,7 @@ def check_prestashop_connection(config=None, update_config_status=True):
             )
             if cur_resp.status_code == 200:
                 data = cur_resp.json()
-                rows = data.get("currencies") or []
+                rows = _unwrap_list(data, "currencies")
                 if rows:
                     currency_code = str(rows[0].get("iso_code") or "N/A").upper()
         except Exception:

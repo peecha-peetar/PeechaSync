@@ -31,6 +31,8 @@ from sync_app.core.ps_sync_helper import (
     _response_xml_id,
     _set_lang_text,
     _set_text,
+    _unwrap_dict,
+    _unwrap_list,
     ps_call,
     ps_rest_request,
     ps_set_stock_quantity,
@@ -63,7 +65,7 @@ def ps_list_attribute_groups(config, *, timeout=None) -> list[dict]:
             ),
         )
         data = _response_json(resp, "دریافت گروه‌های ویژگی")
-        batch = data.get("product_options") or []
+        batch = _unwrap_list(data, "product_options")
         if not batch:
             break
         for entry in batch:
@@ -131,7 +133,7 @@ def ps_list_attribute_values(config, group_id: int, *, timeout=None) -> list[dic
     data = _response_json(resp, f"دریافت مقادیر گروه ویژگی #{group_id}")
     return [
         _value_to_shape(entry, lang_id)
-        for entry in (data.get("product_option_values") or [])
+        for entry in _unwrap_list(data, "product_option_values")
         if isinstance(entry, dict) and entry.get("id")
     ]
 
@@ -199,7 +201,7 @@ def ps_get_combination(config, combination_id: int, *, timeout=None) -> dict | N
     if getattr(resp, "status_code", 0) == 404:
         return None
     data = _response_json(resp, f"دریافت ترکیب واریانت #{combination_id}")
-    entry = data.get("combination") or {}
+    entry = _unwrap_dict(data, "combination")
     if not entry.get("id"):
         return None
     return entry
@@ -217,7 +219,7 @@ def ps_list_combinations(config, product_id: int, *, timeout=None) -> list[dict]
         ),
     )
     data = _response_json(resp, f"دریافت ترکیب‌های واریانت محصول #{product_id}")
-    rows = data.get("combinations") or []
+    rows = _unwrap_list(data, "combinations")
     out: list[dict] = []
     for row in rows:
         if not isinstance(row, dict) or not row.get("id"):

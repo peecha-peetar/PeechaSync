@@ -17,7 +17,33 @@ def _is_active_wc_product(info: dict | None) -> bool:
     return str(info.get("status") or "").strip() in _ACTIVE_WC_STATUSES
 
 
+def _current_platform() -> str:
+    from sync_app.core.integrations.commerce_provider import store_platform
+    from sync_app.core.secure_config_loader import load_secure_config
+
+    return store_platform(load_secure_config(None))
+
+
+def _platform_marker_path() -> str:
+    return app_path("product_woo_map.platform")
+
+
 def load_product_woo_map() -> dict[str, int]:
+    # آی‌دی‌های عددی این فایل مخصوص یک پلتفرمن (ووکامرس یا پرستاشاپ) — اگه
+    # از آخرین ذخیره، پلتفرم فعال عوض شده باشه، این IDها به‌کل بی‌ربطن؛
+    # با نگاشت خالی شروع می‌کنیم تا هر SKU با جستجوی SKU دوباره resolve بشه.
+    try:
+        with open(_platform_marker_path(), "r", encoding="utf-8") as f:
+            saved_platform = (f.read() or "").strip()
+        if saved_platform and saved_platform != _current_platform():
+            log.info(
+                f"ℹ️ پلتفرم فروشگاه از «{saved_platform}» به «{_current_platform()}» عوض شده — "
+                "نگاشت SKU↔ID قبلی نادیده گرفته می‌شود."
+            )
+            return {}
+    except Exception:
+        pass
+
     try:
         with open(app_path("product_woo_map.json"), "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -33,6 +59,8 @@ def save_product_woo_map(product_map: dict) -> None:
         clean = {str(k).strip(): int(v) for k, v in (product_map or {}).items() if v}
         with open(app_path("product_woo_map.json"), "w", encoding="utf-8") as f:
             json.dump(clean, f, ensure_ascii=False, indent=2)
+        with open(_platform_marker_path(), "w", encoding="utf-8") as f:
+            f.write(_current_platform())
     except Exception as exc:
         log.warning(f"⚠️ ذخیره product_woo_map.json: {exc}")
 
