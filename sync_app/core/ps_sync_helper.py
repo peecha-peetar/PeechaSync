@@ -589,6 +589,11 @@ def ps_create_product(
         _set_text(node, "state", 1)
         _set_text(node, "visibility", _visibility_from_wc(catalog_visibility))
         _set_text(node, "id_category_default", default_cat)
+        # همیشه قابل سفارش و قیمت نمایان — صرف‌نظر از موجودی؛ کنترل واقعیِ
+        # «اجازه‌ی خرید با موجودی صفر» با فیلد out_of_stock در stock_availables
+        # انجام می‌شه (ps_set_stock_quantity)، نه با این دو فیلد.
+        _set_text(node, "available_for_order", 1)
+        _set_text(node, "show_price", 1)
         if cat_ids:
             assoc = ET.SubElement(node, "associations")
             cats_node = ET.SubElement(assoc, "categories")
@@ -645,6 +650,8 @@ def ps_update_product(
         _set_text(node, "state", 1)
         _set_text(node, "visibility", final_visibility)
         _set_text(node, "id_category_default", default_cat)
+        _set_text(node, "available_for_order", 1)
+        _set_text(node, "show_price", 1)
         if cat_ids:
             assoc = ET.SubElement(node, "associations")
             cats_node = ET.SubElement(assoc, "categories")
@@ -691,6 +698,14 @@ def ps_update_product_seo(
         _set_text(node, "state", 1)
         _set_text(node, "visibility", str(current.get("visibility") or "both"))
         _set_text(node, "id_category_default", int(current.get("id_category_default") or PS_DEFAULT_PARENT_CATEGORY_ID))
+        def _preserve_or_default(value, default=1):
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return default
+
+        _set_text(node, "available_for_order", _preserve_or_default(current.get("available_for_order")))
+        _set_text(node, "show_price", _preserve_or_default(current.get("show_price")))
         final_description = description if description is not None else _lang_value(current.get("description"), lang_id)
         _set_lang_text(node, "description", final_description, lang_id)
         final_short = short_description if short_description is not None else _lang_value(current.get("description_short"), lang_id)
@@ -841,6 +856,36 @@ def ps_upload_product_image(config, product_id: int, image_data: bytes, filename
     except Exception:
         pass
     raise PrestaShopAPIError(f"آپلود تصویر محصول #{product_id}: id در پاسخ یافت نشد.")
+
+
+def ps_upload_category_image(config, category_id: int, image_data: bytes, filename: str, *, timeout=None) -> int:
+    """آپلود تصویر یک دسته — POST images/categories/{id}، مثل ps_upload_product_image
+    ولی روی منبع categories؛ پرستاشاپ برای هر دسته فقط یک تصویر (کاور) داره،
+    آپلود جدید جایگزین قبلی می‌شه (برخلاف گالری محصول که چندتایی و افزوده‌شونده‌ست)."""
+    cfg = config or {}
+    url = ps_endpoint(cfg.get("PS_URL", ""), f"images/categories/{int(category_id)}")
+    if not url:
+        raise PrestaShopAPIError("PS_URL خالی است.")
+    auth = get_ps_auth(cfg)
+    verify = bool(cfg.get("PS_VERIFY_SSL", False))
+    req_timeout = timeout if timeout is not None else ps_timeout_pair(cfg)
+    final_name = filename or "image.jpg"
+    ext = os.path.splitext(final_name.lower())[1]
+    mime = _IMAGE_MIME_BY_EXT.get(ext, "image/jpeg")
+    files = {"image": (final_name, image_data, mime)}
+    resp = requests.post(
+        url, auth=auth, files=files, timeout=req_timeout, verify=verify,
+        headers={"User-Agent": _peecha_user_agent()},
+    )
+    _raise_for_status(resp, f"آپلود تصویر دسته #{category_id}")
+    try:
+        root = ET.fromstring(resp.text)
+        id_text = root.findtext(".//id")
+        if id_text and id_text.strip().isdigit():
+            return int(id_text.strip())
+    except Exception:
+        pass
+    raise PrestaShopAPIError(f"آپلود تصویر دسته #{category_id}: id در پاسخ یافت نشد.")
 
 
 def ps_delete_product_image(config, product_id: int, image_id: int, *, timeout=None) -> None:

@@ -107,7 +107,7 @@ def _guess_mime_cat(filename):
 
 class CategoryRowWidget(QWidget):
     """ردیف دسته‌بندی در لیست انتخاب‌شده‌ها — دکمه آپلود + حذف تصویر + نام + حالت موجودی"""
-    def __init__(self, text, on_upload, on_clear=None, on_stock_mode_changed=None, parent=None):
+    def __init__(self, text, on_upload, on_clear=None, on_stock_mode_changed=None, parent=None, show_image_buttons=True):
         super().__init__(parent)
         self._on_clear = on_clear
         self._on_stock_mode_changed = on_stock_mode_changed
@@ -117,21 +117,25 @@ class CategoryRowWidget(QWidget):
         row.setContentsMargins(6, 2, 6, 2)
         row.setSpacing(6)
 
-        self.upload_button = QPushButton("آپلود تصویر")
-        self.upload_button.setStyleSheet("padding: 2px 6px; font-size: 11px; min-height: 28px;")
-        self.upload_button.setFixedWidth(120)
-        self.upload_button.setFixedHeight(36)
-        self.upload_button.clicked.connect(on_upload)
-        row.addWidget(self.upload_button)
+        if show_image_buttons:
+            self.upload_button = QPushButton("آپلود تصویر")
+            self.upload_button.setStyleSheet("padding: 2px 6px; font-size: 11px; min-height: 28px;")
+            self.upload_button.setFixedWidth(120)
+            self.upload_button.setFixedHeight(36)
+            self.upload_button.clicked.connect(on_upload)
+            row.addWidget(self.upload_button)
 
-        from sync_app.core.row_action_button import make_row_button, row_button_style
-        self.clear_button = make_row_button("✕", "حذف تصویر این دسته", kind="danger", size=24)
-        self.clear_button.setStyleSheet(
-            row_button_style("danger") + "QToolButton { color: #b91c1c; font-weight: bold; font-size: 13px; }"
-        )
-        self.clear_button.clicked.connect(self._handle_clear)
-        self.clear_button.hide()
-        row.addWidget(self.clear_button)
+            from sync_app.core.row_action_button import make_row_button, row_button_style
+            self.clear_button = make_row_button("✕", "حذف تصویر این دسته", kind="danger", size=24)
+            self.clear_button.setStyleSheet(
+                row_button_style("danger") + "QToolButton { color: #b91c1c; font-weight: bold; font-size: 13px; }"
+            )
+            self.clear_button.clicked.connect(self._handle_clear)
+            self.clear_button.hide()
+            row.addWidget(self.clear_button)
+        else:
+            self.upload_button = None
+            self.clear_button = None
 
         from sync_app.core.stock_mode import STOCK_MODE_LABELS
         self.stock_mode_combo = QComboBox()
@@ -139,10 +143,17 @@ class CategoryRowWidget(QWidget):
         self.stock_mode_combo.setMaximumWidth(150)
         self.stock_mode_combo.setFixedHeight(28)
         self.stock_mode_combo.setStyleSheet("font-size: 11px; padding: 1px 4px;")
-        self.stock_mode_combo.setToolTip(
-            "حالت موجودی برای همه‌ی محصولات این دسته‌بندی — هر محصول می‌تونه "
-            "جدا تو تب «محصولات» بازنویسی بشه."
-        )
+        if show_image_buttons:
+            self.stock_mode_combo.setToolTip(
+                "حالت موجودی این زیر-دسته — اگر خالی/پیش‌فرض بمونه، از حالت "
+                "موجودیِ دسته‌ی اصلی (بالای همین لیست) ارث می‌بره. هر محصول هم "
+                "می‌تونه جدا تو تب «محصولات» بازنویسی بشه."
+            )
+        else:
+            self.stock_mode_combo.setToolTip(
+                "حالت موجودی پیش‌فرض برای همه‌ی زیر-دسته‌های این دسته‌ی اصلی — "
+                "روی هر زیر-دسته که جدا override نشده باشه اعمال می‌شه."
+            )
         for key, label in STOCK_MODE_LABELS.items():
             self.stock_mode_combo.addItem(label, key)
         self.stock_mode_combo.currentIndexChanged.connect(self._handle_stock_mode_changed)
@@ -153,6 +164,10 @@ class CategoryRowWidget(QWidget):
         self.title = QLabel(text)
         self.title.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self.title.setWordWrap(False)
+        if not show_image_buttons:
+            font = self.title.font()
+            font.setBold(True)
+            self.title.setFont(font)
         row.addWidget(self.title)
 
     def set_stock_mode(self, mode: str):
@@ -1072,12 +1087,33 @@ class CategoryTab(QWidget):
             run_sql_reload_if_active(self.variation_tab_ref, self.variation_tab_ref.load_variations)
 
     def _populate_selected_list(self, entries):
-        """entries: list of dicts with keys: text, full_code, s_name, ..."""
+        """entries: list of dicts with keys: text, full_code, s_name, m_code, m_name, ..."""
+        from sync_app.core.stock_mode import get_category_stock_mode
+
         self.selected_list.clear()
+        seen_main_codes = set()
         for entry in entries:
             full_code = entry["full_code"]
             text = entry["text"]
             s_name = entry["s_name"]
+            m_code = entry.get("m_code", "")
+            m_name = entry.get("m_name", "")
+
+            if m_code and m_code not in seen_main_codes:
+                seen_main_codes.add(m_code)
+                header_item = QListWidgetItem()
+                header_item.setFlags(Qt.NoItemFlags)
+                header_row = CategoryRowWidget(
+                    f"🗂 {m_name} (کل دسته)",
+                    on_upload=None,
+                    on_stock_mode_changed=lambda mode, mc=m_code: self._set_category_stock_mode(mc, mode),
+                    parent=self.selected_list,
+                    show_image_buttons=False,
+                )
+                header_row.set_stock_mode(get_category_stock_mode(self.config, m_code))
+                header_item.setSizeHint(QSize(0, 40))
+                self.selected_list.addItem(header_item)
+                self.selected_list.setItemWidget(header_item, header_row)
 
             item = QListWidgetItem()
             item.setData(Qt.UserRole, full_code)
@@ -1092,7 +1128,6 @@ class CategoryTab(QWidget):
                 on_stock_mode_changed=lambda mode, fc=full_code: self._set_category_stock_mode(fc, mode),
                 parent=self.selected_list,
             )
-            from sync_app.core.stock_mode import get_category_stock_mode
             row_widget.set_stock_mode(get_category_stock_mode(self.config, full_code))
             row_widget.set_has_image(self._category_has_local_image(full_code))
             item.setSizeHint(QSize(0, 48))
@@ -2247,8 +2282,13 @@ class CategoryTab(QWidget):
         self._last_cat_upload_result = (0, 0)
         wc_slug_map_snapshot = dict(self._wc_slug_map)
 
+        from sync_app.core.integrations.commerce_provider import is_prestashop
+
         def job():
-            self._do_send_category_images_to_woo(to_process, wc_slug_map_snapshot)
+            if is_prestashop(self.config):
+                self._do_send_category_images_to_ps(to_process, wc_slug_map_snapshot)
+            else:
+                self._do_send_category_images_to_woo(to_process, wc_slug_map_snapshot)
 
         if not run_background_sync(
             self, job,
@@ -2455,6 +2495,123 @@ class CategoryTab(QWidget):
                     log.warning(f"⚠️ خطای موقت در پردازش دسته {full_code}: {exc}")
                     fail_count += 1
                     continue
+                log.error(f"❌ خطای کلی در پردازش دسته {full_code}: {exc}")
+                fail_count += 1
+
+        if fail_count == 0:
+            log.info(f"✅ ارسال تصاویر دسته‌بندی تمام شد. {success_count} موفق.")
+        else:
+            log.warning(f"⚠️ ارسال تمام شد. موفق: {success_count} | ناموفق: {fail_count}")
+        self._last_cat_upload_result = (success_count, fail_count)
+
+    def _do_send_category_images_to_ps(self, to_process, ps_slug_map_snapshot):
+        """اجرا در thread پس‌زمینه — آپلود تصویر مستقیم به پرستاشاپ (images/categories/{id}).
+
+        برخلاف ووکامرس، پرستاشاپ کتابخانه رسانه‌ی جدا نداره — تصویر مستقیم
+        روی خودِ دسته آپلود می‌شه، پس نیازی به مرحله‌ی جدای «آپلود به رسانه +
+        اتصال به دسته» نیست.
+        """
+        from sync_app.core.ps_sync_helper import ps_upload_category_image
+
+        cfg = load_secure_config(None) or {}
+        timeout = int(cfg.get("PS_TIMEOUT", 60) or 60)
+        self._last_cat_upload_detail = ""
+
+        category_map = load_category_map()
+        slug_map = dict(ps_slug_map_snapshot or {})
+
+        unresolved = [
+            full_code
+            for full_code, _s_name, _rel_path in to_process
+            if not resolve_wc_category_id(full_code, category_map, slug_map)
+        ]
+        if unresolved:
+            log.info(
+                f"ℹ️ {len(unresolved)} دسته در نگاشت محلی نیست — واکشی از API "
+                f"({', '.join(unresolved[:4])}{'...' if len(unresolved) > 4 else ''})"
+            )
+            try:
+                check_cancelled()
+                from sync_app.core.integrations.commerce_provider import fetch_store_slug_map
+
+                fresh_slug_map = fetch_store_slug_map(cfg, timeout=min(45, timeout), cancel_check=check_cancelled)
+                if fresh_slug_map:
+                    slug_map = fresh_slug_map
+                    merged = merge_category_map_with_slug_map(category_map, slug_map)
+                    if merged != category_map:
+                        save_category_map(merged)
+                        category_map = merged
+                    log.info(f"ℹ️ نگاشت دسته‌ها از API واکشی شد ({len(slug_map)} مورد).")
+            except SyncCancelled:
+                raise
+            except Exception as exc:
+                log.warning(f"⚠️ واکشی نگاشت دسته ناموفق: {exc} — از cache محلی استفاده می‌شود.")
+
+        still_missing = [
+            full_code
+            for full_code, _s_name, _rel_path in to_process
+            if not resolve_wc_category_id(full_code, category_map, slug_map)
+        ]
+        if still_missing:
+            detail = (
+                f"{len(still_missing)} دسته در فروشگاه پیدا نشد "
+                f"({', '.join(still_missing[:4])}{'...' if len(still_missing) > 4 else ''}).\n"
+                "ابتدا «بررسی وضعیت» یا «همگام‌سازی» دسته‌ها را بزنید."
+            )
+            log.error(f"❌ بدون نگاشت دسته، ارسال تصویر ممکن نیست — {detail}")
+            self._last_cat_upload_detail = detail
+            self._last_cat_upload_result = (0, len(to_process))
+            return
+
+        success_count = 0
+        fail_count = 0
+        total = len(to_process)
+        store_host = (cfg.get("PS_URL") or "").strip()
+        log.info(f"📷 شروع ارسال {total} تصویر دسته‌بندی → {store_host} (پرستاشاپ)")
+
+        for index, (full_code, s_name, rel_path) in enumerate(to_process, start=1):
+            try:
+                log.info(f"📷 ({index}/{total}) دسته {full_code} ({s_name})...")
+                wait_for_connectivity_blocking(cfg, need_sql=False, need_wc=True, log_waiting=False)
+
+                abs_path = self._category_image_abs_path(rel_path)
+                if not abs_path:
+                    log.warning(f"⚠️ فایل تصویر پیدا نشد — دسته {full_code} رد شد")
+                    continue
+
+                cat_id = resolve_wc_category_id(full_code, category_map, slug_map)
+                if not cat_id:
+                    log.warning(
+                        f"⚠️ دسته {full_code} ({s_name}) در فروشگاه پیدا نشد — "
+                        f"ابتدا «همگام‌سازی» دسته‌ها را بزنید."
+                    )
+                    fail_count += 1
+                    continue
+
+                filename = os.path.basename(abs_path)
+                with open(abs_path, "rb") as f:
+                    img_data = f.read()
+
+                try:
+                    check_cancelled()
+                    ps_upload_category_image(cfg, cat_id, img_data, filename, timeout=timeout)
+                except SyncCancelled:
+                    raise
+                except Exception as exc:
+                    log.error(f"❌ آپلود تصویر دسته {full_code} (ps id={cat_id}): {exc}")
+                    self._last_cat_upload_detail = str(exc)
+                    fail_count += 1
+                    continue
+
+                if category_map.get(full_code) != cat_id:
+                    category_map[full_code] = cat_id
+                    save_category_map(category_map)
+                log.info(f"✅ تصویر دسته {full_code} ({s_name}) ارسال شد.")
+                success_count += 1
+
+            except SyncCancelled:
+                raise
+            except Exception as exc:
                 log.error(f"❌ خطای کلی در پردازش دسته {full_code}: {exc}")
                 fail_count += 1
 

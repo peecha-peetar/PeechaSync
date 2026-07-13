@@ -27,9 +27,34 @@ PRODUCT_STOCK_MODE_KEY = "PRODUCT_STOCK_MODE"     # {sku: mode} — فقط وق�
 
 
 def get_category_stock_mode(config: dict, group_code: str) -> str:
-    modes = (config or {}).get(CATEGORY_STOCK_MODE_KEY) or {}
-    mode = str(modes.get(str(group_code).strip(), STOCK_MODE_DB))
-    return mode if mode in STOCK_MODE_LABELS else STOCK_MODE_DB
+    """
+    اولویت: تنظیم صریح روی خودِ زیر-دسته (group_code کامل) → تنظیم صریح روی
+    دسته‌ی اصلی (m_code، والدِ این زیر-دسته) → پیش‌فرض «db».
+
+    زیر-دسته‌ها (full_code = m_code + s_code) هر کدوم می‌تونن جدا override
+    بشن، ولی اگه هیچ‌کدوم override نشده باشن، تنظیمِ دسته‌ی اصلی (که با
+    SELECTED_CATEGORY_GROUPS مشخص می‌شه) روی همه‌ی زیرمجموعه‌هاش اعمال می‌شه.
+    """
+    cfg = config or {}
+    modes = cfg.get(CATEGORY_STOCK_MODE_KEY) or {}
+    gc = str(group_code).strip()
+
+    mode = modes.get(gc)
+    if mode in STOCK_MODE_LABELS:
+        return mode
+
+    main_codes = [str(m).strip() for m in (cfg.get("SELECTED_CATEGORY_GROUPS") or []) if str(m).strip()]
+    parent_code = max(
+        (m for m in main_codes if m != gc and gc.startswith(m)),
+        key=len,
+        default="",
+    )
+    if parent_code:
+        parent_mode = modes.get(parent_code)
+        if parent_mode in STOCK_MODE_LABELS:
+            return parent_mode
+
+    return STOCK_MODE_DB
 
 
 def set_category_stock_mode(group_code: str, mode: str) -> None:
