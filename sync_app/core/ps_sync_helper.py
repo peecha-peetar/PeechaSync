@@ -840,6 +840,24 @@ def _slugify_reference(sku: str) -> str:
 # موجودی (stock_availables) — همیشه یک رکورد جدا از محصول
 # ---------------------------------------------------------------------------
 
+def _pick_shop_stock_available_row(rows: list[dict]) -> dict | None:
+    """از بین چند رکورد stock_availables (پرستاشاپ چندشاپی حتی توی حالت
+    تک‌فروشگاهی می‌تونه بیش از یک رکورد داشته باشه)، رکوردِ واقعیِ یک شاپِ
+    مشخص رو انتخاب می‌کنه، نه رکورد id_shop=0 (که یه رکورد عمومی/گروهیه و
+    پنل ادمین بر اساس شاپِ فعال، نه این رکورد، مقدار رو نشون می‌ده).
+
+    این باگِ واقعی روی یک فروشگاه پرستاشاپ ۹.۱.۳ تأیید شده: نوشتن روی
+    id_shop=0 موفق بود ولی پنل (که از رکورد id_shop=1 می‌خوند) هیچ‌وقت
+    عوض نمی‌شد.
+    """
+    if not rows:
+        return None
+    shop_rows = [r for r in rows if int(r.get("id_shop") or 0) > 0]
+    if shop_rows:
+        return min(shop_rows, key=lambda r: int(r.get("id_shop") or 0))
+    return rows[0]
+
+
 def ps_get_stock_available(config, product_id: int, *, product_attribute_id: int = 0, timeout=None):
     """(stock_available_id, quantity) برای یک محصول ساده (بدون combination).
 
@@ -847,6 +865,12 @@ def ps_get_stock_available(config, product_id: int, *, product_attribute_id: int
     GET جدا برای هر رکورد موجودی لازم نیست. قبلاً یک درخواست دوم به
     stock_availables/{id} می‌رفت که روی برخی فروشگاه‌ها گاهی 404 برمی‌گردوند
     و باعث می‌شد جستجوی محصول با خطا مواجه بشه و محصول تکراری ساخته بشه.
+
+    ⚠️ ممکنه بیش از یک رکورد برای همین (product, attribute) برگرده — یکی
+    id_shop=0 (عمومی/گروهی، پنل ادمین ازش نمی‌خونه) و یکی id_shop=N (واقعیِ
+    شاپ فعال). limit رو بالا می‌بریم و رکورد واقعیِ شاپ رو ترجیح می‌دیم؛
+    وگرنه (قبل از این رفع) رکورد id_shop=0 اول برمی‌گشت و می‌نوشتیم روش،
+    بدون اینکه پنل ادمین اصلاً عوض بشه.
     """
     cfg = config or {}
     resp = ps_call(
@@ -857,16 +881,16 @@ def ps_get_stock_available(config, product_id: int, *, product_attribute_id: int
                 "filter[id_product]": f"[{int(product_id)}]",
                 "filter[id_product_attribute]": f"[{int(product_attribute_id)}]",
                 "display": "full",
-                "limit": "0,1",
+                "limit": "0,20",
             },
             timeout=timeout,
         ),
     )
     data = _response_json(resp, f"دریافت موجودی محصول #{product_id}")
     rows = _unwrap_list(data, "stock_availables")
-    if not rows:
+    row = _pick_shop_stock_available_row(rows)
+    if not row:
         return None, None
-    row = rows[0]
     sid = int(row.get("id") or 0)
     if not sid:
         return None, None
@@ -935,9 +959,9 @@ def ps_set_stock_quantity(
         verify_rows = _unwrap_list(_response_json(verify_resp, "تأیید موجودی"), "stock_availables")
         if verify_rows:
             if len(verify_rows) > 1:
-                log.warning(
-                    f"⚠️ [تأیید] #{product_id}: {len(verify_rows)} رکورد stock_availables برای همین محصول "
-                    "پیدا شد (نه فقط یکی) — احتمالاً چندشاپیه و پنل ادمین از رکورد دیگه‌ای می‌خونه:"
+                log.info(
+                    f"ℹ️ [تأیید] #{product_id}: {len(verify_rows)} رکورد stock_availables برای همین محصول "
+                    "پیدا شد (چندشاپی) — رکوردی که واقعاً نوشتیم رو با id چک می‌کنیم، نه فقط اولی رو:"
                 )
             for row in verify_rows:
                 log.info(
@@ -945,15 +969,25 @@ def ps_set_stock_quantity(
                     f"id_shop_group={row.get('id_shop_group')!r} out_of_stock={row.get('out_of_stock')!r} "
                     f"quantity={row.get('quantity')!r}"
                 )
-            actual_oos = verify_rows[0].get("out_of_stock")
-            actual_qty = verify_rows[0].get("quantity")
-            if str(actual_oos) != str(int(out_of_stock)):
-                log.warning(
-                    f"⚠️ [تأیید] #{product_id}: نوشتیم out_of_stock={out_of_stock} ولی فروشگاه الان "
-                    f"{actual_oos!r} برمی‌گردونه (quantity={actual_qty!r}) — با هم فرق دارن!"
-                )
+            # همون رکوردی که PUT کردیم (sid) رو دقیق پیدا می‌کنیم — نه صرفاً
+            # اولین رکورد لیست — چون توی چندشاپی، رکورد اول لزوماً همونی
+            # نیست که ما نوشتیم.
+            written_row = next((r for r in verify_rows if int(r.get("id") or 0) == sid), None)
+            if written_row is None:
+                log.warning(f"⚠️ [تأیید] #{product_id}: رکورد id={sid} که نوشتیم دیگه توی نتیجه نیست!")
             else:
-                log.info(f"✔️ [تأیید] #{product_id}: stock_availables.out_of_stock={actual_oos} (مطابق انتظار)")
+                actual_oos = written_row.get("out_of_stock")
+                actual_qty = written_row.get("quantity")
+                if str(actual_oos) != str(int(out_of_stock)):
+                    log.warning(
+                        f"⚠️ [تأیید] #{product_id} (رکورد id={sid}): نوشتیم out_of_stock={out_of_stock} ولی "
+                        f"فروشگاه الان {actual_oos!r} برمی‌گردونه (quantity={actual_qty!r}) — با هم فرق دارن!"
+                    )
+                else:
+                    log.info(
+                        f"✔️ [تأیید] #{product_id} (رکورد id={sid}): "
+                        f"stock_availables.out_of_stock={actual_oos} (مطابق انتظار)"
+                    )
         else:
             log.warning(f"⚠️ [تأیید] #{product_id}: بعد از نوشتن، رکورد stock_availables دیگه پیدا نشد.")
     except Exception as verify_exc:
