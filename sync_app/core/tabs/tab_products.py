@@ -2074,10 +2074,125 @@ class ProductTab(QWidget):
         self._action_ops.begin("images")
         self._set_products_status("loading", "⏳ در حال ارسال تصاویر...")
 
+    def _do_send_images_to_ps(self, to_process, replace_mode, cfg):
+        """معادل _do_send_images_to_woo برای پرستاشاپ — بدون کتابخانه‌ی رسانه‌ی
+        وردپرس؛ هر تصویر مستقیم با ps_upload_product_image به گالری محصول
+        اضافه می‌شه. برای حالت «جایگزین کن»، اول تصاویر فعلی گالری حذف می‌شن."""
+        from sync_app.core.ps_sync_helper import (
+            ps_delete_product_image, ps_get_product_image_ids, ps_upload_product_image,
+        )
+        from sync_app.core.smart_publish import (
+            AUTO_RUN_KEY, AUTO_PIPELINE_KEY, load_pipelines, load_watermark_settings,
+            load_ai_studio_settings, run_pipeline, load_text_engrave_settings, load_qr_code_settings,
+        )
+        from sync_app.core.media_center import load_image_profiles
+
+        product_map = load_product_woo_map()
+        success_count = 0
+        fail_count = 0
+        log.info(f"📷 شروع ارسال تصاویر {len(to_process)} محصول به پرستاشاپ — فقط فایل‌های موجود روی دیسک")
+
+        auto_run = bool(cfg.get(AUTO_RUN_KEY, False))
+        auto_pipeline_name = cfg.get(AUTO_PIPELINE_KEY)
+        pipelines = load_pipelines(cfg) if auto_run else {}
+        auto_pipeline = pipelines.get(auto_pipeline_name) if auto_pipeline_name else None
+        if auto_run and auto_pipeline:
+            profiles = load_image_profiles(cfg)
+            pipeline_watermark = load_watermark_settings(cfg)
+            pipeline_ai_studio = load_ai_studio_settings(cfg)
+            pipeline_text_engrave = load_text_engrave_settings(cfg)
+            pipeline_qr_code = load_qr_code_settings(cfg)
+            pipeline_steps = auto_pipeline.get("steps") or []
+            pipeline_profile = profiles.get(auto_pipeline.get("profile")) if auto_pipeline.get("profile") else None
+        else:
+            pipeline_steps = []
+
+        def _apply_pipeline_if_needed(sku: str, abs_path: str, pid: int) -> str:
+            if not (auto_run and auto_pipeline and pipeline_steps):
+                return abs_path
+            try:
+                site_url = str(cfg.get("PS_URL") or "").strip().rstrip("/")
+                product_url = f"{site_url}/index.php?id_product={int(pid)}&controller=product" if site_url else ""
+                out_dir = os.path.join(os.path.dirname(abs_path), "_pipeline_out")
+                os.makedirs(out_dir, exist_ok=True)
+                result = run_pipeline(
+                    abs_path, pipeline_steps, out_dir=out_dir, profile=pipeline_profile,
+                    watermark=pipeline_watermark, ai_studio=pipeline_ai_studio,
+                    text_engrave=pipeline_text_engrave, qr_code=pipeline_qr_code,
+                    product_info={"a_code": sku, "a_code_c": sku, "name": sku, "product_url": product_url},
+                )
+                if result.ok and result.dst_path and os.path.isfile(result.dst_path):
+                    return result.dst_path
+            except Exception as exc:
+                log.warning(f"⚠️ روش پردازش تصویر رو {sku} اجرا نشد، فایل اصلی ارسال می‌شه: {exc}")
+            return abs_path
+
+        for sku, paths in to_process:
+            try:
+                pid = product_map.get(sku)
+                if not pid:
+                    log.warning(f"⚠️ محصول {sku} در پرستاشاپ لینک نشده — رد شد.")
+                    fail_count += 1
+                    continue
+                pid = int(pid)
+
+                if replace_mode:
+                    try:
+                        for existing_id in ps_get_product_image_ids(cfg, pid):
+                            ps_delete_product_image(cfg, pid, existing_id)
+                    except Exception as exc:
+                        log.warning(f"⚠️ حذف تصاویر فعلی محصول {sku} ناموفق بود: {exc}")
+
+                uploaded = 0
+                for rel_or_abs in paths:
+                    abs_path = self._product_image_abs_path(rel_or_abs)
+                    if not abs_path:
+                        log.warning(f"⚠️ فایل تصویر پیدا نشد — {sku}: {rel_or_abs}")
+                        continue
+                    abs_path = _apply_pipeline_if_needed(sku, abs_path, pid)
+                    filename = os.path.basename(abs_path)
+                    try:
+                        with open(abs_path, "rb") as f:
+                            img_data = f.read()
+                        ps_upload_product_image(cfg, pid, img_data, filename)
+                        log.info(f"✅ تصویر {filename} برای {sku} آپلود شد.")
+                        uploaded += 1
+                    except Exception as exc:
+                        log.error(f"❌ خطا در آپلود {filename} برای {sku}: {exc}")
+                        self._last_img_upload_detail = str(exc)
+
+                if not uploaded:
+                    log.warning(f"⚠️ هیچ تصویری برای {sku} با موفقیت آپلود نشد.")
+                    fail_count += 1
+                    continue
+
+                log.info(f"✅ {uploaded} تصویر برای محصول {sku} (ID:{pid}) روی پرستاشاپ تنظیم شد.")
+                success_count += 1
+
+            except Exception as exc:
+                from sync_app.core.sync_cancel import SyncCancelled
+                if isinstance(exc, SyncCancelled):
+                    raise
+                log.error(f"❌ خطای کلی در پردازش {sku}: {exc}")
+                fail_count += 1
+
+        if fail_count == 0:
+            log.info(f"✅ ارسال تصاویر به پایان رسید. {success_count} محصول موفق.")
+        else:
+            log.warning(f"⚠️ ارسال تصاویر تمام شد. موفق: {success_count} | ناموفق: {fail_count}")
+        self._last_img_upload_result = (success_count, fail_count)
+
     def _do_send_images_to_woo(self, to_process, replace_mode):
         """اجرا در thread پس‌زمینه — آپلود فایل‌ها به WordPress Media و بروزرسانی محصول"""
         cfg = ensure_wc_sites(load_secure_config(None) or {})
         self._last_img_upload_detail = ""
+
+        from sync_app.core.integrations.commerce_provider import is_prestashop
+
+        if is_prestashop(cfg):
+            self._do_send_images_to_ps(to_process, replace_mode, cfg)
+            return
+
         timeout = int(cfg.get("WC_TIMEOUT", 60) or 60)
 
         wp_user, wp_pwd = (cfg.get("WP_USERNAME") or ""), (cfg.get("WP_APP_PASSWORD") or "")
