@@ -42,9 +42,18 @@ def resolve_erp_picture_path(picture_path: str, config: dict | None) -> str:
     return ""
 
 
-def load_transferred_image_ids() -> dict[str, list[int]]:
+def _transferred_images_filename(platform: str) -> str:
+    # فایل جدا به‌ازای هر پلتفرم — چون «منتقل‌شده به ووکامرس» به این معنی
+    # نیست که همون تصویر روی پرستاشاپ هم واقعاً آپلود شده (یا برعکس). قبلاً
+    # یک فایل مشترک بود که باعث می‌شد بعد از سوییچ پلتفرم، انتقال تصویر
+    # برای همیشه بی‌صدا رد بشه (چون hlo_id از سینک قبلیِ پلتفرم دیگه، از قبل
+    # «منتقل‌شده» ثبت شده بود).
+    return "transferred_erp_images_ps.json" if str(platform or "").strip().lower() == "prestashop" else "transferred_erp_images.json"
+
+
+def load_transferred_image_ids(platform: str = "woocommerce") -> dict[str, list[int]]:
     """
-    {کد_کالا: [شناسه‌های ردیف HLOpictures که قبلاً منتقل شدن]}
+    {کد_کالا: [شناسه‌های ردیف HLOpictures که قبلاً منتقل شدن]} — جدا برای هر پلتفرم.
     این فایل تنها منبع قابل‌اعتماد برای «این تصویر قبلاً رفته یا نه»ست —
     برخلاف شمارش ساده‌ی تعداد، اگه یکی از تصاویر قدیمی از ERP حذف بشه و
     یکی جدید اضافه بشه، تعداد کل ممکنه عوض نشه ولی این فایل درست تشخیص می‌ده.
@@ -53,7 +62,7 @@ def load_transferred_image_ids() -> dict[str, list[int]]:
     from sync_app.core.sync_utils import app_path
 
     try:
-        with open(app_path("transferred_erp_images.json"), "r", encoding="utf-8") as f:
+        with open(app_path(_transferred_images_filename(platform)), "r", encoding="utf-8") as f:
             data = json.load(f)
             if isinstance(data, dict):
                 return {
@@ -65,29 +74,29 @@ def load_transferred_image_ids() -> dict[str, list[int]]:
     return {}
 
 
-def save_transferred_image_ids(mapping: dict) -> None:
+def save_transferred_image_ids(mapping: dict, platform: str = "woocommerce") -> None:
     import json
     from sync_app.core.sync_utils import app_path, log
 
     try:
         clean = {str(k).strip(): sorted({int(i) for i in (v or [])}) for k, v in (mapping or {}).items()}
-        with open(app_path("transferred_erp_images.json"), "w", encoding="utf-8") as f:
+        with open(app_path(_transferred_images_filename(platform)), "w", encoding="utf-8") as f:
             json.dump(clean, f, ensure_ascii=False, indent=2)
     except Exception as exc:
         try:
-            log.warning(f"⚠️ ذخیره transferred_erp_images.json: {exc}")
+            log.warning(f"⚠️ ذخیره {_transferred_images_filename(platform)}: {exc}")
         except Exception:
             pass
 
 
-def mark_images_transferred(sku: str, hlo_ids: list[int]) -> None:
+def mark_images_transferred(sku: str, hlo_ids: list[int], platform: str = "woocommerce") -> None:
     if not hlo_ids:
         return
-    mapping = load_transferred_image_ids()
+    mapping = load_transferred_image_ids(platform)
     existing = set(mapping.get(str(sku).strip(), []))
     existing.update(int(i) for i in hlo_ids)
     mapping[str(sku).strip()] = sorted(existing)
-    save_transferred_image_ids(mapping)
+    save_transferred_image_ids(mapping, platform)
 
 
 def _stage_one(dst_dir: str, subdir: str, sku_key: str, name_hint: str, blob: bytes, path: str, config: dict | None) -> str:

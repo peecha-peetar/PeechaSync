@@ -14,6 +14,7 @@ link_rewrite، description) رسمی و همیشه پشتیبانی می‌کن�
 
 from __future__ import annotations
 
+import os
 import re
 import time
 import xml.etree.ElementTree as ET
@@ -809,6 +810,12 @@ def ps_set_stock_quantity(
 # تصویر محصول (multipart POST) — پایه برای فازهای بعدی
 # ---------------------------------------------------------------------------
 
+_IMAGE_MIME_BY_EXT = {
+    ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+    ".webp": "image/webp", ".gif": "image/gif", ".bmp": "image/bmp",
+}
+
+
 def ps_upload_product_image(config, product_id: int, image_data: bytes, filename: str, *, timeout=None) -> int:
     cfg = config or {}
     url = ps_endpoint(cfg.get("PS_URL", ""), f"images/products/{int(product_id)}")
@@ -817,7 +824,10 @@ def ps_upload_product_image(config, product_id: int, image_data: bytes, filename
     auth = get_ps_auth(cfg)
     verify = bool(cfg.get("PS_VERIFY_SSL", False))
     req_timeout = timeout if timeout is not None else ps_timeout_pair(cfg)
-    files = {"image": (filename or "image.jpg", image_data, "application/octet-stream")}
+    final_name = filename or "image.jpg"
+    ext = os.path.splitext(final_name.lower())[1]
+    mime = _IMAGE_MIME_BY_EXT.get(ext, "image/jpeg")
+    files = {"image": (final_name, image_data, mime)}
     resp = requests.post(
         url, auth=auth, files=files, timeout=req_timeout, verify=verify,
         headers={"User-Agent": _peecha_user_agent()},

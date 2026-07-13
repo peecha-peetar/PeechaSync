@@ -293,7 +293,7 @@ def _sync_product_images_if_needed_ps(config, sku, product_id, erp_images):
     from sync_app.core.erp_image_helper import load_transferred_image_ids, mark_images_transferred, stage_erp_images
     from sync_app.core.ps_sync_helper import ps_upload_product_image
 
-    already_transferred = set(load_transferred_image_ids().get(str(sku).strip(), []))
+    already_transferred = set(load_transferred_image_ids("prestashop").get(str(sku).strip(), []))
     new_erp_images = [(hlo_id, blob, path) for hlo_id, blob, path in erp_images if hlo_id not in already_transferred]
     if not new_erp_images:
         return
@@ -357,7 +357,7 @@ def _sync_product_images_if_needed_ps(config, sku, product_id, erp_images):
                 log.warning(f"⚠️ آپلود تصویر {sku} (hlo_id={hlo_id}) روی پرستاشاپ ناموفق: {exc}")
 
         if uploaded_count:
-            mark_images_transferred(sku, transferred_hlo_ids)
+            mark_images_transferred(sku, transferred_hlo_ids, "prestashop")
             log.info(f"🖼️ [{sku}] {uploaded_count} تصویر جدید از ERP به گالری پرستاشاپ اضافه شد.")
     except Exception as exc:
         log.warning(f"⚠️ انتقال تصویر محصول {sku} با خطا مواجه شد: {exc}")

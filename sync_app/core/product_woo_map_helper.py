@@ -32,15 +32,41 @@ def load_product_woo_map() -> dict[str, int]:
     # آی‌دی‌های عددی این فایل مخصوص یک پلتفرمن (ووکامرس یا پرستاشاپ) — اگه
     # از آخرین ذخیره، پلتفرم فعال عوض شده باشه، این IDها به‌کل بی‌ربطن؛
     # با نگاشت خالی شروع می‌کنیم تا هر SKU با جستجوی SKU دوباره resolve بشه.
+    current_platform = _current_platform()
     try:
         with open(_platform_marker_path(), "r", encoding="utf-8") as f:
             saved_platform = (f.read() or "").strip()
-        if saved_platform and saved_platform != _current_platform():
-            log.info(
-                f"ℹ️ پلتفرم فروشگاه از «{saved_platform}» به «{_current_platform()}» عوض شده — "
-                "نگاشت SKU↔ID قبلی نادیده گرفته می‌شود."
+        if saved_platform and saved_platform != current_platform:
+            # این reset رو همین‌جا و فوراً ذخیره/قفل می‌کنیم (نه فقط در حافظه
+            # برگردوندن {}) — چون قبلاً اگه این تشخیص به هر دلیلی (حتی یک
+            # بار اشتباهی) دوباره تکرار می‌شد، save بعدیِ سینک با یه نگاشت
+            # ناقص (فقط چند SKU همین دور) کل فایل رو برای همیشه جایگزین
+            # می‌کرد و لینک بقیه‌ی محصولات از دست می‌رفت. با ذخیره‌ی فوری
+            # نشانگر پلتفرم جدید + بکاپ از فایل قبلی، این reset دقیقاً یک‌بار
+            # اتفاق می‌افته و دیتای قبلی هم گم نمی‌شه (قابل بازیابی از بکاپ).
+            log.warning(
+                f"⚠️ پلتفرم فروشگاه از «{saved_platform}» به «{current_platform}» عوض شده — "
+                "نگاشت SKU↔ID قبلی نادیده گرفته می‌شود (بکاپ در product_woo_map.backup_*.json)."
             )
+            try:
+                import shutil
+                import time as _time
+
+                src = app_path("product_woo_map.json")
+                backup = app_path(f"product_woo_map.backup_{saved_platform}_{int(_time.time())}.json")
+                shutil.copyfile(src, backup)
+            except Exception:
+                pass
+            try:
+                with open(app_path("product_woo_map.json"), "w", encoding="utf-8") as f:
+                    json.dump({}, f)
+                with open(_platform_marker_path(), "w", encoding="utf-8") as f:
+                    f.write(current_platform)
+            except Exception as exc:
+                log.warning(f"⚠️ ذخیره‌ی فوریِ reset پلتفرم ناموفق بود: {exc}")
             return {}
+    except FileNotFoundError:
+        pass
     except Exception:
         pass
 
@@ -57,6 +83,27 @@ def load_product_woo_map() -> dict[str, int]:
 def save_product_woo_map(product_map: dict) -> None:
     try:
         clean = {str(k).strip(): int(v) for k, v in (product_map or {}).items() if v}
+
+        # محافظ داده: اگه فایل فعلی روی دیسک خیلی بزرگ‌تر از نگاشتیه که
+        # داریم جایگزینش می‌کنیم (و پلتفرم واقعاً عوض نشده)، این خیلی
+        # مشکوکه — یعنی یه جای دیگه با نگاشت ناقص شروع کرده. به‌جای سکوت،
+        # لاگ برجسته می‌کنیم تا قابل ردیابی باشه (بدون متوقف‌کردن ذخیره،
+        # چون حذف عمدیِ تک‌SKU هم از همین تابع رد می‌شه).
+        try:
+            with open(app_path("product_woo_map.json"), "r", encoding="utf-8") as f:
+                existing = json.load(f) or {}
+            with open(_platform_marker_path(), "r", encoding="utf-8") as f:
+                marker_platform = (f.read() or "").strip()
+            same_platform = marker_platform == _current_platform()
+            if same_platform and isinstance(existing, dict) and len(existing) >= 5 and len(clean) < len(existing) / 2:
+                log.warning(
+                    f"⚠️ نگاشت SKU↔ID در حال ذخیره ({len(clean)} مورد) خیلی کوچیک‌تر از "
+                    f"فایل فعلی روی دیسکه ({len(existing)} مورد) — پلتفرم عوض نشده، پس این "
+                    "کاهش عمدی به نظر نمی‌رسه. لطفاً بعد از این عملیات تب محصولات رو چک کنید."
+                )
+        except Exception:
+            pass
+
         with open(app_path("product_woo_map.json"), "w", encoding="utf-8") as f:
             json.dump(clean, f, ensure_ascii=False, indent=2)
         with open(_platform_marker_path(), "w", encoding="utf-8") as f:
