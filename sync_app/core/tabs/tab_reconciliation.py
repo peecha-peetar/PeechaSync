@@ -510,7 +510,7 @@ class ReconciliationTab(QWidget):
         wc_box = QVBoxLayout(wc_card)
         wc_box.setContentsMargins(8, 8, 8, 8)
         wc_box.setSpacing(6)
-        wc_title = QLabel("🌐 فروشگاه (ووکامرس)")
+        wc_title = QLabel("🌐 فروشگاه (سایت)")
         wc_title.setProperty("role", "section-title")
         wc_title.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         wc_box.addWidget(wc_title)
@@ -1461,19 +1461,37 @@ class ReconciliationTab(QWidget):
         if not isinstance(row, ReconRow) or not row.wc_id:
             return
 
+        from sync_app.core.integrations.commerce_provider import (
+            is_prestashop, store_platform_label,
+        )
+
+        config = load_secure_config(None) or {}
+        ps_mode = is_prestashop(config)
+        platform_label = store_platform_label(config)
+
+        if ps_mode and self._current_entity() == ENTITY_VARIATIONS:
+            # تطبیق واریانت‌های پرستاشاپ هنوز پیاده نشده (فقط دسته‌بندی/محصول/ویژگی) —
+            # این ردیف‌ها اصلاً از پرستاشاپ نمیان، پس چیزی برای حذف نیست.
+            return
+
         from PyQt5.QtWidgets import QMenu
         menu = QMenu(self)
         menu.setLayoutDirection(Qt.RightToLeft)
-        act_trash = menu.addAction("🗑️ انتقال به زباله‌دان ووکامرس")
-        act_perm = menu.addAction("⚠️ حذف کامل و همیشگی از ووکامرس")
+        if ps_mode:
+            # پرستاشاپ زباله‌دان (soft-delete) نداره — فقط حذف کامل.
+            act_trash = None
+            act_perm = menu.addAction(f"⚠️ حذف کامل و همیشگی از {platform_label}")
+        else:
+            act_trash = menu.addAction(f"🗑️ انتقال به زباله‌دان {platform_label}")
+            act_perm = menu.addAction(f"⚠️ حذف کامل و همیشگی از {platform_label}")
         chosen = menu.exec_(self.wc_list.mapToGlobal(pos))
         if chosen is None:
             return
-        force = chosen is act_perm
+        force = ps_mode or chosen is act_perm
         if force:
             if not ask_yes_no(
                 self, "تأیید نهایی حذف کامل",
-                f"مطمئنید؟ «{row.label}» برای همیشه از ووکامرس پاک می‌شه.",
+                f"مطمئنید؟ «{row.label}» برای همیشه از {platform_label} پاک می‌شه.",
                 icon=QMessageBox.Warning,
             ):
                 return
@@ -1484,10 +1502,12 @@ class ReconciliationTab(QWidget):
         config = load_secure_config(None) or {}
 
         def _worker():
-            from sync_app.core.wc_sync_helper import apply_network_overrides, build_wcapi, wc_http_error_message
+            from sync_app.core.integrations.commerce_provider import build_store_api, is_prestashop
+            from sync_app.core.wc_sync_helper import apply_network_overrides, wc_http_error_message
 
-            apply_network_overrides(config)
-            wcapi = build_wcapi(config)
+            if not is_prestashop(config):
+                apply_network_overrides(config)
+            wcapi = build_store_api(config)
             if entity == ENTITY_VARIATIONS:
                 from sync_app.core.product_woo_map_helper import load_product_woo_map
 

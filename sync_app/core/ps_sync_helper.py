@@ -472,6 +472,42 @@ def ps_find_product_by_reference(config, sku: str, *, timeout=None) -> dict | No
     return None
 
 
+def ps_list_products(config, *, timeout=None) -> list[dict]:
+    """همه محصولات — شکل {id, sku, name, status, type, ...} مثل fetch_wc products.
+
+    برای تشخیص محصول متغیر (type=variable)، این تابع فیلد type رو همیشه
+    "simple" برمی‌گردونه — چون پرستاشاپ چنین فیلدی نداره؛ فراخوان (مثلاً
+    reconciliation) باید جدا با ps_variation_helper.ps_list_all_combinations_grouped
+    محصولات دارای combination رو مشخص کنه.
+    """
+    cfg = config or {}
+    lang_id = ps_lang_id(cfg)
+    out: list[dict] = []
+    offset = 0
+    page_size = 100
+    while True:
+        check_cancelled()
+        resp = ps_call(
+            f"دریافت محصولات offset={offset}",
+            lambda o=offset: ps_rest_request(
+                cfg, "GET", "products",
+                params={"limit": f"{o},{page_size}", "display": "full"},
+                timeout=timeout,
+            ),
+        )
+        data = _response_json(resp, "دریافت محصولات")
+        batch = _unwrap_list(data, "products")
+        if not batch:
+            break
+        for entry in batch:
+            if isinstance(entry, dict) and entry.get("id"):
+                out.append(_product_to_wc_shape(entry, lang_id))
+        if len(batch) < page_size:
+            break
+        offset += page_size
+    return out
+
+
 def ps_get_product(config, product_id: int, *, timeout=None) -> dict | None:
     cfg = config or {}
     lang_id = ps_lang_id(cfg)

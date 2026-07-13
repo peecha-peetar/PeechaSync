@@ -521,10 +521,15 @@ def _fetch_wc_categories(
     *,
     cancel_check: Callable[[], bool] | None = None,
 ) -> list[ReconRow]:
+    from sync_app.core.integrations.commerce_provider import fetch_store_slug_map
+
     def _raise_if_cancelled() -> None:
         _check_recon_cancel(cancel_check)
 
-    slug_map = fetch_wc_slug_map(
+    # fetch_store_slug_map پلتفرم رو خودش تشخیص می‌ده (ووکامرس یا پرستاشاپ) —
+    # slug دسته‌بندی (cat-XXXX) روی هر دو پلتفرم با همون dejavu_category_slug
+    # ساخته می‌شه، پس extract_code_from_wc_slug بدون تغییر کار می‌کنه.
+    slug_map = fetch_store_slug_map(
         config,
         timeout=_recon_http_timeout(config),
         cancel_check=_raise_if_cancelled,
@@ -603,11 +608,67 @@ def _fetch_erp_products(config: dict) -> list[ReconRow]:
     return rows
 
 
+def _fetch_ps_products(
+    config: dict,
+    *,
+    cancel_check: Callable[[], bool] | None = None,
+) -> list[ReconRow]:
+    from sync_app.core.ps_sync_helper import ps_list_products
+    from sync_app.core.ps_variation_helper import ps_list_all_combinations_grouped
+
+    _check_recon_cancel(cancel_check)
+    timeout = _recon_http_timeout(config)
+    products = ps_list_products(config, timeout=timeout)
+    _check_recon_cancel(cancel_check)
+    try:
+        # برای تشخیص محصول متغیر — پرستاشاپ فیلد type نداره، باید از روی
+        # وجود combination تشخیص بدیم. یک واکشی یک‌جا، نه N+1 هر محصول.
+        grouped = ps_list_all_combinations_grouped(config, timeout=timeout)
+    except Exception:
+        grouped = {}
+
+    rows: list[ReconRow] = []
+    for item in products:
+        if not isinstance(item, dict):
+            continue
+        wc_id = int(item.get("id") or 0)
+        if not wc_id:
+            continue
+        sku = str(item.get("sku") or "").strip()
+        name = str(item.get("name") or "").strip()
+        # پرستاشاپ زباله‌دان نداره — هر محصولی که برگرده یعنی هنوز روی
+        # فروشگاهه (فیلتر _ACTIVE_WC_STATUSES معادلی نداره).
+        ptype = "variable" if grouped.get(wc_id) else "simple"
+        label = f"{name} — #{wc_id}"
+        if sku:
+            label += f" — کد {sku}"
+        label += f" — {ptype}"
+        rows.append(
+            ReconRow(
+                key=f"wc:{wc_id}",
+                wc_id=wc_id,
+                label=label,
+                synced=False,
+                side="wc",
+                match_key=sku.lower() if sku else "",
+                erp_key=sku or None,
+                extra={"sku": sku, "type": ptype, "name": name},
+            )
+        )
+    rows.sort(key=lambda r: (bool(r.synced), str(r.label or "")))
+    return rows
+
+
 def _fetch_wc_products(
     config: dict,
     *,
     cancel_check: Callable[[], bool] | None = None,
 ) -> list[ReconRow]:
+    from sync_app.core.integrations.commerce_provider import is_prestashop
+
+    if is_prestashop(config):
+        return _fetch_ps_products(config, cancel_check=cancel_check)
+
     products = _wc_get_paginated(
         config,
         "products",
@@ -996,11 +1057,48 @@ def _fetch_erp_attributes(config: dict) -> list[ReconRow]:
     return rows
 
 
+def _fetch_ps_attributes(
+    config: dict,
+    *,
+    cancel_check: Callable[[], bool] | None = None,
+) -> list[ReconRow]:
+    from sync_app.core.ps_variation_helper import ps_list_attribute_groups
+
+    _check_recon_cancel(cancel_check)
+    groups = ps_list_attribute_groups(config, timeout=_recon_http_timeout(config))
+    rows: list[ReconRow] = []
+    for item in groups:
+        if not isinstance(item, dict):
+            continue
+        wc_id = int(item.get("id") or 0)
+        name = _normalize_name(item.get("name"))
+        if not wc_id or not name:
+            continue
+        rows.append(
+            ReconRow(
+                key=f"wc:{wc_id}",
+                wc_id=wc_id,
+                label=f"{name} — #{wc_id}",
+                synced=False,
+                side="wc",
+                match_key=name.lower(),
+                erp_key=name,
+                extra={"slug": name},
+            )
+        )
+    return rows
+
+
 def _fetch_wc_attributes(
     config: dict,
     *,
     cancel_check: Callable[[], bool] | None = None,
 ) -> list[ReconRow]:
+    from sync_app.core.integrations.commerce_provider import is_prestashop
+
+    if is_prestashop(config):
+        return _fetch_ps_attributes(config, cancel_check=cancel_check)
+
     attrs = _wc_get_paginated(
         config,
         "products/attributes",

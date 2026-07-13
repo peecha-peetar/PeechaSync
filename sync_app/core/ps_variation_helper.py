@@ -391,6 +391,40 @@ def ps_delete_combination(config, combination_id: int, *, timeout=None) -> bool:
     return True
 
 
+def ps_list_all_combinations_grouped(config, *, timeout=None) -> dict[int, list[int]]:
+    """id_product → لیست id ترکیب‌های واریانت — یک واکشی یک‌جا (بدون فیلتر)
+    برای تشخیص ارزانِ «این محصول متغیره یا نه» بدون N+1 درخواست به‌ازای هر محصول
+    (مثلاً برای تب تطبیق/Reconciliation)."""
+    cfg = config or {}
+    grouped: dict[int, list[int]] = {}
+    offset = 0
+    page_size = 1000
+    while True:
+        resp = ps_call(
+            f"دریافت همه ترکیب‌های واریانت offset={offset}",
+            lambda o=offset: ps_rest_request(
+                cfg, "GET", "combinations",
+                params={"limit": f"{o},{page_size}", "display": "full"},
+                timeout=timeout,
+            ),
+        )
+        data = _response_json(resp, "دریافت همه ترکیب‌های واریانت")
+        rows = _unwrap_list(data, "combinations")
+        if not rows:
+            break
+        for row in rows:
+            if not isinstance(row, dict) or not row.get("id"):
+                continue
+            pid = int(row.get("id_product") or 0)
+            cid = int(row["id"])
+            if pid:
+                grouped.setdefault(pid, []).append(cid)
+        if len(rows) < page_size:
+            break
+        offset += page_size
+    return grouped
+
+
 # ---------------------------------------------------------------------------
 # ارکستراتور — معادل sync_product_variations ووکامرس
 # ---------------------------------------------------------------------------
