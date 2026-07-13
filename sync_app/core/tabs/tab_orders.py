@@ -111,8 +111,13 @@ class OrderTab(SitePreviewLoaderMixin, SyncTab):
         )
 
     def _update_store_setup_status(self):
+        from sync_app.core.integrations.commerce_provider import is_prestashop
+
+        cfg = load_secure_config(None) or {}
+        if is_prestashop(cfg):
+            return
         from sync_app.core.scripts.woocommerce_store_setup import store_pages_ready
-        if store_pages_ready(load_secure_config(None)):
+        if store_pages_ready(cfg):
             return
         self.set_status(
             "warning",
@@ -205,9 +210,14 @@ class OrderTab(SitePreviewLoaderMixin, SyncTab):
     def _fetch_site_orders(self, status_filter="any"):
         try:
             cfg = load_secure_config(None) or {}
+            timeout = site_preview_http_timeout(cfg)
+
+            from sync_app.core.integrations.commerce_provider import is_prestashop
+            if is_prestashop(cfg):
+                return self._fetch_site_orders_ps(cfg, timeout)
+
             ck = cfg.get("WC_CONSUMER_KEY")
             cs = cfg.get("WC_CONSUMER_SECRET")
-            timeout = site_preview_http_timeout(cfg)
 
             if not cfg.get("WC_URL") or not ck or not cs:
                 return {"kind": "message", "items": ["⚠️ تنظیمات ووکامرس کامل نیست."]}
@@ -251,6 +261,36 @@ class OrderTab(SitePreviewLoaderMixin, SyncTab):
         except Exception as e:
             cfg = load_secure_config(None) or {}
             raise Exception(format_network_error_message(e, cfg))
+
+    def _fetch_site_orders_ps(self, cfg, timeout):
+        # پرستاشاپ برخلاف ووکامرس وضعیت سفارش رو با current_state (عدد
+        # قابل‌تنظیم توسط فروشگاه) نشون می‌ده، نه یک رشته‌ی ثابت — این پیش‌نمایش
+        # فیلتر وضعیت رو نادیده می‌گیره و «پرداخت‌شده/در انتظار» رو از روی
+        # فیلد valid نشون می‌ده (همون فیلدی که ordersync.py هم برای انتخاب
+        # سفارش‌های واقعی استفاده می‌کنه).
+        if not cfg.get("PS_URL") or not cfg.get("PS_API_KEY"):
+            return {"kind": "message", "items": ["⚠️ تنظیمات پرستاشاپ کامل نیست."]}
+
+        from sync_app.core.ps_order_helper import ps_list_recent_orders_preview
+
+        try:
+            orders = ps_list_recent_orders_preview(cfg, limit=20, timeout=timeout)
+        except Exception as e:
+            raise Exception(format_network_error_message(e, cfg))
+
+        if not orders:
+            return {"kind": "message", "items": ["ℹ️ سفارشی روی سایت یافت نشد."], "ids": []}
+
+        items = []
+        ids = []
+        for order in orders:
+            status_label = "پرداخت‌شده" if order.get("valid") else "در انتظار پرداخت"
+            ids.append(order["id"])
+            items.append(
+                f"مشتری #{order.get('customer_id') or '-'} | کد سفارش: #{order['id']} | "
+                f"وضعیت: {status_label} | مبلغ: {order.get('total_paid')}"
+            )
+        return {"kind": "orders", "items": items, "ids": ids}
 
     def _apply_site_orders(self, payload, silent=False):
         self.orders_list.clear()

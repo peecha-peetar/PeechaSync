@@ -234,6 +234,11 @@ class WCCategoryCheckWorker(QObject):
         self._cancel_requested = True
 
     def run(self):
+        from sync_app.core.integrations.commerce_provider import is_prestashop
+
+        if is_prestashop(self.config):
+            self._run_prestashop()
+            return
         try:
             apply_network_overrides(self.config)
             wc_url = (self.config.get("WC_URL") or "").strip().rstrip("/")
@@ -304,6 +309,27 @@ class WCCategoryCheckWorker(QObject):
         except Exception as e:
             log.error(f"❌ خطای بررسی وضعیت دسته‌ها در Woo: {e}")
             self.error.emit(format_wc_error(exc=e, config=self.config))
+
+    def _run_prestashop(self):
+        from sync_app.core.integrations.commerce_provider import fetch_store_slug_map
+
+        def _cancel_probe():
+            if self._cancel_requested:
+                raise RuntimeError("متوقف شد")
+
+        try:
+            if not self.config.get("PS_URL") or not self.config.get("PS_API_KEY"):
+                self.error.emit("تنظیمات پرستاشاپ کامل نیست.")
+                return
+            timeout = wc_sync_timeout(self.config)
+            wc_slug_map = fetch_store_slug_map(
+                self.config, timeout=timeout, cancel_check=_cancel_probe,
+            )
+            all_wc_cats = list(wc_slug_map.values())
+            self.finished.emit(wc_slug_map, all_wc_cats)
+        except Exception as e:
+            log.error(f"❌ خطای بررسی وضعیت دسته‌ها در پرستاشاپ: {e}")
+            self.error.emit(str(e))
 
 
 class CategoryTab(QWidget):

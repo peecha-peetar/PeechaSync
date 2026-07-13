@@ -114,6 +114,32 @@ def ps_list_paid_order_ids(config, *, timeout=None) -> list[int]:
     return out
 
 
+def ps_list_recent_orders_preview(config, *, limit: int = 20, timeout=None) -> list[dict]:
+    """آخرین سفارش‌ها (هر وضعیتی) — برای پیش‌نمایش تب سفارشات، نه sync واقعی."""
+    cfg = config or {}
+    resp = ps_call(
+        "دریافت سفارش‌های اخیر",
+        lambda: ps_rest_request(
+            cfg, "GET", "orders",
+            params={"limit": f"0,{int(limit)}", "sort": "id_DESC", "display": "full"},
+            timeout=timeout,
+        ),
+    )
+    data = _response_json(resp, "دریافت سفارش‌های اخیر")
+    rows = _unwrap_list(data, "orders")
+    out = []
+    for row in rows:
+        if not isinstance(row, dict) or not row.get("id"):
+            continue
+        out.append({
+            "id": int(row["id"]),
+            "valid": str(row.get("valid") or "0") == "1",
+            "total_paid": row.get("total_paid") or "0",
+            "customer_id": int(row.get("id_customer") or 0),
+        })
+    return out
+
+
 def ps_list_paid_order_customer_ids(config, *, timeout=None) -> set[int]:
     """id_customer سفارش‌های valid=1 — بدون واکشی خطوط سفارش (برای پیش‌نمایش مشتریان)."""
     cfg = config or {}
