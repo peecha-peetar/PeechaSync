@@ -1469,9 +1469,8 @@ class ReconciliationTab(QWidget):
         ps_mode = is_prestashop(config)
         platform_label = store_platform_label(config)
 
-        if ps_mode and self._current_entity() == ENTITY_VARIATIONS:
-            # تطبیق واریانت‌های پرستاشاپ هنوز پیاده نشده (فقط دسته‌بندی/محصول/ویژگی) —
-            # این ردیف‌ها اصلاً از پرستاشاپ نمیان، پس چیزی برای حذف نیست.
+        if ps_mode and self._current_entity() == ENTITY_VARIATIONS and (row.extra or {}).get("placeholder_empty"):
+            # ردیف «والد بدون واریانت» — چیزی برای حذف نیست (combination واقعی نداره).
             return
 
         from PyQt5.QtWidgets import QMenu
@@ -1505,10 +1504,15 @@ class ReconciliationTab(QWidget):
             from sync_app.core.integrations.commerce_provider import build_store_api, is_prestashop
             from sync_app.core.wc_sync_helper import apply_network_overrides, wc_http_error_message
 
-            if not is_prestashop(config):
+            ps_mode = is_prestashop(config)
+            if not ps_mode:
                 apply_network_overrides(config)
             wcapi = build_store_api(config)
-            if entity == ENTITY_VARIATIONS:
+            if entity == ENTITY_VARIATIONS and ps_mode:
+                # روی پرستاشاپ خودِ ردیف واریانت یعنی combination — نیازی به
+                # پیدا کردن والد نیست (برخلاف مسیر nested ووکامرس).
+                resp = wcapi.delete(f"combinations/{int(row.wc_id)}")
+            elif entity == ENTITY_VARIATIONS:
                 from sync_app.core.product_woo_map_helper import load_product_woo_map
 
                 parent_sku = str((row.extra or {}).get("parent_sku") or "").strip()

@@ -975,11 +975,122 @@ def _append_empty_parent_variation_rows(
         seen.add(pid)
 
 
+def _fetch_ps_variations(
+    config: dict,
+    *,
+    cancel_check: Callable[[], bool] | None = None,
+) -> list[ReconRow]:
+    from sync_app.core.ps_sync_helper import ps_get_product
+    from sync_app.core.ps_variation_helper import (
+        ps_list_all_combinations_grouped,
+        ps_list_attribute_groups,
+        ps_list_attribute_values,
+        ps_list_combinations,
+    )
+
+    _check_recon_cancel(cancel_check)
+    timeout = _recon_http_timeout(config)
+    grouped = ps_list_all_combinations_grouped(config, timeout=timeout)
+    _check_recon_cancel(cancel_check)
+
+    # نگاشت سراسری value_id → نام مقدار (یک‌بار، نه به‌ازای هر ترکیب) — فقط
+    # برای برچسبِ نمایشی؛ تطبیق واقعی فقط با SKU انجام می‌شه.
+    value_names: dict[int, str] = {}
+    try:
+        for group in ps_list_attribute_groups(config, timeout=timeout):
+            _check_recon_cancel(cancel_check)
+            for value in ps_list_attribute_values(config, group["id"], timeout=timeout):
+                value_names[int(value["id"])] = str(value.get("name") or "").strip()
+    except Exception:
+        pass
+
+    product_map = load_product_woo_map()
+    mapped_parent_ids = {int(v) for v in product_map.values() if v}
+
+    parents_meta: dict[int, dict] = {}
+    rows: list[ReconRow] = []
+
+    def _parent(pid: int) -> dict | None:
+        if pid in parents_meta:
+            return parents_meta[pid]
+        try:
+            p = ps_get_product(config, pid, timeout=timeout)
+        except Exception:
+            p = None
+        parents_meta[pid] = p or {}
+        return p
+
+    for parent_id in grouped:
+        _check_recon_cancel(cancel_check)
+        parent = _parent(parent_id)
+        if not parent:
+            continue
+        parent_sku = str(parent.get("sku") or "").strip()
+        parent_name = str(parent.get("name") or "").strip()
+        parent_mapped = parent_id in mapped_parent_ids
+        try:
+            combos = ps_list_combinations(config, parent_id, timeout=timeout)
+        except Exception:
+            combos = []
+        for combo in combos:
+            vid = int(combo.get("id") or 0)
+            if not vid:
+                continue
+            sku = str(combo.get("reference") or "").strip()
+            option_ids = combo.get("option_value_ids") or []
+            attr_text = " / ".join(
+                value_names[int(oid)] for oid in option_ids if int(oid) in value_names
+            )
+            label = f"{parent_name} › {attr_text or '—'}"
+            if sku:
+                label += f" — کد {sku}"
+            label += f" — #{vid} (والد #{parent_id})"
+            rows.append(
+                ReconRow(
+                    key=f"wc:{parent_id}:{vid}",
+                    wc_id=vid,
+                    label=label,
+                    synced=False,
+                    side="wc",
+                    match_key=sku.lower() if sku else "",
+                    erp_key=sku or None,
+                    extra={
+                        "parent_id": parent_id,
+                        "parent_sku": parent_sku,
+                        "parent_name": parent_name,
+                        "variation_sku": sku,
+                        "attributes": attr_text,
+                        "parent_mapped": parent_mapped,
+                    },
+                )
+            )
+
+    # والدهای متغیرِ لینک‌شده که هنوز هیچ combination ندارن (تازه لینک شدن، یا
+    # هنوز از تب «متغیرها» sync نشدن) — برای پیشنهاد تطبیق دستی والد.
+    for wc_id in mapped_parent_ids:
+        if wc_id not in parents_meta:
+            _parent(wc_id)
+
+    parents_list = [
+        {"id": pid, "sku": p.get("sku"), "name": p.get("name")}
+        for pid, p in parents_meta.items()
+        if p
+    ]
+    _append_empty_parent_variation_rows(parents_list, rows, product_map)
+    rows.sort(key=lambda r: (bool(r.synced), str(r.label or "")))
+    return rows
+
+
 def _fetch_wc_variations(
     config: dict,
     *,
     cancel_check: Callable[[], bool] | None = None,
 ) -> list[ReconRow]:
+    from sync_app.core.integrations.commerce_provider import is_prestashop
+
+    if is_prestashop(config):
+        return _fetch_ps_variations(config, cancel_check=cancel_check)
+
     parents = _wc_get_paginated(
         config,
         "products",
