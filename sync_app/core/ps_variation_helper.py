@@ -517,6 +517,7 @@ def ps_sync_product_variations(
 
     from sync_app.core.stock_mode import (
         STOCK_MODE_ALWAYS, STOCK_MODE_DOWNLOAD, resolve_variation_stock_mode,
+        get_variation_stock_mode_override, get_product_stock_mode_override,
     )
 
     matched_group = next(
@@ -557,6 +558,13 @@ def ps_sync_product_variations(
         except (TypeError, ValueError):
             raw_stock_qty = 0
         v_mode = resolve_variation_stock_mode(sku, a_code, matched_group, config or {})
+        if get_variation_stock_mode_override(config or {}, sku):
+            _mode_source = "override واریانت"
+        elif get_product_stock_mode_override(config or {}, a_code):
+            _mode_source = "override محصول"
+        else:
+            _mode_source = f"دسته‌بندی «{matched_group}»"
+        log.info(f"📦 [{a_code}] واریانت {sku} حالت موجودی resolve شد: {v_mode} (منبع: {_mode_source})")
         # «همیشه موجود»/«دانلودی» — سفارش با موجودیِ صفر هم مجاز باشه
         # (out_of_stock=1)، نه فقط یک عدد بزرگ که بالاخره تموم بشه؛ حالت
         # دیتابیس با صفر شدن موجودی سفارش رو رد می‌کنه (out_of_stock=0) —
