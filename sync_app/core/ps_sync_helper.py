@@ -705,6 +705,9 @@ def ps_try_set_price_visibility(config, product_id: int, *, timeout=None) -> boo
             lambda: ps_rest_request(cfg, "PUT", f"products/{int(product_id)}", xml_body=body, timeout=timeout),
         )
         _raise_for_status(resp2, f"تنظیم نمایش قیمت محصول #{product_id}")
+        from sync_app.core.sync_utils import log
+
+        log.info(f"💲 [#{product_id}] available_for_order/show_price=1 تنظیم شد.")
         return True
     except Exception as exc:
         from sync_app.core.sync_utils import log

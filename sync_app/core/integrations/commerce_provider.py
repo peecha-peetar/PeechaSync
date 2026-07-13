@@ -233,6 +233,7 @@ def _ps_products_search(config, params, timeout):
 
 def _ps_apply_stock_from_payload(config, product_id, body, timeout):
     from sync_app.core.ps_sync_helper import ps_set_stock_quantity
+    from sync_app.core.sync_utils import log
 
     if "stock_quantity" in body:
         try:
@@ -242,10 +243,14 @@ def _ps_apply_stock_from_payload(config, product_id, body, timeout):
         # حالت «بر اساس موجودی دیتابیس» — با صفر شدن موجودی، سفارش رد بشه
         # (معادل رفتار پیش‌فرض ووکامرس برای manage_stock=True بدون backorder).
         ps_set_stock_quantity(config, product_id, qty, out_of_stock=0, timeout=timeout)
+        log.info(f"📦 [#{product_id}] موجودی محصول: {qty} (حالت دیتابیس، out_of_stock=0)")
     elif body.get("manage_stock") is False:
         # «همیشه موجود» / «دانلودی» — با موجودیِ صفر هم سفارش مجاز باشه
         # (out_of_stock=1)، نه فقط یک عدد بزرگ که بالاخره روزی تموم بشه.
         ps_set_stock_quantity(config, product_id, 9999, out_of_stock=1, timeout=timeout)
+        log.info(f"📦 [#{product_id}] موجودی محصول: همیشه موجود (out_of_stock=1)")
+    else:
+        log.info(f"📦 [#{product_id}] هیچ فیلد موجودی‌ای در payload نبود — موجودی این بار تغییر نکرد.")
 
 
 def _ps_product_create_from_payload(config, body, timeout):

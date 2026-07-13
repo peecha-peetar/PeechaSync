@@ -293,10 +293,19 @@ def _sync_product_images_if_needed_ps(config, sku, product_id, erp_images):
     from sync_app.core.erp_image_helper import load_transferred_image_ids, mark_images_transferred, stage_erp_images
     from sync_app.core.ps_sync_helper import ps_upload_product_image
 
+    if not erp_images:
+        log.info(f"ℹ️ [{sku}] هیچ تصویری در HLOpictures (ERP) برای این کد کالا پیدا نشد.")
+        return
+
     already_transferred = set(load_transferred_image_ids("prestashop").get(str(sku).strip(), []))
     new_erp_images = [(hlo_id, blob, path) for hlo_id, blob, path in erp_images if hlo_id not in already_transferred]
     if not new_erp_images:
+        log.info(
+            f"ℹ️ [{sku}] {len(erp_images)} تصویر ERP پیدا شد ولی همه قبلاً به پرستاشاپ منتقل شده — رد شد."
+        )
         return
+
+    log.info(f"🖼️ [{sku}] {len(new_erp_images)} تصویر جدید از ERP برای انتقال به پرستاشاپ پیدا شد...")
 
     try:
         from sync_app.core.smart_publish import (
@@ -312,6 +321,9 @@ def _sync_product_images_if_needed_ps(config, sku, product_id, erp_images):
                 rel_by_hlo_id[hlo_id] = rels[0]
 
         if not rel_by_hlo_id:
+            log.warning(
+                f"⚠️ [{sku}] {len(new_erp_images)} تصویر ERP پیدا شد ولی هیچ‌کدام روی دیسک ذخیره/staged نشدند."
+            )
             return
 
         auto_run = bool(config.get(AUTO_RUN_KEY, False))
@@ -618,6 +630,16 @@ def main():
                 erp_images_by_sku.setdefault(code, []).append((hlo_id, blob, path))
     except Exception as exc:
         log.warning(f"⚠️ واکشی تصاویر HLOpictures ناموفق بود — تصاویر این دور منتقل نمی‌شن: {exc}")
+    total_erp_images = sum(len(v) for v in erp_images_by_sku.values())
+    if total_erp_images:
+        log.info(
+            f"🖼️ پیش‌واکشی تصاویر ERP: {total_erp_images} تصویر برای {len(erp_images_by_sku)} کد کالا در HLOpictures پیدا شد."
+        )
+    else:
+        log.info(
+            "ℹ️ پیش‌واکشی تصاویر ERP: هیچ تصویری در HLOpictures برای زیرگروه‌های انتخاب‌شده پیدا نشد "
+            f"(Code LIKE {[f'{g}%' for g in GROUPS]}, Type=1)."
+        )
 
     def _attribute_labels():
         nonlocal attr_labels
@@ -731,9 +753,14 @@ def main():
             p_data["manage_stock"] = False
         else:
             p_data["type"] = "simple"
-            from sync_app.core.stock_mode import resolve_stock_mode, apply_stock_mode_to_payload
+            from sync_app.core.stock_mode import (
+                resolve_stock_mode, apply_stock_mode_to_payload, get_product_stock_mode_override,
+            )
             matched_group = next((g for g in GROUPS if sku.startswith(g)), "")
             stock_mode = resolve_stock_mode(sku, matched_group, raw_config)
+            override = get_product_stock_mode_override(raw_config, sku)
+            source = "override محصول" if override else f"دسته‌بندی «{matched_group}»"
+            log.info(f"📦 [{sku}] حالت موجودی resolve شد: {stock_mode} (منبع: {source})")
             apply_stock_mode_to_payload(p_data, stock_mode, stock_quantity)
 
         # هر Thread یه کپی محلی از نگاشت محصول می‌گیره — تا خواندن/نوشتن
