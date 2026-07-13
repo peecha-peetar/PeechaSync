@@ -249,7 +249,7 @@ def _ps_apply_stock_from_payload(config, product_id, body, timeout):
 
 
 def _ps_product_create_from_payload(config, body, timeout):
-    from sync_app.core.ps_sync_helper import ps_create_product, ps_get_product
+    from sync_app.core.ps_sync_helper import ps_create_product, ps_get_product, ps_try_set_price_visibility
 
     sku = str(body.get("sku") or "").strip()
     name = str(body.get("name") or sku)
@@ -273,13 +273,16 @@ def _ps_product_create_from_payload(config, body, timeout):
         timeout=timeout,
     )
     _ps_apply_stock_from_payload(config, created["id"], body, timeout)
+    ps_try_set_price_visibility(config, created["id"], timeout=timeout)
     full = ps_get_product(config, created["id"], timeout=timeout) or created
     full.setdefault("status", "publish" if active else "draft")
     return full
 
 
 def _ps_product_update_from_payload(config, product_id, body, timeout):
-    from sync_app.core.ps_sync_helper import ps_update_product, ps_get_product, PrestaShopAPIError
+    from sync_app.core.ps_sync_helper import (
+        ps_update_product, ps_get_product, PrestaShopAPIError, ps_try_set_price_visibility,
+    )
 
     keys = set(body.keys())
     if keys and keys <= {"categories"}:
@@ -314,6 +317,7 @@ def _ps_product_update_from_payload(config, product_id, body, timeout):
         timeout=timeout,
     )
     _ps_apply_stock_from_payload(config, product_id, body, timeout)
+    ps_try_set_price_visibility(config, product_id, timeout=timeout)
     full = ps_get_product(config, product_id, timeout=timeout) or {"id": product_id}
     full.setdefault("status", "publish" if active is not False else "draft")
     return full

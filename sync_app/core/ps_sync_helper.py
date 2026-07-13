@@ -589,11 +589,6 @@ def ps_create_product(
         _set_text(node, "state", 1)
         _set_text(node, "visibility", _visibility_from_wc(catalog_visibility))
         _set_text(node, "id_category_default", default_cat)
-        # همیشه قابل سفارش و قیمت نمایان — صرف‌نظر از موجودی؛ کنترل واقعیِ
-        # «اجازه‌ی خرید با موجودی صفر» با فیلد out_of_stock در stock_availables
-        # انجام می‌شه (ps_set_stock_quantity)، نه با این دو فیلد.
-        _set_text(node, "available_for_order", 1)
-        _set_text(node, "show_price", 1)
         if cat_ids:
             assoc = ET.SubElement(node, "associations")
             cats_node = ET.SubElement(assoc, "categories")
@@ -650,8 +645,6 @@ def ps_update_product(
         _set_text(node, "state", 1)
         _set_text(node, "visibility", final_visibility)
         _set_text(node, "id_category_default", default_cat)
-        _set_text(node, "available_for_order", 1)
-        _set_text(node, "show_price", 1)
         if cat_ids:
             assoc = ET.SubElement(node, "associations")
             cats_node = ET.SubElement(assoc, "categories")
@@ -666,6 +659,61 @@ def ps_update_product(
     )
     _raise_for_status(resp2, f"به‌روزرسانی محصول #{product_id}")
     return {"id": int(product_id), "sku": final_sku, "name": final_name, "type": "simple"}
+
+
+def ps_try_set_price_visibility(config, product_id: int, *, timeout=None) -> bool:
+    """تلاش best-effort برای اطمینان از نمایش قیمت/امکان سفارش صرف‌نظر از
+    موجودی (available_for_order=1 / show_price=1).
+
+    عمداً از ps_create_product/ps_update_product جداست: این دو فیلد صرفاً
+    یک بهبود جانبی‌ان، نه بخش اصلی سینک — اگه یک فروشگاه خاص این فیلدها رو
+    رد کنه (مثلاً به‌خاطر نسخه/تنظیمات ماژول)، نباید بروزرسانیِ اصلی محصول
+    یا اعمال موجودی (که در ps_update_product/_ps_apply_stock_from_payload
+    انجام می‌شه) به‌خاطرش خراب بشه. کنترل واقعیِ «اجازه‌ی خرید با موجودی
+    صفر» با فیلد out_of_stock در stock_availables انجام می‌شه، نه این‌جا.
+    """
+    cfg = config or {}
+    lang_id = ps_lang_id(cfg)
+    try:
+        resp = ps_call(
+            f"دریافت محصول #{product_id} برای تنظیم نمایش قیمت",
+            lambda: ps_rest_request(cfg, "GET", f"products/{int(product_id)}", timeout=timeout),
+        )
+        current = _response_json(resp, f"دریافت محصول #{product_id}").get("product") or {}
+
+        def _build(node):
+            _set_text(node, "id", int(product_id))
+            _set_text(node, "reference", str(current.get("reference") or ""))
+            _set_lang_text(node, "name", _lang_value(current.get("name"), lang_id), lang_id)
+            _set_lang_text(
+                node, "link_rewrite", _lang_value(current.get("link_rewrite"), lang_id), lang_id,
+            )
+            _set_text(node, "price", f"{float(current.get('price') or 0):.6f}")
+            _set_text(node, "active", int(current.get("active") or 0))
+            _set_text(node, "state", 1)
+            _set_text(node, "visibility", str(current.get("visibility") or "both"))
+            _set_text(
+                node, "id_category_default",
+                int(current.get("id_category_default") or PS_DEFAULT_PARENT_CATEGORY_ID),
+            )
+            _set_text(node, "available_for_order", 1)
+            _set_text(node, "show_price", 1)
+
+        body = _build_xml("product", _build)
+        resp2 = ps_call(
+            f"تنظیم نمایش قیمت محصول #{product_id}",
+            lambda: ps_rest_request(cfg, "PUT", f"products/{int(product_id)}", xml_body=body, timeout=timeout),
+        )
+        _raise_for_status(resp2, f"تنظیم نمایش قیمت محصول #{product_id}")
+        return True
+    except Exception as exc:
+        from sync_app.core.sync_utils import log
+
+        log.warning(
+            f"⚠️ تنظیم نمایش قیمت/امکان سفارشِ محصول #{product_id} ناموفق بود "
+            f"(نادیده گرفته شد، بروزرسانی اصلی محصول/موجودی تحت تأثیر قرار نگرفت): {exc}"
+        )
+        return False
 
 
 def ps_update_product_seo(
