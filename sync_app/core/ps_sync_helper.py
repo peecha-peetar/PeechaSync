@@ -680,6 +680,27 @@ def ps_update_product(
         lambda: ps_rest_request(cfg, "PUT", f"products/{int(product_id)}", xml_body=body, timeout=timeout),
     )
     _raise_for_status(resp2, f"به‌روزرسانی محصول #{product_id}")
+
+    if out_of_stock is not None:
+        # تأیید تشخیصی: آیا فیلد out_of_stockِ خودِ محصول (نه stock_availables)
+        # واقعاً روی این نصبِ پرستاشاپ نوشتنی/معتبره؟ بعضی فروشگاه‌ها ممکنه
+        # این فیلد رو روی ریسورس محصول نادیده بگیرن.
+        try:
+            from sync_app.core.sync_utils import log
+
+            verify_resp = ps_rest_request(cfg, "GET", f"products/{int(product_id)}", timeout=timeout)
+            verify_current = _response_json(verify_resp, f"تأیید محصول #{product_id}").get("product") or {}
+            actual = verify_current.get("out_of_stock")
+            if str(actual) != str(int(out_of_stock)):
+                log.warning(
+                    f"⚠️ [تأیید] محصول #{product_id}: فیلد out_of_stock خودِ محصول رو {out_of_stock} "
+                    f"فرستادیم ولی فروشگاه {actual!r} برمی‌گردونه — این فیلد شاید روی این نصب نوشتنی نباشه."
+                )
+            else:
+                log.info(f"✔️ [تأیید] محصول #{product_id}: فیلد out_of_stock خودِ محصول = {actual} (مطابق انتظار)")
+        except Exception as verify_exc:
+            log.warning(f"⚠️ [تأیید] محصول #{product_id}: خواندنِ دوباره ناموفق بود: {verify_exc}")
+
     return {"id": int(product_id), "sku": final_sku, "name": final_name, "type": "simple"}
 
 
@@ -890,6 +911,39 @@ def ps_set_stock_quantity(
         lambda: ps_rest_request(cfg, "PUT", f"stock_availables/{sid}", xml_body=body, timeout=timeout),
     )
     _raise_for_status(resp, f"به‌روزرسانی موجودی محصول #{product_id}")
+
+    # تأیید تشخیصی: بلافاصله بعد از نوشتن، دوباره می‌خونیم تا مطمئن بشیم
+    # مقداری که واقعاً روی فروشگاه ذخیره شده با چیزی که فرستادیم یکیه — یه
+    # مورد واقعی دیده شده که برنامه موفقیت لاگ می‌کرد ولی پنل پرستاشاپ
+    # مقدار متفاوتی (رد سفارشات) نشون می‌داد.
+    try:
+        from sync_app.core.sync_utils import log
+
+        verify_resp = ps_rest_request(
+            cfg, "GET", "stock_availables",
+            params={
+                "filter[id_product]": f"[{int(product_id)}]",
+                "filter[id_product_attribute]": f"[{int(product_attribute_id)}]",
+                "display": "full", "limit": "0,1",
+            },
+            timeout=timeout,
+        )
+        verify_rows = _unwrap_list(_response_json(verify_resp, "تأیید موجودی"), "stock_availables")
+        if verify_rows:
+            actual_oos = verify_rows[0].get("out_of_stock")
+            actual_qty = verify_rows[0].get("quantity")
+            if str(actual_oos) != str(int(out_of_stock)):
+                log.warning(
+                    f"⚠️ [تأیید] #{product_id}: نوشتیم out_of_stock={out_of_stock} ولی فروشگاه الان "
+                    f"{actual_oos!r} برمی‌گردونه (quantity={actual_qty!r}) — با هم فرق دارن!"
+                )
+            else:
+                log.info(f"✔️ [تأیید] #{product_id}: stock_availables.out_of_stock={actual_oos} (مطابق انتظار)")
+        else:
+            log.warning(f"⚠️ [تأیید] #{product_id}: بعد از نوشتن، رکورد stock_availables دیگه پیدا نشد.")
+    except Exception as verify_exc:
+        log.warning(f"⚠️ [تأیید] #{product_id}: خواندنِ دوباره برای تأیید ناموفق بود: {verify_exc}")
+
     return True
 
 
