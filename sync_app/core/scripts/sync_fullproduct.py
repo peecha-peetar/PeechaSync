@@ -149,9 +149,17 @@ def _upsert_wc_product(wcapi, sku, p_data, has_variants, product_map, *, stock_q
     payload["status"] = "publish"
     payload["catalog_visibility"] = p_data.get("catalog_visibility") or "visible"
     if has_variants:
-        payload.pop("stock_quantity", None)
         payload["type"] = "variable"
-        payload["manage_stock"] = False
+        if is_prestashop(config):
+            # روی پرستاشاپ، p_data از قبل (تو _sync_one_row) با
+            # apply_stock_mode_to_payload بر اساس حالت موجودیِ resolve‌شده
+            # ساخته شده — نباید این‌جا بی‌قید و شرط با «همیشه موجود» رونویسی
+            # بشه، وگرنه هیچ حالت موجودیِ دیگه‌ای (دیتابیس/دسته‌بندی) روی
+            # محصولاتِ ترکیبی اثر نمی‌کنه.
+            pass
+        else:
+            payload.pop("stock_quantity", None)
+            payload["manage_stock"] = False
 
     if existing_id and is_manual_product_link(sku):
         target = fetch_product_by_id(wcapi, int(existing_id))
@@ -750,7 +758,24 @@ def main():
             log.warning(f"⚠️ {explain_category_miss(sku, cat_map, slug_map)}")
         if has_variants:
             p_data["type"] = "variable"
-            p_data["manage_stock"] = False
+            if ps_mode:
+                # روی پرستاشاپ (برخلاف ووکامرس)، رکورد موجودیِ خودِ محصولِ
+                # ترکیبی (id_product_attribute=0) روی برخی نصب‌ها همچنان در
+                # تعیین قابل‌خریدبودن مؤثره — اگه این‌جا همیشه «همیشه موجود»
+                # هاردکد بشه، هیچ حالت موجودیِ دیگه‌ای (دیتابیس/دسته‌بندی) اثر
+                # نمی‌کنه، صرف‌نظر از چیزی که روی هر ترکیب جدا تنظیم بشه —
+                # دقیقاً همون رفتار گزارش‌شده («هر تنظیمی بذارم بازم موجوده»).
+                from sync_app.core.stock_mode import (
+                    resolve_stock_mode, apply_stock_mode_to_payload, get_product_stock_mode_override,
+                )
+                matched_group = next((g for g in GROUPS if sku.startswith(g)), "")
+                stock_mode = resolve_stock_mode(sku, matched_group, raw_config)
+                override = get_product_stock_mode_override(raw_config, sku)
+                source = "override محصول" if override else f"دسته‌بندی «{matched_group}»"
+                log.info(f"📦 [{sku}] حالت موجودی (سطح محصولِ ترکیبی) resolve شد: {stock_mode} (منبع: {source})")
+                apply_stock_mode_to_payload(p_data, stock_mode, stock_quantity)
+            else:
+                p_data["manage_stock"] = False
         else:
             p_data["type"] = "simple"
             from sync_app.core.stock_mode import (
