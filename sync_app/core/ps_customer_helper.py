@@ -95,6 +95,30 @@ def ps_get_customer(config, customer_id: int, *, timeout=None) -> dict | None:
     }
 
 
+def ps_count_customers(config, *, timeout=None) -> int:
+    """تعداد کل مشتریان — فقط id خام، سبک برای شمارش (بدون خوندن آدرس هر مشتری)."""
+    cfg = config or {}
+    count = 0
+    offset = 0
+    page_size = 1000
+    while True:
+        resp = ps_call(
+            f"شمارش مشتریان offset={offset}",
+            lambda o=offset: ps_rest_request(
+                cfg, "GET", "customers", params={"limit": f"{o},{page_size}"}, timeout=timeout,
+            ),
+        )
+        data = _response_json(resp, "شمارش مشتریان")
+        rows = _unwrap_list(data, "customers")
+        if not rows:
+            break
+        count += len(rows)
+        if len(rows) < page_size:
+            break
+        offset += page_size
+    return count
+
+
 def ps_list_customers(config, *, max_customers: int = 0, timeout=None) -> list[dict]:
     """همه مشتریان — هر رکورد شکل ps_get_customer، paginate شده."""
     cfg = config or {}

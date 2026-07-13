@@ -509,6 +509,30 @@ def ps_list_products(config, *, timeout=None) -> list[dict]:
     return out
 
 
+def ps_count_products(config, *, timeout=None) -> int:
+    """تعداد کل محصولات — فقط id خام (بدون display=full)، سبک برای شمارش."""
+    cfg = config or {}
+    count = 0
+    offset = 0
+    page_size = 1000
+    while True:
+        resp = ps_call(
+            f"شمارش محصولات offset={offset}",
+            lambda o=offset: ps_rest_request(
+                cfg, "GET", "products", params={"limit": f"{o},{page_size}"}, timeout=timeout,
+            ),
+        )
+        data = _response_json(resp, "شمارش محصولات")
+        rows = _unwrap_list(data, "products")
+        if not rows:
+            break
+        count += len(rows)
+        if len(rows) < page_size:
+            break
+        offset += page_size
+    return count
+
+
 def ps_get_product(config, product_id: int, *, timeout=None) -> dict | None:
     cfg = config or {}
     lang_id = ps_lang_id(cfg)

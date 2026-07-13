@@ -33,6 +33,7 @@ class SalesReport:
     total_revenue: float = 0.0
     by_sku: dict = field(default_factory=dict)  # sku -> ProductSalesStat
     monthly_revenue: dict = field(default_factory=dict)  # "YYYY-MM" -> revenue
+    daily_revenue: dict = field(default_factory=dict)  # "YYYY-MM-DD" -> revenue
 
     def top_products(self, n: int = 10) -> list[ProductSalesStat]:
         return sorted(self.by_sku.values(), key=lambda s: s.revenue, reverse=True)[:n]
@@ -79,9 +80,22 @@ def _fetch_all_orders(wcapi, *, since_days: int | None = None, progress_cb=None)
     return orders
 
 
-def build_sales_report(wcapi, *, since_days: int | None = None, progress_cb=None) -> SalesReport:
-    """سفارشات ووکامرس را می‌گیرد و بر اساس SKU جمع می‌بندد."""
-    orders = _fetch_all_orders(wcapi, since_days=since_days, progress_cb=progress_cb)
+def build_sales_report(config, *, since_days: int | None = None, progress_cb=None) -> SalesReport:
+    """سفارشات فروشگاه (ووکامرس یا پرستاشاپ) را می‌گیرد و بر اساس SKU جمع می‌بندد."""
+    from sync_app.core.integrations.commerce_provider import is_prestashop
+
+    if is_prestashop(config):
+        from sync_app.core.ps_order_helper import ps_list_orders_for_sales_report
+
+        orders = ps_list_orders_for_sales_report(config, since_days=since_days)
+        if progress_cb:
+            progress_cb(len(orders))
+    else:
+        from sync_app.core.wc_sync_helper import apply_network_overrides, build_wcapi
+
+        apply_network_overrides(config)
+        wcapi = build_wcapi(config)
+        orders = _fetch_all_orders(wcapi, since_days=since_days, progress_cb=progress_cb)
 
     report = SalesReport(generated_at=time.strftime("%Y-%m-%d %H:%M"))
     report.total_orders = len(orders)
@@ -93,6 +107,8 @@ def build_sales_report(wcapi, *, since_days: int | None = None, progress_cb=None
         month_key = order_date[:7]  # "YYYY-MM"
         if month_key:
             report.monthly_revenue[month_key] = report.monthly_revenue.get(month_key, 0.0) + total
+        if order_date:
+            report.daily_revenue[order_date] = report.daily_revenue.get(order_date, 0.0) + total
         seen_skus_in_order: set[str] = set()
 
         for item in order.get("line_items") or []:

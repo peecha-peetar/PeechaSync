@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import os
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import urlparse
 
 from PyQt5.QtCore import Qt, QThread, QObject, pyqtSignal, QTimer
@@ -246,6 +246,12 @@ class DashboardWorker(QObject):
         payload["sql"] = sql
 
     def _load_woo(self, payload):
+        from sync_app.core.integrations.commerce_provider import is_prestashop
+
+        if is_prestashop(self.config):
+            self._load_ps_store(payload)
+            return
+
         woo = {"ok": False, "configured": bool(self.base_url and self.auth[0] and self.auth[1])}
         if not woo["configured"]:
             woo["error"] = "تنظیمات ووکامرس ناقص است"
@@ -315,6 +321,117 @@ class DashboardWorker(QObject):
                 woo[key] = int(resp.headers.get("X-WP-Total", 0))
             except Exception:
                 woo[key] = 0
+
+        payload["woo"] = woo
+
+    def _ps_order_row_to_dashboard_shape(self, order, customer_names: dict):
+        """پیش‌نمایش سفارش پرستاشاپ → همون شکل order (id/billing/status/total/date_created)
+        که جدول‌های داشبورد (که اول برای ووکامرس نوشته شدن) انتظار دارن."""
+        cid = int(order.get("customer_id") or 0)
+        name = customer_names.get(cid)
+        if name is None:
+            name = ""
+            if cid:
+                try:
+                    from sync_app.core.ps_customer_helper import ps_get_customer
+
+                    customer = ps_get_customer(self.config, cid)
+                    if customer:
+                        billing = customer.get("billing") or {}
+                        name = f"{billing.get('first_name', '')} {billing.get('last_name', '')}".strip()
+                except Exception:
+                    name = ""
+            customer_names[cid] = name
+        first_name, _, last_name = name.partition(" ")
+        return {
+            "id": order.get("id"),
+            "billing": {"first_name": first_name, "last_name": last_name},
+            "status": "پرداخت‌شده" if order.get("valid") else "در انتظار پرداخت",
+            "total": order.get("total_paid"),
+            "date_created": order.get("date_add", ""),
+        }
+
+    def _load_ps_store(self, payload):
+        """معادل _load_woo برای پرستاشاپ — کلید payload["woo"] عمداً همون اسم قبلی
+        مونده (فقط یک کلید داخلی، به کاربر نمایش داده نمی‌شه) تا رندر جدول‌ها/
+        نمودارهای داشبورد بدون شاخه‌زدن اضافه، بین دو پلتفرم مشترک بمونه.
+
+        ⚠️ پرستاشاپ resource گزارش‌گیری آماده (reports/sales و مشابه ووکامرس)
+        نداره — گزارش فروش از خودِ sales_report_helper.build_sales_report ساخته
+        می‌شه که برای این پلتفرم، همه‌ی سفارش‌های valid=1 رو می‌خونه و خودش جمع
+        می‌بنده (نه یک endpoint آماده‌ی سرور). برای فروشگاه‌های با تاریخچه‌ی
+        خیلی بزرگ ممکنه این بخش کند باشه.
+        """
+        from sync_app.core.ps_sync_helper import check_prestashop_connection, ps_count_products
+        from sync_app.core.ps_customer_helper import ps_count_customers
+        from sync_app.core.ps_order_helper import ps_list_recent_orders_preview
+        from sync_app.core.sales_report_helper import build_sales_report
+
+        ps_url = (self.config.get("PS_URL") or "").strip()
+        ps_key = (self.config.get("PS_API_KEY") or "").strip()
+        woo = {"ok": False, "configured": bool(ps_url and ps_key), "platform": "prestashop"}
+        if not woo["configured"]:
+            woo["error"] = "تنظیمات پرستاشاپ ناقص است"
+            payload["woo"] = woo
+            return
+
+        try:
+            ok, message, currency = check_prestashop_connection(self.config, update_config_status=False)
+            woo["ok"] = ok
+            woo["site_url"] = ps_url
+            woo["home_url"] = ps_url
+            woo["currency"] = "" if currency in (None, "N/A") else currency
+            if not ok:
+                woo["error"] = message
+        except Exception as exc:
+            woo["error"] = str(exc)[:120]
+
+        try:
+            report = build_sales_report(self.config, since_days=30)
+            woo["sales"] = {"total_orders": report.total_orders, "net_revenue": report.total_revenue}
+            date_max = datetime.now().date()
+            date_min = date_max - timedelta(days=13)
+            daily_series = []
+            for i in range(14):
+                d = date_min + timedelta(days=i)
+                amount = float(report.daily_revenue.get(d.isoformat()) or 0)
+                daily_series.append((d.strftime("%m/%d"), amount))
+            woo["daily_sales"] = daily_series
+            woo["top_products"] = [
+                {"name": s.name or s.sku, "quantity": s.qty_sold, "total": s.revenue}
+                for s in report.top_products(6)
+            ]
+        except Exception:
+            woo["sales"] = {}
+            woo["daily_sales"] = []
+            woo["top_products"] = []
+
+        customer_names: dict = {}
+        try:
+            recent = ps_list_recent_orders_preview(self.config, limit=8, timeout=self.timeout)
+            woo["recent_orders"] = [
+                self._ps_order_row_to_dashboard_shape(o, customer_names) for o in recent
+            ]
+        except Exception:
+            woo["recent_orders"] = []
+
+        try:
+            candidates = ps_list_recent_orders_preview(self.config, limit=50, timeout=self.timeout)
+            pending = [o for o in candidates if not o.get("valid")][:6]
+            woo["pending_orders"] = [
+                self._ps_order_row_to_dashboard_shape(o, customer_names) for o in pending
+            ]
+        except Exception:
+            woo["pending_orders"] = []
+
+        try:
+            woo["total_products"] = ps_count_products(self.config, timeout=self.timeout)
+        except Exception:
+            woo["total_products"] = 0
+        try:
+            woo["total_customers"] = ps_count_customers(self.config, timeout=self.timeout)
+        except Exception:
+            woo["total_customers"] = 0
 
         payload["woo"] = woo
 
@@ -1041,7 +1158,15 @@ class DashboardTab(QWidget):
         else:
             self._health_wc.set_status(False, "کلید API یا URL وارد نشده", warning=True)
 
-        if wc_ok:
+        if wc_ok and woo.get("platform") == "prestashop":
+            # پرستاشاپ ویزارد راه‌اندازی صفحات cart/checkout ووکامرس رو نداره —
+            # هر فروشگاه پرستاشاپ به‌طور پیش‌فرض cart/checkout فعال داره.
+            self._health_wp.set_status(
+                True,
+                _site_host(woo.get("home_url") or woo.get("site_url", "")),
+                f"پرستاشاپ | ارز: {woo.get('currency') or '—'}",
+            )
+        elif wc_ok:
             from sync_app.core.scripts.woocommerce_store_setup import store_pages_ready
             pages_ok = store_pages_ready(load_secure_config(None))
             if pages_ok:
@@ -1091,11 +1216,15 @@ class DashboardTab(QWidget):
             f"زیرگروه: {_fmt_num(sql.get('sub_groups', '—'))}<br>"
             f"لیست قیمت فعال: #{cfg.get('price_list', 1)}"
         )
+        version_line = (
+            f"ارز: {woo.get('currency') or '—'}" if woo.get("platform") == "prestashop"
+            else f"نسخه WC: {woo.get('wc_version', '—')}"
+        )
         self._insight_wc.setText(
             f"<b>فروشگاه</b><br>"
             f"محصولات: {_fmt_num(woo.get('total_products', '—'))} | "
             f"مشتریان: {_fmt_num(woo.get('total_customers', '—'))}<br>"
-            f"نسخه WC: {woo.get('wc_version', '—')}"
+            f"{version_line}"
         )
         sync_ready = sql.get("ok") and wc_ok and sel > 0 and map_count > 0
         if sync_ready:

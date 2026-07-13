@@ -12,7 +12,6 @@ from PyQt5.QtCore import Qt
 from sync_app.core.secure_config_loader import load_secure_config
 from sync_app.core.sql_connection_helper import open_sql_connection, format_db_error
 from sync_app.core.threading_helper import run_in_thread
-from sync_app.core.wc_sync_helper import build_wcapi, apply_network_overrides
 from sync_app.core.sales_report_helper import (
     build_sales_report, save_sales_report, load_sales_report,
 )
@@ -112,8 +111,14 @@ class MarketingTab(QWidget):
 
     def _run_analysis(self):
         config = load_secure_config(None) or {}
-        if not config.get("WC_URL"):
-            QMessageBox.warning(self, "تنظیمات ناقص", "ابتدا آدرس سایت ووکامرس را در تنظیمات وارد کنید.")
+        from sync_app.core.integrations.commerce_provider import is_prestashop, store_platform_label
+
+        store_configured = bool(config.get("PS_URL")) if is_prestashop(config) else bool(config.get("WC_URL"))
+        if not store_configured:
+            QMessageBox.warning(
+                self, "تنظیمات ناقص",
+                f"ابتدا آدرس سایت {store_platform_label(config)} را در تنظیمات وارد کنید.",
+            )
             return
         selected_groups = [str(g).strip() for g in config.get("SELECTED_SUB_GROUPS", []) if str(g).strip()]
         if not selected_groups:
@@ -125,9 +130,7 @@ class MarketingTab(QWidget):
         self.refresh_btn.setText("⏳ در حال دریافت...")
 
         def _worker():
-            apply_network_overrides(config)
-            wcapi = build_wcapi(config)
-            report = build_sales_report(wcapi, since_days=since_days)
+            report = build_sales_report(config, since_days=since_days)
             save_sales_report(report)
 
             conn, _, _ = open_sql_connection(config, timeout=8)

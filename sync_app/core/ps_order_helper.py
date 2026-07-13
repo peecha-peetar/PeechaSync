@@ -136,6 +136,59 @@ def ps_list_recent_orders_preview(config, *, limit: int = 20, timeout=None) -> l
             "valid": str(row.get("valid") or "0") == "1",
             "total_paid": row.get("total_paid") or "0",
             "customer_id": int(row.get("id_customer") or 0),
+            "date_add": str(row.get("date_add") or "")[:10],
+        })
+    return out
+
+
+def ps_list_orders_for_sales_report(config, *, since_days: int | None = None, timeout=None) -> list[dict]:
+    """سفارش‌های valid=1 به شکل {id, date_created, total, line_items:[{sku,quantity,total,name}]} —
+    همون شکلی که sales_report_helper.build_sales_report برای ووکامرس هم انتظار داره.
+
+    ⚠️ پرستاشاپ فیلتر بازه‌ی تاریخ سروری‌ای که با اطمینان تأیید شده باشه نداره
+    (برخلاف since_days ووکامرس که با after= سمت سرور فیلتر می‌شه) — همه‌ی
+    سفارش‌های valid=1 خونده می‌شن و فیلتر since_days سمت کلاینت اعمال می‌شه.
+    برای فروشگاه‌های با تاریخچه‌ی خیلی بزرگ این کندتره؛ فعلاً به‌خاطر عدم
+    اطمینان از سینتکس فیلتر تاریخ Webservice، به حدس زدن ترجیح داده شده.
+    """
+    from datetime import datetime, timedelta
+
+    cfg = config or {}
+    cutoff = None
+    if since_days:
+        cutoff = (datetime.now() - timedelta(days=int(since_days))).strftime("%Y-%m-%d")
+
+    out: list[dict] = []
+    for order_id in ps_list_paid_order_ids(cfg, timeout=timeout):
+        resp = ps_call(
+            f"دریافت سفارش #{order_id} (گزارش فروش)",
+            lambda oid=order_id: ps_rest_request(
+                cfg, "GET", f"orders/{oid}", params={"display": "full"}, timeout=timeout,
+            ),
+        )
+        if getattr(resp, "status_code", 0) == 404:
+            continue
+        data = _response_json(resp, f"دریافت سفارش #{order_id}")
+        entry = _unwrap_dict(data, "order")
+        if not entry.get("id"):
+            continue
+        date_created = str(entry.get("date_add") or "")[:10]
+        if cutoff and date_created and date_created < cutoff:
+            continue
+        try:
+            total = float(entry.get("total_paid") or entry.get("total_paid_tax_incl") or 0)
+        except (TypeError, ValueError):
+            total = 0.0
+        line_items = []
+        for row in _order_rows(entry):
+            item = _order_row_to_line_item(row)
+            line_items.append({
+                "sku": item["sku"], "name": item["name"],
+                "quantity": item["quantity"], "total": item["subtotal"],
+            })
+        out.append({
+            "id": int(entry["id"]), "date_created": date_created,
+            "total": total, "line_items": line_items,
         })
     return out
 
