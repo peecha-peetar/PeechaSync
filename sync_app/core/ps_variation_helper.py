@@ -528,6 +528,7 @@ def ps_sync_product_variations(
                     has_default = True
             ps_set_stock_quantity(config, product_id, stock_qty, product_attribute_id=combo_id, timeout=timeout)
             ok_count += 1
+            log.info(f"▸ [{a_code}] واریانت {sku} → قیمت={var_price:g} / موجودی={stock_qty}")
         except Exception as exc:
             log.error(f"❌ واریانت {sku} روی پرستاشاپ: {exc}")
             failed_count += 1

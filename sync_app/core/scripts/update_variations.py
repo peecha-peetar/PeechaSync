@@ -1961,14 +1961,18 @@ def _main_prestashop(config, selected_groups, price_col):
                 config=config,
             )
             if not erp_variations:
+                log.info(f"ℹ️ {a_code} ({name}) واریانت در SQL ندارد — رد شد.")
                 stats["skipped"] += 1
                 continue
 
             product_id = _resolve_product_id(api, a_code, product_map)
             if not product_id:
+                log.warning(f"⚠️ {a_code} ({name}) محصول والد روی پرستاشاپ لینک/پیدا نشد — رد شد.")
                 stats["failed"] += 1
                 stats["failed_skus"].append(a_code)
                 continue
+
+            log.info(f"▸ [{a_code}] {len(erp_variations)} واریانت — در حال ارسال به پرستاشاپ...")
 
             base_price = _apply_price(apply_price_markup(raw_price, config, is_sale=False), config)
             ok = ps_sync_product_variations(
