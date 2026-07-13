@@ -62,6 +62,22 @@ except ImportError:
     WCAPI = None
 
 
+def _fetch_ps_seo_bundle(config, product_id):
+    """معادل analyze_product_seo_live برای پرستاشاپ — برای دیالوگ‌های تک‌محصولیِ
+    سئو/آماده‌سازی هوشمند در همین تب (همون منطق _fetch_and_score_ps تب سئو و
+    سلامت سایت، فقط برای یک محصول به‌جای کل فروشگاه)."""
+    from sync_app.core.ps_sync_helper import ps_get_product, ps_list_categories
+    from sync_app.core.seo_helper import analyze_ps_product_seo
+
+    product = ps_get_product(config, int(product_id)) or {}
+    categories = ps_list_categories(config)
+    cat_by_id = {int(c["id"]): c for c in categories if isinstance(c, dict) and c.get("id")}
+    cats = product.get("categories") or []
+    cat_id = int(cats[0].get("id") or 0) if cats and isinstance(cats[0], dict) else 0
+    category_name = str((cat_by_id.get(cat_id) or {}).get("name") or "")
+    return analyze_ps_product_seo(product, category_name=category_name)
+
+
 def _guess_mime(filename):
     ext = os.path.splitext(filename.lower())[1]
     return {
@@ -1298,6 +1314,10 @@ class ProductTab(QWidget):
         fallback_name = item.data(Qt.UserRole + 4)
 
         def _worker():
+            from sync_app.core.integrations.commerce_provider import is_prestashop
+
+            if is_prestashop(config):
+                return _fetch_ps_seo_bundle(config, wc_id)
             apply_network_overrides(config)
             wcapi = build_wcapi(config)
             resp = wcapi.get(
@@ -1405,6 +1425,14 @@ class ProductTab(QWidget):
         config = load_secure_config(None) or {}
 
         def _worker():
+            from sync_app.core.integrations.commerce_provider import is_prestashop
+
+            if is_prestashop(config):
+                from sync_app.core.seo_helper import apply_ps_seo_fixes
+
+                apply_ps_seo_fixes(config, wc_id, to_send)
+                return _fetch_ps_seo_bundle(config, wc_id)["current_score"]
+
             apply_network_overrides(config)
             wcapi = build_wcapi(config)
             apply_seo_fixes(wcapi, config, wc_id, to_send, image_id, extra_image_ids)
@@ -1436,6 +1464,7 @@ class ProductTab(QWidget):
             load_text_engrave_settings, load_qr_code_settings,
         )
         from sync_app.core.media_center import load_image_profiles
+        from sync_app.core.integrations.commerce_provider import is_prestashop
 
         config = load_secure_config(None) or {}
         pipelines = load_pipelines(config)
@@ -1498,8 +1527,13 @@ class ProductTab(QWidget):
         out_dir = os.path.dirname(src) or "."
 
         product_name = str(item.data(Qt.UserRole + 4) or "") if item else ""
-        site_url = str(config.get("WC_URL") or "").strip().rstrip("/")
-        product_url = f"{site_url}/?p={int(wc_id)}" if site_url else ""
+        ps_mode = is_prestashop(config)
+        if ps_mode:
+            site_url = str(config.get("PS_URL") or "").strip().rstrip("/")
+            product_url = f"{site_url}/index.php?id_product={int(wc_id)}&controller=product" if site_url else ""
+        else:
+            site_url = str(config.get("WC_URL") or "").strip().rstrip("/")
+            product_url = f"{site_url}/?p={int(wc_id)}" if site_url else ""
         product_info = {"a_code": sku, "a_code_c": sku, "name": product_name, "product_url": product_url}
 
         def _worker():
@@ -1513,6 +1547,20 @@ class ProductTab(QWidget):
             if not result.ok:
                 raise RuntimeError(result.error)
 
+            with open(result.dst_path, "rb") as f:
+                image_bytes = f.read()
+
+            if ps_mode:
+                from sync_app.core.ps_sync_helper import ps_upload_product_image
+
+                try:
+                    ps_upload_product_image(
+                        config, int(wc_id), image_bytes, os.path.basename(result.dst_path),
+                    )
+                except Exception as exc:
+                    raise RuntimeError(f"افزودن تصویر به گالری محصول ناموفق بود: {exc}")
+                return result
+
             apply_network_overrides(config)
             wcapi = build_wcapi(config)
             resp = wcapi.get(f"products/{int(wc_id)}", params={"_fields": "images"})
@@ -1522,8 +1570,6 @@ class ProductTab(QWidget):
                 {"id": img.get("id")} for img in existing_images
                 if isinstance(img, dict) and img.get("id")
             ]
-            with open(result.dst_path, "rb") as f:
-                image_bytes = f.read()
             ok, media_id, _url, err = wp_upload_media_ex(
                 config, image_bytes, os.path.basename(result.dst_path), fallback_stem=sku
             )
@@ -1569,11 +1615,19 @@ class ProductTab(QWidget):
         # بیرونی — چون نه وابستگی جدید لازم داره نه اتصال اینترنت اضافه.
         short_link = ""
         try:
+            from sync_app.core.integrations.commerce_provider import is_prestashop
+
             product_map = load_product_woo_map()
             wc_id = product_map.get(sku)
-            site_url = str(load_secure_config(None).get("WC_URL") or "").strip().rstrip("/")
-            if wc_id and site_url:
-                short_link = f"{site_url}/?p={int(wc_id)}"
+            cfg = load_secure_config(None) or {}
+            if is_prestashop(cfg):
+                site_url = str(cfg.get("PS_URL") or "").strip().rstrip("/")
+                if wc_id and site_url:
+                    short_link = f"{site_url}/index.php?id_product={int(wc_id)}&controller=product"
+            else:
+                site_url = str(cfg.get("WC_URL") or "").strip().rstrip("/")
+                if wc_id and site_url:
+                    short_link = f"{site_url}/?p={int(wc_id)}"
         except Exception:
             short_link = ""
 
@@ -1698,6 +1752,10 @@ class ProductTab(QWidget):
         fallback_name = item.data(Qt.UserRole + 4)
 
         def _worker():
+            from sync_app.core.integrations.commerce_provider import is_prestashop
+
+            if is_prestashop(config):
+                return _fetch_ps_seo_bundle(config, wc_id)
             apply_network_overrides(config)
             wcapi = build_wcapi(config)
             resp = wcapi.get(

@@ -1876,6 +1876,70 @@ class VariationsTab(QWidget):
             )
             return
 
+        def job_ps():
+            from sync_app.core.ps_variation_helper import ps_set_combination_image, ps_list_combinations
+
+            log.info(f"▸ انتقال تصویر {len(targets)} واریانت به پرستاشاپ...")
+            product_map = load_product_woo_map()
+            ok = fail = 0
+            by_product: dict[int, list[tuple[str, list[str]]]] = {}
+            for variant_sku, paths in targets:
+                parent_sku = variant_sku.rsplit("-V", 1)[0]
+                pid = int(product_map.get(parent_sku) or 0)
+                if not pid:
+                    log.warning(f"⚠️ والد {parent_sku} برای {variant_sku} در پرستاشاپ نیست")
+                    fail += 1
+                    continue
+                by_product.setdefault(pid, []).append((variant_sku, paths))
+
+            for pid, items in by_product.items():
+                try:
+                    combos = ps_list_combinations(cfg, pid)
+                except Exception as exc:
+                    log.error(f"❌ دریافت combinationهای محصول #{pid}: {exc}")
+                    fail += len(items)
+                    continue
+                combo_by_ref = {
+                    str(c.get("reference") or "").strip().lower(): c for c in combos if c.get("reference")
+                }
+                for variant_sku, paths in items:
+                    combo = None
+                    for alias in variation_sku_aliases(variant_sku):
+                        combo = combo_by_ref.get(alias.lower())
+                        if combo:
+                            break
+                    if not combo:
+                        log.warning(
+                            f"⚠️ واریانت {variant_sku} در پرستاشاپ (محصول #{pid}) پیدا نشد "
+                            f"(SKUهای موجود: {', '.join(sorted(combo_by_ref)[:6]) or '—'})"
+                        )
+                        fail += 1
+                        continue
+                    combo_id = int(combo["id"])
+                    uploaded = False
+                    for rel in paths:
+                        abs_path = rel if os.path.isabs(rel) else app_path(rel)
+                        if not os.path.exists(abs_path):
+                            log.warning(f"⚠️ فایل تصویر پیدا نشد: {abs_path}")
+                            continue
+                        try:
+                            with open(abs_path, "rb") as f:
+                                data = f.read()
+                            new_id = ps_set_combination_image(
+                                cfg, pid, combo_id, data, os.path.basename(abs_path)
+                            )
+                            log.info(f"✅ تصویر واریانت {variant_sku} → combination #{combo_id} (image={new_id})")
+                            ok += 1
+                            uploaded = True
+                            break
+                        except Exception as exc:
+                            log.error(f"❌ آپلود تصویر {variant_sku}: {exc}")
+                    if not uploaded:
+                        fail += 1
+            if ok == 0:
+                raise RuntimeError("هیچ تصویر واریانتی به پرستاشاپ نرفت.")
+            return {"ok": ok, "fail": fail}
+
         def job():
             log.info(f"▸ انتقال تصویر {len(targets)} واریانت به Woo...")
             apply_network_overrides(cfg)
@@ -2001,8 +2065,10 @@ class VariationsTab(QWidget):
                 raise RuntimeError("هیچ تصویر واریانتی به Woo نرفت.")
             return {"ok": ok, "fail": fail}
 
+        from sync_app.core.integrations.commerce_provider import is_prestashop
+
         if not run_background_sync(
-            self, job,
+            self, job_ps if is_prestashop(cfg) else job,
             on_success=self._var_images_done,
             on_error=self._var_images_error,
             need_sql=False,

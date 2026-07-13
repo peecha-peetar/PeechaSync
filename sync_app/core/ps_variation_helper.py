@@ -342,9 +342,22 @@ def ps_create_combination(
     return _response_xml_id(resp, f"ایجاد ترکیب واریانت {reference}")
 
 
+def _combination_image_ids(entry: dict) -> list[int]:
+    assoc = (entry.get("associations") or {}).get("images") or []
+    out = []
+    for item in assoc:
+        if isinstance(item, dict) and item.get("id"):
+            try:
+                out.append(int(item["id"]))
+            except (TypeError, ValueError):
+                continue
+    return out
+
+
 def ps_update_combination(
     config, combination_id: int, *, reference: str | None = None, price_impact: float | None = None,
-    option_value_ids: list[int] | None = None, default_on: bool | None = None, timeout=None,
+    option_value_ids: list[int] | None = None, default_on: bool | None = None,
+    image_ids: list[int] | None = None, timeout=None,
 ) -> None:
     cfg = config or {}
     current = ps_get_combination(cfg, combination_id, timeout=timeout) or {}
@@ -354,6 +367,7 @@ def ps_update_combination(
     final_value_ids = (
         option_value_ids if option_value_ids is not None else _combination_option_value_ids(current)
     )
+    final_image_ids = image_ids if image_ids is not None else _combination_image_ids(current)
     id_product = int(current.get("id_product") or 0)
 
     def _build(node):
@@ -369,6 +383,11 @@ def ps_update_combination(
         for vid in final_value_ids:
             v = ET.SubElement(povs, "product_option_value")
             _set_text(v, "id", int(vid))
+        if final_image_ids:
+            images_node = ET.SubElement(assoc, "images")
+            for iid in final_image_ids:
+                img_node = ET.SubElement(images_node, "image")
+                _set_text(img_node, "id", int(iid))
 
     body = _build_xml("combination", _build)
     resp = ps_call(
@@ -389,6 +408,25 @@ def ps_delete_combination(config, combination_id: int, *, timeout=None) -> bool:
         return True
     _raise_for_status(resp, f"حذف ترکیب واریانت #{combination_id}")
     return True
+
+
+def ps_set_combination_image(
+    config, product_id: int, combination_id: int, image_data: bytes, filename: str, *, timeout=None,
+) -> int:
+    """آپلود یک تصویر جدید به گالری محصول و اختصاص آن به یک combination خاص
+    — جایگزینِ تصویر قبلیِ همین ترکیب می‌شود (نه اضافه‌شدن)، چون معادل
+    ووکامرسی‌اش (فیلد «image» تک‌مقداری هر واریانت) هم همین رفتار را دارد.
+
+    ⚠️ برخلاف ووکامرس، پرستاشاپ برای هر واریانت تصویر جدا آپلود نمی‌کنه —
+    تصویر به گالری محصول اضافه می‌شه و بعد این ترکیب بهش لینک می‌شه؛ پس
+    این تصویر توی گالری اصلی محصول هم دیده می‌شه (رفتار طبیعی پرستاشاپه،
+    نه محدودیت این پیاده‌سازی).
+    """
+    from sync_app.core.ps_sync_helper import ps_upload_product_image
+
+    new_image_id = ps_upload_product_image(config, product_id, image_data, filename, timeout=timeout)
+    ps_update_combination(config, combination_id, image_ids=[new_image_id], timeout=timeout)
+    return new_image_id
 
 
 def ps_list_all_combinations_grouped(config, *, timeout=None) -> dict[int, list[int]]:
@@ -477,6 +515,14 @@ def ps_sync_product_variations(
 
     has_default = any(c.get("default_on") for c in existing_by_ref.values())
 
+    from sync_app.core.stock_mode import (
+        STOCK_MODE_ALWAYS, STOCK_MODE_DOWNLOAD, resolve_variation_stock_mode,
+    )
+
+    matched_group = next(
+        (g for g in (config or {}).get("SELECTED_SUB_GROUPS") or [] if a_code.startswith(g)), "",
+    )
+
     ok_count = 0
     failed_count = 0
     for var in variations:
@@ -507,9 +553,13 @@ def ps_sync_product_variations(
             var_price = 0.0
         price_impact = var_price - base_price
         try:
-            stock_qty = max(0, int(var.get("stock_quantity") or 0))
+            raw_stock_qty = max(0, int(var.get("stock_quantity") or 0))
         except (TypeError, ValueError):
-            stock_qty = 0
+            raw_stock_qty = 0
+        v_mode = resolve_variation_stock_mode(sku, a_code, matched_group, config or {})
+        # «همیشه موجود»/«دانلودی» — موجودی زیاد تا سفارش رد نشه (همون منطق
+        # محصول ساده در commerce_provider._ps_apply_stock_from_payload).
+        stock_qty = 9999 if v_mode in (STOCK_MODE_ALWAYS, STOCK_MODE_DOWNLOAD) else raw_stock_qty
 
         try:
             existing_combo = existing_by_ref.get(sku)
