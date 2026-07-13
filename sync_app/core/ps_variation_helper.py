@@ -111,6 +111,44 @@ def ps_ensure_attribute_group(config, name: str, *, timeout=None) -> int:
     return ps_create_attribute_group(config, name_norm, timeout=timeout)["id"]
 
 
+def ps_get_attribute_group(config, group_id: int, *, timeout=None) -> dict | None:
+    cfg = config or {}
+    lang_id = ps_lang_id(cfg)
+    resp = ps_call(
+        f"دریافت گروه ویژگی #{group_id}",
+        lambda: ps_rest_request(cfg, "GET", f"product_options/{int(group_id)}", timeout=timeout),
+    )
+    if getattr(resp, "status_code", 0) == 404:
+        return None
+    data = _response_json(resp, f"دریافت گروه ویژگی #{group_id}")
+    entry = _unwrap_dict(data, "product_option")
+    if not entry.get("id"):
+        return None
+    return _group_to_shape(entry, lang_id)
+
+
+def ps_update_attribute_group(config, group_id: int, *, name: str, timeout=None) -> None:
+    """PUT کامل — چون Webservice پرستاشاپ فیلد ست‌نشده رو خالی می‌کنه، اول رکورد فعلی خونده می‌شه."""
+    cfg = config or {}
+    lang_id = ps_lang_id(cfg)
+    current = ps_get_attribute_group(cfg, group_id, timeout=timeout) or {}
+    group_type = str(current.get("group_type") or "select")
+
+    def _build(node):
+        _set_text(node, "id", int(group_id))
+        _set_lang_text(node, "name", name, lang_id)
+        _set_lang_text(node, "public_name", name, lang_id)
+        _set_text(node, "group_type", group_type)
+        _set_text(node, "position", 0)
+
+    body = _build_xml("product_option", _build)
+    resp = ps_call(
+        f"به‌روزرسانی گروه ویژگی #{group_id}",
+        lambda: ps_rest_request(cfg, "PUT", f"product_options/{int(group_id)}", xml_body=body, timeout=timeout),
+    )
+    _raise_for_status(resp, f"به‌روزرسانی گروه ویژگی #{group_id}")
+
+
 # ---------------------------------------------------------------------------
 # مقادیر ویژگی (product_option_values)
 # ---------------------------------------------------------------------------
@@ -174,6 +212,43 @@ def ps_ensure_attribute_value(config, group_id: int, value_name: str, *, timeout
         if value["name"].strip() == name_norm:
             return value["id"]
     return ps_create_attribute_value(config, group_id, name_norm, timeout=timeout)["id"]
+
+
+def ps_get_attribute_value(config, value_id: int, *, timeout=None) -> dict | None:
+    cfg = config or {}
+    lang_id = ps_lang_id(cfg)
+    resp = ps_call(
+        f"دریافت مقدار ویژگی #{value_id}",
+        lambda: ps_rest_request(cfg, "GET", f"product_option_values/{int(value_id)}", timeout=timeout),
+    )
+    if getattr(resp, "status_code", 0) == 404:
+        return None
+    data = _response_json(resp, f"دریافت مقدار ویژگی #{value_id}")
+    entry = _unwrap_dict(data, "product_option_value")
+    if not entry.get("id"):
+        return None
+    return _value_to_shape(entry, lang_id)
+
+
+def ps_update_attribute_value(config, value_id: int, *, name: str, timeout=None) -> None:
+    """PUT کامل — اول رکورد فعلی خونده می‌شه تا id_attribute_group از دست نره."""
+    cfg = config or {}
+    lang_id = ps_lang_id(cfg)
+    current = ps_get_attribute_value(cfg, value_id, timeout=timeout) or {}
+    group_id = int(current.get("group_id") or 0)
+
+    def _build(node):
+        _set_text(node, "id", int(value_id))
+        _set_text(node, "id_attribute_group", group_id)
+        _set_lang_text(node, "name", name, lang_id)
+        _set_text(node, "position", 0)
+
+    body = _build_xml("product_option_value", _build)
+    resp = ps_call(
+        f"به‌روزرسانی مقدار ویژگی #{value_id}",
+        lambda: ps_rest_request(cfg, "PUT", f"product_option_values/{int(value_id)}", xml_body=body, timeout=timeout),
+    )
+    _raise_for_status(resp, f"به‌روزرسانی مقدار ویژگی #{value_id}")
 
 
 # ---------------------------------------------------------------------------

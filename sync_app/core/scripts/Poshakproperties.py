@@ -149,7 +149,9 @@ def apply_network_overrides(config):  # noqa: F811 — re-export for scripts tha
 
 
 def create_wcapi(config, verify_ssl):
-    return build_wcapi(config, verify_ssl=verify_ssl)
+    from sync_app.core.integrations.commerce_provider import build_store_api
+
+    return build_store_api(config, verify_ssl=verify_ssl)
 
 
 def _wc_call(wcapi, label, call_fn, retries=WC_SYNC_RETRIES):
@@ -726,12 +728,19 @@ def sync_attributes_dynamic(wcapi, attributes_data_dejavu, config=None):
 
 def main():
     log.info(f"{_LOG} 🚀 شروع همگام‌سازی داینامیک ویژگی‌ها...")
-    log.info(f"{_LOG} Poshakproperties — اتصال SQL و Woo...")
+    log.info(f"{_LOG} Poshakproperties — اتصال SQL و فروشگاه...")
     config = load_secure_config(None) or {}
-    apply_network_overrides(config)
 
-    if not config.get("WC_URL"):
-        raise RuntimeError("تنظیمات ووکامرس ناقص است.")
+    from sync_app.core.integrations.commerce_provider import is_prestashop, store_platform_label
+
+    ps_mode = is_prestashop(config)
+    if ps_mode:
+        if not config.get("PS_URL") or not config.get("PS_API_KEY"):
+            raise RuntimeError("تنظیمات پرستاشاپ ناقص است.")
+    else:
+        apply_network_overrides(config)
+        if not config.get("WC_URL"):
+            raise RuntimeError(f"تنظیمات {store_platform_label(config)} ناقص است.")
     if not (
         config.get("SQL_CONN_STRING")
         or (config.get("SQL_SERVER") and config.get("SQL_DATABASE"))
@@ -752,9 +761,11 @@ def main():
         log.warning(f"{_LOG} ℹ️ هیچ ویژگی‌ای در ERP برای همگام‌سازی نیست.")
         return {"attrs_synced": 0, "terms_created": 0, "errors": []}
 
+    from sync_app.core.integrations.commerce_provider import warm_store_connection
+
     verify_ssl = bool(config.get("WC_VERIFY_SSL", False))
     wcapi = create_wcapi(config, verify_ssl=verify_ssl)
-    warm_wc_connection(wcapi)
+    warm_store_connection(wcapi, config)
 
     try:
         stats = sync_attributes_dynamic(wcapi, attributes_data_dejavu, config=config)

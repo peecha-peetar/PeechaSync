@@ -149,6 +149,74 @@ def _ps_categories_list(config, params, timeout):
     return all_cats[start : start + per_page]
 
 
+def _ps_attr_group_to_wc_shape(group: dict) -> dict:
+    name = str(group.get("name") or "")
+    return {"id": group.get("id"), "name": name, "slug": name}
+
+
+def _ps_attr_value_to_wc_shape(value: dict) -> dict:
+    name = str(value.get("name") or "")
+    return {"id": value.get("id"), "name": name, "slug": name}
+
+
+def _ps_attribute_groups_list(config, timeout):
+    """معادل GET products/attributes ووکامرس — گروه‌های ویژگی (سایز/رنگ)."""
+    from sync_app.core.ps_variation_helper import ps_list_attribute_groups
+
+    groups = ps_list_attribute_groups(config, timeout=timeout)
+    return [_ps_attr_group_to_wc_shape(g) for g in groups]
+
+
+def _ps_attribute_group_get(config, group_id, timeout):
+    from sync_app.core.ps_sync_helper import PrestaShopAPIError
+    from sync_app.core.ps_variation_helper import ps_get_attribute_group
+
+    group = ps_get_attribute_group(config, group_id, timeout=timeout)
+    if group is None:
+        raise PrestaShopAPIError(f"گروه ویژگی #{group_id} در پرستاشاپ یافت نشد.")
+    return _ps_attr_group_to_wc_shape(group)
+
+
+def _ps_attribute_group_create(config, body, timeout):
+    from sync_app.core.ps_variation_helper import ps_create_attribute_group
+
+    created = ps_create_attribute_group(config, str(body.get("name") or ""), timeout=timeout)
+    return _ps_attr_group_to_wc_shape(created)
+
+
+def _ps_attribute_group_update(config, group_id, body, timeout):
+    from sync_app.core.ps_variation_helper import ps_update_attribute_group
+
+    name = str(body.get("name") or "")
+    ps_update_attribute_group(config, group_id, name=name, timeout=timeout)
+    return {"id": group_id, "name": name}
+
+
+def _ps_attribute_values_list(config, group_id, page, timeout):
+    """معادل GET products/attributes/{id}/terms ووکامرس — همه مقادیر یکجا روی page=1."""
+    from sync_app.core.ps_variation_helper import ps_list_attribute_values
+
+    if page != 1:
+        return []
+    values = ps_list_attribute_values(config, group_id, timeout=timeout)
+    return [_ps_attr_value_to_wc_shape(v) for v in values]
+
+
+def _ps_attribute_value_create(config, group_id, body, timeout):
+    from sync_app.core.ps_variation_helper import ps_create_attribute_value
+
+    created = ps_create_attribute_value(config, group_id, str(body.get("name") or ""), timeout=timeout)
+    return _ps_attr_value_to_wc_shape(created)
+
+
+def _ps_attribute_value_update(config, value_id, body, timeout):
+    from sync_app.core.ps_variation_helper import ps_update_attribute_value
+
+    name = str(body.get("name") or "")
+    ps_update_attribute_value(config, value_id, name=name, timeout=timeout)
+    return {"id": value_id, "name": name}
+
+
 def _ps_products_search(config, params, timeout):
     from sync_app.core.ps_sync_helper import ps_find_product_by_reference
 
@@ -289,6 +357,36 @@ def _ps_dispatch(config, method: str, path: str, *, params=None, json_body=None,
                 )
             if method == "GET":
                 return ps_get_category(config, cat_id, timeout=timeout)
+
+    elif clean_path == "products/attributes":
+        if method == "GET":
+            return _ps_attribute_groups_list(config, timeout)
+        if method == "POST":
+            return _ps_attribute_group_create(config, body, timeout)
+
+    elif clean_path.endswith("/terms") and clean_path.startswith("products/attributes/"):
+        group_id_str = clean_path[len("products/attributes/"):-len("/terms")]
+        if group_id_str.isdigit():
+            group_id = int(group_id_str)
+            if method == "GET":
+                page = int(params.get("page") or 1)
+                return _ps_attribute_values_list(config, group_id, page, timeout)
+            if method == "POST":
+                return _ps_attribute_value_create(config, group_id, body, timeout)
+
+    elif "/terms/" in clean_path and clean_path.startswith("products/attributes/"):
+        value_id_str = clean_path.rsplit("/", 1)[-1]
+        if value_id_str.isdigit() and method == "PUT":
+            return _ps_attribute_value_update(config, int(value_id_str), body, timeout)
+
+    elif clean_path.startswith("products/attributes/"):
+        attr_id_str = clean_path[len("products/attributes/"):]
+        if attr_id_str.isdigit():
+            attr_id = int(attr_id_str)
+            if method == "GET":
+                return _ps_attribute_group_get(config, attr_id, timeout)
+            if method == "PUT":
+                return _ps_attribute_group_update(config, attr_id, body, timeout)
 
     elif clean_path == "products":
         if method == "GET":
