@@ -24,8 +24,13 @@ def ensure_store_pages_ready(parent, config=None, *, silent=False) -> bool:
     """
     اگر Cart/Checkout در cache تنظیم نشده باشد، پیام راهنما نشان می‌دهد.
     silent=True برای همگام‌سازی خودکار — بدون popup.
+    این چک مخصوص ووکامرسه (صفحات Cart/Checkout)؛ روی پرستاشاپ بی‌معنیه.
     """
     cfg = config or load_secure_config(None) or {}
+    from sync_app.core.integrations.commerce_provider import is_prestashop
+
+    if is_prestashop(cfg):
+        return True
     if store_pages_ready(cfg):
         return True
 

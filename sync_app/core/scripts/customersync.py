@@ -28,6 +28,12 @@ WC_CUSTOMERS_ENDPOINT = ""
 WC_AUTH = ("", "")
 
 
+def is_ps_mode(config=None) -> bool:
+    from sync_app.core.integrations.commerce_provider import is_prestashop
+
+    return is_prestashop(config or load_secure_config(None) or {})
+
+
 def init_runtime_config():
     global SQL_CONN_STRING, WC_API_URL, WC_CONSUMER_KEY, WC_CONSUMER_SECRET
     global WC_TIMEOUT, WC_CUSTOMERS_ENDPOINT, WC_AUTH
@@ -191,6 +197,27 @@ def get_buyers_preview_from_orders(*, max_orders=50, max_customer_lookups=30, ti
     لیست خریداران دارای سفارش برای نمایش در تب مشتریان.
     شامل ثبت‌نام‌شده (customer_id>0) و مهمان (خرید بدون حساب کاربری).
     """
+    config = load_secure_config(None) or {}
+    if is_ps_mode(config):
+        from sync_app.core.ps_customer_helper import (
+            ps_get_customer,
+            ps_list_customer_ids_with_paid_orders,
+        )
+
+        request_timeout = timeout or WC_TIMEOUT
+        ids = ps_list_customer_ids_with_paid_orders(config, timeout=request_timeout)
+        customers = []
+        lookup_limit = max(1, int(max_customer_lookups or 30))
+        for cid in sorted(ids)[:lookup_limit]:
+            try:
+                customer = ps_get_customer(config, cid, timeout=request_timeout)
+                if customer:
+                    customers.append(customer)
+            except Exception as e:
+                log.error(f"❌ خطا در دریافت مشتری {cid}: {e}")
+        log.info(f"📦 پیش‌نمایش خریداران پرستاشاپ: {len(customers)} ثبت‌نام‌شده")
+        return customers
+
     request_timeout = timeout or WC_TIMEOUT
     try:
         orders = _fetch_orders_preview(max_orders=max_orders, timeout=request_timeout)
@@ -265,6 +292,15 @@ def get_woo_customers():
 
 def get_all_woo_customers(*, max_customers=0, timeout=None):
     """ همه مشتریان paginate — max_customers>0 برای پیش‌نمایش تب """
+    config = load_secure_config(None) or {}
+    if is_ps_mode(config):
+        from sync_app.core.ps_customer_helper import ps_list_customers
+
+        request_timeout = timeout or WC_TIMEOUT
+        customers = ps_list_customers(config, max_customers=max_customers, timeout=request_timeout)
+        log.info(f"📦 {len(customers)} مشتری از پرستاشاپ دریافت شد.")
+        return customers
+
     customers = []
     request_timeout = timeout or WC_TIMEOUT
     per_page = 100 if not max_customers else max(1, min(int(max_customers), 100))
@@ -301,6 +337,23 @@ def fetch_customers_for_sync(config=None):
         return []
     if mode == "all":
         return get_all_woo_customers()
+    if is_ps_mode(config):
+        from sync_app.core.ps_customer_helper import (
+            ps_get_customer,
+            ps_list_customer_ids_with_paid_orders,
+        )
+
+        ids = ps_list_customer_ids_with_paid_orders(config)
+        customers = []
+        for cid in ids:
+            try:
+                customer = ps_get_customer(config, cid)
+                if customer:
+                    customers.append(customer)
+            except Exception as e:
+                log.error(f"❌ خطا در دریافت مشتری {cid}: {e}")
+        log.info(f"✅ {len(customers)} مشتری پرستاشاپ آماده همگام‌سازی.")
+        return customers
     return get_woo_customers()
 
 
@@ -447,15 +500,20 @@ def update_customer(customer_data, customer_code, moien_code):
 # main
 def main():
     log.info("▶️ شروع همگام‌سازی مشتریان...")
-    init_runtime_config()
-
-    try:
-        validate_config()
-    except Exception as e:
-        log.error(f"❌ خطا در تنظیمات: {e}")
-        return
+    init_runtime_config()  # SQL_CONN_STRING را برای هر دو پلتفرم مقداردهی می‌کند
 
     config = load_secure_config(None) or {}
+    if is_ps_mode(config):
+        if not SQL_CONN_STRING:
+            log.error("❌ خطا در تنظیمات: SQL_CONN_STRING خالی است.")
+            return
+    else:
+        try:
+            validate_config()
+        except Exception as e:
+            log.error(f"❌ خطا در تنظیمات: {e}")
+            return
+
     try:
         customers = fetch_customers_for_sync(config)
     except Exception as e:

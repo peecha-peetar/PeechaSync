@@ -34,6 +34,12 @@ WC_ORDERS_ENDPOINT = ""
 DEFAULT_CUSTOMER_CODE = "00005"
 
 
+def is_ps_mode(config=None) -> bool:
+    from sync_app.core.integrations.commerce_provider import is_prestashop
+
+    return is_prestashop(config or load_secure_config(None) or {})
+
+
 def init_runtime_config():
     global SQL_CONN_STRING, WC_API_URL_BASE, WC_CONSUMER_KEY, WC_CONSUMER_SECRET
     global WC_AUTH, WC_ORDERS_ENDPOINT, DEFAULT_CUSTOMER_CODE
@@ -240,6 +246,10 @@ def _calculate_order_sum_price(order, config):
 # 📌 به‌روزرسانی وضعیت سفارش در ووکامرس
 # ---------------------------------------------------------
 def mark_order_completed(order_id):
+    if is_ps_mode():
+        # طبق تصمیم کاربر: فعلاً وضعیت سفارش روی پرستاشاپ تغییر داده نمی‌شود —
+        # فقط در ERP ثبت می‌شود.
+        return
     try:
         url = f"{WC_ORDERS_ENDPOINT}/{order_id}"
         requests.put(url, auth=WC_AUTH, json={"status": "completed"})
@@ -384,11 +394,42 @@ def insert_order(order):
 
 
 # ---------------------------------------------------------
+# 📌 اجرای اصلی — پرستاشاپ
+# ---------------------------------------------------------
+def _main_prestashop():
+    from sync_app.core.ps_order_helper import ps_list_paid_orders
+
+    cfg = load_secure_config(None) or {}
+    if not SQL_CONN_STRING:
+        raise RuntimeError("SQL_CONN_STRING خالی است.")
+
+    try:
+        orders = ps_list_paid_orders(cfg, timeout=60)
+    except Exception as e:
+        log.error(f"❌ خطا در دریافت سفارش‌های پرستاشاپ: {e}")
+        raise RuntimeError(f"خطا در ارتباط با پرستاشاپ: {e}") from e
+
+    log.info(f"📦 تعداد سفارش‌های پرداخت‌شده (valid=1): {len(orders)}")
+    if not orders:
+        log.info("ℹ️ سفارش جدیدی یافت نشد.")
+        return {"ok": True, "orders": 0}
+
+    for order in orders:
+        insert_order(order)
+
+    log.info("✅ پایان عملیات همگام‌سازی سفارشات.")
+    return {"ok": True, "orders": len(orders)}
+
+
+# ---------------------------------------------------------
 # 📌 اجرای اصلی
 # ---------------------------------------------------------
 def main():
     log.info("▶️ شروع همگام‌سازی سفارشات...")
     init_runtime_config()
+
+    if is_ps_mode():
+        return _main_prestashop()
 
     try:
         validate_config()
