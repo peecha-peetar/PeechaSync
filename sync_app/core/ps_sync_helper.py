@@ -745,6 +745,48 @@ def ps_upload_product_image(config, product_id: int, image_data: bytes, filename
     raise PrestaShopAPIError(f"آپلود تصویر محصول #{product_id}: id در پاسخ یافت نشد.")
 
 
+def ps_delete_product_image(config, product_id: int, image_id: int, *, timeout=None) -> None:
+    """حذف یک تصویر از گالری محصول — DELETE images/products/{product}/{image}.
+
+    ⚠️ برخلاف بقیه‌ی مسیرهای این فایل، این مسیر (به‌همراه ps_get_product_image_ids
+    زیر) روی مستندات رسمی Webservice نوشته شده ولی هنوز روی یک فروشگاه واقعی
+    تأیید نشده — پرستاشاپ برای گالری تصاویر، برخلاف ووکامرس، آرایه‌ی «ست‌کردن
+    یک‌جا» نداره؛ هر تصویر جدا آپلود/حذف می‌شه.
+    """
+    cfg = config or {}
+    resp = ps_call(
+        f"حذف تصویر #{image_id} محصول #{product_id}",
+        lambda: ps_rest_request(
+            cfg, "DELETE", f"images/products/{int(product_id)}/{int(image_id)}", timeout=timeout,
+        ),
+    )
+    if getattr(resp, "status_code", 0) == 404:
+        return
+    _raise_for_status(resp, f"حذف تصویر #{image_id} محصول #{product_id}")
+
+
+def ps_get_product_image_ids(config, product_id: int, *, timeout=None) -> list[int]:
+    """شناسه‌ی تصاویر فعلی گالری محصول — از associations.images محصول خام."""
+    cfg = config or {}
+    resp = ps_call(
+        f"دریافت تصاویر محصول #{product_id}",
+        lambda: ps_rest_request(cfg, "GET", f"products/{int(product_id)}", timeout=timeout),
+    )
+    if getattr(resp, "status_code", 0) == 404:
+        return []
+    data = _response_json(resp, f"دریافت تصاویر محصول #{product_id}")
+    entry = _unwrap_dict(data, "product")
+    images = (entry.get("associations") or {}).get("images") or []
+    out = []
+    for item in images:
+        if isinstance(item, dict) and item.get("id"):
+            try:
+                out.append(int(item["id"]))
+            except (TypeError, ValueError):
+                continue
+    return out
+
+
 # ---------------------------------------------------------------------------
 # تست اتصال
 # ---------------------------------------------------------------------------

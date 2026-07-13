@@ -40,6 +40,7 @@ from sync_app.core.wc_sync_helper import (
     wp_upload_media_ex,
     update_wc_product_images,
 )
+from sync_app.core.integrations.commerce_provider import is_prestashop
 
 
 class MediaCenterTab(QWidget):
@@ -667,9 +668,17 @@ class MediaCenterTab(QWidget):
         self.bulk_upload_btn.setEnabled(False)
         self.bulk_upload_btn.setText("⏳ در حال آپلود...")
 
+        ps_mode = is_prestashop(config)
+
         def _worker():
-            apply_network_overrides(config)
-            wcapi = build_wcapi(config)
+            if ps_mode:
+                from sync_app.core.ps_sync_helper import (
+                    ps_delete_product_image, ps_get_product_image_ids, ps_upload_product_image,
+                )
+            else:
+                apply_network_overrides(config)
+                wcapi = build_wcapi(config)
+
             ok_count = 0
             failed = []
             for a_code, items in matched_groups.items():
@@ -678,6 +687,20 @@ class MediaCenterTab(QWidget):
                     failed.append(f"{a_code} (سینک نشده)")
                     continue
                 try:
+                    if ps_mode:
+                        # پرستاشاپ آرایه‌ی «ست‌کردن یک‌جا» گالری نداره — برای
+                        # جایگزینی، اول تصاویر فعلی یکی‌یکی حذف می‌شن.
+                        pid = int(wc_id)
+                        if not append_mode:
+                            for existing_id in ps_get_product_image_ids(config, pid):
+                                ps_delete_product_image(config, pid, existing_id)
+                        for _idx, path in items:
+                            with open(path, "rb") as f:
+                                data = f.read()
+                            ps_upload_product_image(config, pid, data, os.path.basename(path))
+                        ok_count += 1
+                        continue
+
                     image_ids = []
                     if append_mode:
                         resp = wcapi.get(f"products/{int(wc_id)}", params={"_fields": "images"})
@@ -976,7 +999,17 @@ class MediaCenterTab(QWidget):
                 for r in sql_rows
                 if str(r[0]).strip() in product_map
             ]
-            if synced_wc_ids:
+            if synced_wc_ids and is_prestashop(config):
+                # پرستاشاپ فیلتر ارزانِ چندشناسه‌ایِ معادل include ووکامرس
+                # نداره — یکی‌یکی می‌خونیم؛ شکست هر محصول باعث توقف بقیه نمی‌شه.
+                from sync_app.core.ps_sync_helper import ps_get_product_image_ids
+
+                for pid in synced_wc_ids:
+                    try:
+                        woo_has_image[pid] = bool(ps_get_product_image_ids(config, pid))
+                    except Exception:
+                        continue
+            elif synced_wc_ids:
                 apply_network_overrides(config)
                 wcapi = build_wcapi(config)
                 for i in range(0, len(synced_wc_ids), 80):
