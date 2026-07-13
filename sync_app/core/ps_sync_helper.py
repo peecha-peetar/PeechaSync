@@ -660,8 +660,16 @@ def ps_update_product(
             _lang_value(current.get("link_rewrite"), lang_id) or _slugify_reference(final_sku),
             lang_id,
         )
-        if description is not None:
-            _set_lang_text(node, "description", description, lang_id)
+        # برخلاف بقیه‌ی این تابع، description قبلاً وقتی None بود کلاً از XML
+        # حذف می‌شد (نه اینکه مقدار فعلی حفظ بشه) — و چون Webservice پرستاشاپ
+        # فیلد نیومده رو خالی می‌کنه، این باعث می‌شد توضیحات محصول با هر PUT
+        # بی‌صدا پاک بشه (مثلاً وقتی این دور، ERP توضیحاتی نداشت یا فیلد
+        # SYNC_FIELD_PRODUCT_DESCRIPTION غیرفعال بود).
+        final_description = (
+            description if description is not None
+            else _lang_value(current.get("description"), lang_id)
+        )
+        _set_lang_text(node, "description", final_description, lang_id)
         _set_text(node, "price", f"{float(final_price or 0):.6f}")
         _set_text(node, "active", final_active)
         _set_text(node, "state", 1)

@@ -331,6 +331,15 @@ def _ps_product_update_from_payload(config, product_id, body, timeout):
     qty, out_of_stock = _ps_resolve_stock_fields(body)
     has_variants = str(body.get("type") or "").strip() == "variable" if "type" in body else None
 
+    if "description" in body:
+        from sync_app.core.sync_utils import log
+
+        desc_len = len(str(body.get("description") or ""))
+        if desc_len:
+            log.info(f"📝 [#{product_id}] توضیحات محصول ({desc_len} کاراکتر) ارسال می‌شود.")
+        else:
+            log.info(f"ℹ️ [#{product_id}] توضیحات محصول در ERP خالی است — چیزی برای ارسال نیست.")
+
     ps_update_product(
         config,
         product_id,
