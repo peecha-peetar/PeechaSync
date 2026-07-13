@@ -231,10 +231,17 @@ def _ps_products_search(config, params, timeout):
     return [product] if product else []
 
 
-def _ps_apply_stock_from_payload(config, product_id, body, timeout):
-    from sync_app.core.ps_sync_helper import ps_set_stock_quantity
-    from sync_app.core.sync_utils import log
+def _ps_resolve_stock_fields(body):
+    """(quantity, out_of_stock) یا (None, None) اگه payload فیلد موجودی نداشته باشه.
 
+    این مقدار باید هم روی خودِ محصول (فیلد out_of_stock) و هم روی
+    stock_availables ست بشه — پرستاشاپ موقع ذخیره‌ی محصول، stock_availables
+    رو از روی فیلد out_of_stockِ خودِ محصول بازسازی می‌کنه؛ اگه فقط تو
+    stock_availables بنویسیم و رو خودِ محصول نه، هر PUT بعدیِ محصول (مثلاً
+    تنظیم سئو/نمایش قیمت) بی‌صدا مقدار درست رو به «۲ = پیش‌فرض فروشگاه» ریست
+    می‌کنه — دقیقاً همون باگی که باعث می‌شد «همیشه موجود» روی فروشگاه واقعی
+    اعمال نشه با اینکه لاگ برنامه موفقیت نشون می‌داد.
+    """
     if "stock_quantity" in body:
         try:
             qty = int(body.get("stock_quantity") or 0)
@@ -242,15 +249,24 @@ def _ps_apply_stock_from_payload(config, product_id, body, timeout):
             qty = 0
         # حالت «بر اساس موجودی دیتابیس» — با صفر شدن موجودی، سفارش رد بشه
         # (معادل رفتار پیش‌فرض ووکامرس برای manage_stock=True بدون backorder).
-        ps_set_stock_quantity(config, product_id, qty, out_of_stock=0, timeout=timeout)
-        log.info(f"📦 [#{product_id}] موجودی محصول: {qty} (حالت دیتابیس، out_of_stock=0)")
-    elif body.get("manage_stock") is False:
+        return qty, 0
+    if body.get("manage_stock") is False:
         # «همیشه موجود» / «دانلودی» — با موجودیِ صفر هم سفارش مجاز باشه
         # (out_of_stock=1)، نه فقط یک عدد بزرگ که بالاخره روزی تموم بشه.
-        ps_set_stock_quantity(config, product_id, 9999, out_of_stock=1, timeout=timeout)
-        log.info(f"📦 [#{product_id}] موجودی محصول: همیشه موجود (out_of_stock=1)")
-    else:
+        return 9999, 1
+    return None, None
+
+
+def _ps_apply_stock_from_payload(config, product_id, qty, out_of_stock, timeout):
+    from sync_app.core.ps_sync_helper import ps_set_stock_quantity
+    from sync_app.core.sync_utils import log
+
+    if qty is None:
         log.info(f"📦 [#{product_id}] هیچ فیلد موجودی‌ای در payload نبود — موجودی این بار تغییر نکرد.")
+        return
+    ps_set_stock_quantity(config, product_id, qty, out_of_stock=out_of_stock, timeout=timeout)
+    label = "همیشه موجود" if out_of_stock == 1 else "بر اساس دیتابیس"
+    log.info(f"📦 [#{product_id}] موجودی محصول: {qty} ({label}, out_of_stock={out_of_stock})")
 
 
 def _ps_product_create_from_payload(config, body, timeout):
@@ -265,6 +281,7 @@ def _ps_product_create_from_payload(config, body, timeout):
     ]
     active = str(body.get("status") or "publish") == "publish"
     catalog_visibility = str(body.get("catalog_visibility") or "visible")
+    qty, out_of_stock = _ps_resolve_stock_fields(body)
 
     created = ps_create_product(
         config,
@@ -275,9 +292,10 @@ def _ps_product_create_from_payload(config, body, timeout):
         category_ids=category_ids,
         active=active,
         catalog_visibility=catalog_visibility,
+        out_of_stock=out_of_stock,
         timeout=timeout,
     )
-    _ps_apply_stock_from_payload(config, created["id"], body, timeout)
+    _ps_apply_stock_from_payload(config, created["id"], qty, out_of_stock if out_of_stock is not None else 0, timeout)
     ps_try_set_price_visibility(config, created["id"], timeout=timeout)
     full = ps_get_product(config, created["id"], timeout=timeout) or created
     full.setdefault("status", "publish" if active else "draft")
@@ -308,6 +326,7 @@ def _ps_product_update_from_payload(config, product_id, body, timeout):
     active = None
     if "status" in body:
         active = str(body.get("status") or "publish") == "publish"
+    qty, out_of_stock = _ps_resolve_stock_fields(body)
 
     ps_update_product(
         config,
@@ -319,9 +338,10 @@ def _ps_product_update_from_payload(config, product_id, body, timeout):
         category_ids=category_ids,
         active=active,
         catalog_visibility=body.get("catalog_visibility"),
+        out_of_stock=out_of_stock,
         timeout=timeout,
     )
-    _ps_apply_stock_from_payload(config, product_id, body, timeout)
+    _ps_apply_stock_from_payload(config, product_id, qty, out_of_stock if out_of_stock is not None else 0, timeout)
     ps_try_set_price_visibility(config, product_id, timeout=timeout)
     full = ps_get_product(config, product_id, timeout=timeout) or {"id": product_id}
     full.setdefault("status", "publish" if active is not False else "draft")

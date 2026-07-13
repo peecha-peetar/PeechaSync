@@ -83,6 +83,13 @@ def _set_text(parent, tag, value):
     return el
 
 
+def _int_or_default(value, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _set_lang_text(parent, tag, value, lang_id):
     el = ET.SubElement(parent, tag)
     lang_el = ET.SubElement(el, "language", {"id": str(lang_id)})
@@ -571,7 +578,7 @@ def _visibility_from_wc(catalog_visibility: str) -> str:
 def ps_create_product(
     config, *, sku: str, name: str, price, description: str = "",
     category_ids: list[int] | None = None, active: bool = True,
-    catalog_visibility: str = "visible", timeout=None,
+    catalog_visibility: str = "visible", out_of_stock: int | None = None, timeout=None,
 ) -> dict:
     cfg = config or {}
     lang_id = ps_lang_id(cfg)
@@ -589,6 +596,12 @@ def ps_create_product(
         _set_text(node, "state", 1)
         _set_text(node, "visibility", _visibility_from_wc(catalog_visibility))
         _set_text(node, "id_category_default", default_cat)
+        # out_of_stock هم روی خودِ محصول (نه فقط stock_availables) ست می‌شه —
+        # پرستاشاپ موقع ذخیره‌ی محصول از فیلد out_of_stock خودِ محصول برای
+        # هم‌گام‌سازیِ stock_availables استفاده می‌کنه؛ اگه این‌جا نباشه، هر PUT
+        # بعدیِ محصول (مثلاً تنظیم سئو) بی‌صدا مقدارِ درستِ stock_availables رو
+        # به «۲ = پیش‌فرض فروشگاه» ریست می‌کنه.
+        _set_text(node, "out_of_stock", int(out_of_stock) if out_of_stock is not None else 2)
         if cat_ids:
             assoc = ET.SubElement(node, "associations")
             cats_node = ET.SubElement(assoc, "categories")
@@ -608,7 +621,8 @@ def ps_create_product(
 def ps_update_product(
     config, product_id: int, *, sku: str | None = None, name: str | None = None,
     price=None, description: str | None = None, category_ids: list[int] | None = None,
-    active: bool | None = None, catalog_visibility: str | None = None, timeout=None,
+    active: bool | None = None, catalog_visibility: str | None = None,
+    out_of_stock: int | None = None, timeout=None,
 ) -> dict:
     cfg = config or {}
     lang_id = ps_lang_id(cfg)
@@ -645,6 +659,14 @@ def ps_update_product(
         _set_text(node, "state", 1)
         _set_text(node, "visibility", final_visibility)
         _set_text(node, "id_category_default", default_cat)
+        # مثل ps_create_product — اگه صریح پاس داده نشده باشه، مقدار فعلیِ
+        # محصول حفظ می‌شه (نه اینکه ریست بشه به پیش‌فرض) تا این PUT مقدارِ
+        # درستِ out_of_stock که یه فراخوانیِ قبلی ست کرده رو خراب نکنه.
+        final_out_of_stock = (
+            int(out_of_stock) if out_of_stock is not None
+            else _int_or_default(current.get("out_of_stock"), 2)
+        )
+        _set_text(node, "out_of_stock", final_out_of_stock)
         if cat_ids:
             assoc = ET.SubElement(node, "associations")
             cats_node = ET.SubElement(assoc, "categories")
@@ -698,6 +720,9 @@ def ps_try_set_price_visibility(config, product_id: int, *, timeout=None) -> boo
             )
             _set_text(node, "available_for_order", 1)
             _set_text(node, "show_price", 1)
+            # حفظ out_of_stock فعلی — این PUT نباید حالت موجودیِ ست‌شده توسط
+            # ps_update_product/_ps_apply_stock_from_payload رو بی‌صدا ریست کنه.
+            _set_text(node, "out_of_stock", _int_or_default(current.get("out_of_stock"), 2))
 
         body = _build_xml("product", _build)
         resp2 = ps_call(
@@ -749,14 +774,10 @@ def ps_update_product_seo(
         _set_text(node, "state", 1)
         _set_text(node, "visibility", str(current.get("visibility") or "both"))
         _set_text(node, "id_category_default", int(current.get("id_category_default") or PS_DEFAULT_PARENT_CATEGORY_ID))
-        def _preserve_or_default(value, default=1):
-            try:
-                return int(value)
-            except (TypeError, ValueError):
-                return default
-
-        _set_text(node, "available_for_order", _preserve_or_default(current.get("available_for_order")))
-        _set_text(node, "show_price", _preserve_or_default(current.get("show_price")))
+        _set_text(node, "available_for_order", _int_or_default(current.get("available_for_order"), 1))
+        _set_text(node, "show_price", _int_or_default(current.get("show_price"), 1))
+        # حفظ out_of_stock فعلی — این PUT نباید حالت موجودیِ ست‌شده رو ریست کنه.
+        _set_text(node, "out_of_stock", _int_or_default(current.get("out_of_stock"), 2))
         final_description = description if description is not None else _lang_value(current.get("description"), lang_id)
         _set_lang_text(node, "description", final_description, lang_id)
         final_short = short_description if short_description is not None else _lang_value(current.get("description_short"), lang_id)
