@@ -13,6 +13,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
 
+from sync_app.core.integrations.commerce_provider import is_prestashop
 from sync_app.core.reconciliation_service import _wc_get_paginated
 
 PRODUCT_FIELDS = (
@@ -63,6 +64,91 @@ def _chunked(items: list, size: int = 60):
         yield items[i : i + size]
 
 
+def _fetch_ps_products_for_export(
+    config: dict,
+    ps_ids: list[int],
+    *,
+    cancel_check: Callable[[], bool] | None = None,
+    progress_cb: Callable[[int, int], None] | None = None,
+) -> list[dict]:
+    """معادل fetch_products_for_export برای پرستاشاپ.
+
+    ⚠️ دو محدودیتِ ذاتی پرستاشاپ نسبت به ووکامرس: «قیمت ویژه» (sale_price)
+    و «برند» معادل مستقیم در Webservice ندارند — این دو ستون همیشه خالی
+    می‌مونن، حدس زده نمی‌شن.
+    """
+    from sync_app.core.reconciliation_service import _check_recon_cancel, _recon_http_timeout
+    from sync_app.core.ps_sync_helper import ps_get_product, ps_list_categories
+    from sync_app.core.ps_variation_helper import (
+        ps_list_attribute_groups,
+        ps_list_attribute_values,
+        ps_list_combinations,
+    )
+
+    if not ps_ids:
+        return []
+
+    timeout = _recon_http_timeout(config)
+    _check_recon_cancel(cancel_check)
+    categories = ps_list_categories(config, timeout=timeout)
+    cat_by_id = {int(c["id"]): c for c in categories if isinstance(c, dict) and c.get("id")}
+
+    value_names: dict[int, str] = {}
+    try:
+        for group in ps_list_attribute_groups(config, timeout=timeout):
+            _check_recon_cancel(cancel_check)
+            for value in ps_list_attribute_values(config, group["id"], timeout=timeout):
+                value_names[int(value["id"])] = str(value.get("name") or "").strip()
+    except Exception:
+        pass
+
+    results: list[dict] = []
+    unique_ids = [int(i) for i in ps_ids if i]
+    for done, pid in enumerate(unique_ids, start=1):
+        _check_recon_cancel(cancel_check)
+        p = ps_get_product(config, pid, timeout=timeout)
+        if not p:
+            if progress_cb:
+                progress_cb(done, len(unique_ids))
+            continue
+        level1, level2 = _category_levels(p.get("categories") or [], cat_by_id)
+        base_price = float(p.get("regular_price") or 0)
+        try:
+            combos = ps_list_combinations(config, pid, timeout=timeout)
+        except Exception:
+            combos = []
+        row = {
+            "wc_id": int(p.get("id") or 0),
+            "sku": str(p.get("sku") or "").strip(),
+            "name": str(p.get("name") or "").strip(),
+            "category_l1": level1,
+            "category_l2": level2,
+            "regular_price": str(p.get("regular_price") or "").strip(),
+            "sale_price": "",
+            "description": _strip_html(p.get("description") or ""),
+            "brand": "",
+            "type": "variable" if combos else "simple",
+            "variation_ids": [int(c["id"]) for c in combos],
+            "variations": [],
+        }
+        for combo in combos:
+            option_ids = combo.get("option_value_ids") or []
+            attr_text = " / ".join(
+                value_names[int(oid)] for oid in option_ids if int(oid) in value_names
+            )
+            row["variations"].append({
+                "wc_id": int(combo.get("id") or 0),
+                "sku": str(combo.get("reference") or "").strip(),
+                "attributes": attr_text,
+                "regular_price": f"{base_price + float(combo.get('price_impact') or 0):.6f}",
+                "sale_price": "",
+            })
+        results.append(row)
+        if progress_cb:
+            progress_cb(done, len(unique_ids))
+    return results
+
+
 def fetch_products_for_export(
     config: dict,
     wc_ids: list[int],
@@ -76,6 +162,11 @@ def fetch_products_for_export(
     """
     if not wc_ids:
         return []
+
+    if is_prestashop(config):
+        return _fetch_ps_products_for_export(
+            config, wc_ids, cancel_check=cancel_check, progress_cb=progress_cb
+        )
 
     categories = _wc_get_paginated(
         config, "products/categories",

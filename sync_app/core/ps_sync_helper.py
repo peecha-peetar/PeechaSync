@@ -445,6 +445,7 @@ def _product_to_wc_shape(entry: dict, lang_id: int, *, stock_quantity: int | Non
         "stock_quantity": stock_quantity,
         "categories": [{"id": int(entry.get("id_category_default") or 0)}] if entry.get("id_category_default") else [],
         "images": [],
+        "description": _lang_value(entry.get("description"), lang_id),
     }
 
 
