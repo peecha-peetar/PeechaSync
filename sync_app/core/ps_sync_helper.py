@@ -858,19 +858,19 @@ def _pick_shop_stock_available_row(rows: list[dict]) -> dict | None:
     return rows[0]
 
 
-def ps_get_stock_available(config, product_id: int, *, product_attribute_id: int = 0, timeout=None):
-    """(stock_available_id, quantity) برای یک محصول ساده (بدون combination).
-
-    با display=full در همون درخواست لیست‌گیری، quantity هم برمی‌گرده — یک
-    GET جدا برای هر رکورد موجودی لازم نیست. قبلاً یک درخواست دوم به
-    stock_availables/{id} می‌رفت که روی برخی فروشگاه‌ها گاهی 404 برمی‌گردوند
-    و باعث می‌شد جستجوی محصول با خطا مواجه بشه و محصول تکراری ساخته بشه.
+def _ps_fetch_stock_available_row(config, product_id: int, *, product_attribute_id: int = 0, timeout=None):
+    """رکورد stock_availablesِ واقعیِ شاپ رو برمی‌گردونه (dict کامل، شامل
+    id/quantity/id_shop/id_shop_group) یا None.
 
     ⚠️ ممکنه بیش از یک رکورد برای همین (product, attribute) برگرده — یکی
     id_shop=0 (عمومی/گروهی، پنل ادمین ازش نمی‌خونه) و یکی id_shop=N (واقعیِ
     شاپ فعال). limit رو بالا می‌بریم و رکورد واقعیِ شاپ رو ترجیح می‌دیم؛
-    وگرنه (قبل از این رفع) رکورد id_shop=0 اول برمی‌گشت و می‌نوشتیم روش،
-    بدون اینکه پنل ادمین اصلاً عوض بشه.
+    وگرنه رکورد id_shop=0 اول برمی‌گشت و می‌نوشتیم روش، بدون اینکه پنل ادمین
+    اصلاً عوض بشه. id_shop/id_shop_group هم لازمه، چون هر PUTِ بعدی باید
+    دقیقاً همین دو مقدار رو با خودش ببره — وگرنه پرستاشاپ روی UPDATE، id_shop
+    رو با پیش‌فرض (۰) جایگزین می‌کنه و چون کلید یکتای جدول
+    (product, attribute, shop, shop_group) با رکورد id_shop=0 موجود برخورد
+    می‌کنه، خطای SQL «Duplicate entry» می‌ده.
     """
     cfg = config or {}
     resp = ps_call(
@@ -890,12 +890,28 @@ def ps_get_stock_available(config, product_id: int, *, product_attribute_id: int
     rows = _unwrap_list(data, "stock_availables")
     row = _pick_shop_stock_available_row(rows)
     if not row:
-        return None, None
+        return None
     sid = int(row.get("id") or 0)
     if not sid:
+        return None
+    return {
+        "id": sid,
+        "quantity": int(row.get("quantity") or 0),
+        "id_shop": int(row.get("id_shop") or 0),
+        "id_shop_group": int(row.get("id_shop_group") or 0),
+    }
+
+
+def ps_get_stock_available(config, product_id: int, *, product_attribute_id: int = 0, timeout=None):
+    """(stock_available_id, quantity) برای یک محصول ساده (بدون combination) —
+    نسخه‌ی سبک _ps_fetch_stock_available_row، برای کالرهایی که فقط شناسه و
+    تعداد لازم دارن (نه id_shop)."""
+    row = _ps_fetch_stock_available_row(
+        config, product_id, product_attribute_id=product_attribute_id, timeout=timeout,
+    )
+    if not row:
         return None, None
-    qty = int(row.get("quantity") or 0)
-    return sid, qty
+    return row["id"], row["quantity"]
 
 
 def ps_set_stock_quantity(
@@ -913,17 +929,28 @@ def ps_set_stock_quantity(
       2 = طبق تنظیم پیش‌فرض فروشگاه (Preferences > Products)
     """
     cfg = config or {}
-    sid, _qty = ps_get_stock_available(cfg, product_id, product_attribute_id=product_attribute_id, timeout=timeout)
-    if not sid:
+    stock_row = _ps_fetch_stock_available_row(
+        cfg, product_id, product_attribute_id=product_attribute_id, timeout=timeout,
+    )
+    if not stock_row:
         raise PrestaShopAPIError(
             f"رکورد stock_availables برای محصول #{product_id} یافت نشد "
             "(محصول باید قبلاً روی پرستاشاپ ساخته شده باشد)."
         )
+    sid = stock_row["id"]
+    row_id_shop = stock_row["id_shop"]
+    row_id_shop_group = stock_row["id_shop_group"]
 
     def _build(node):
         _set_text(node, "id", sid)
         _set_text(node, "id_product", int(product_id))
         _set_text(node, "id_product_attribute", int(product_attribute_id))
+        # id_shop/id_shop_group باید دقیقاً همون مقدارِ رکورد فعلی رو حفظ کنن —
+        # اگه نفرستیمشون، پرستاشاپ روی UPDATE پیش‌فرض ۰ می‌ذاره و چون کلید
+        # یکتای جدول (product, attribute, shop, shop_group) با رکورد
+        # id_shop=0 موجود برخورد می‌کنه، خطای SQL «Duplicate entry» می‌ده.
+        _set_text(node, "id_shop", row_id_shop)
+        _set_text(node, "id_shop_group", row_id_shop_group)
         _set_text(node, "quantity", int(quantity))
         # depends_on_stock=0 یعنی موجودی مستقیم از quantity میاد (نه انبار پیشرفته).
         _set_text(node, "depends_on_stock", 0)
