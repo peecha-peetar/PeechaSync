@@ -1001,8 +1001,13 @@ def _fetch_ps_variations(
             _check_recon_cancel(cancel_check)
             for value in ps_list_attribute_values(config, group["id"], timeout=timeout):
                 value_names[int(value["id"])] = str(value.get("name") or "").strip()
-    except Exception:
-        pass
+    except ReconciliationCancelled:
+        raise
+    except Exception as exc:
+        log.warning(
+            f"⚠️ [تطبیق واریانت‌ها] خواندن نام ویژگی‌ها ناموفق بود ({exc}) — "
+            "برچسب‌ها ممکنه ناقص باشن، ولی SKU (ملاک واقعی تطبیق) اثر نمی‌گیره."
+        )
 
     product_map = load_product_woo_map()
     mapped_parent_ids = {int(v) for v in product_map.values() if v}
@@ -1015,11 +1020,13 @@ def _fetch_ps_variations(
             return parents_meta[pid]
         try:
             p = ps_get_product(config, pid, timeout=timeout)
-        except Exception:
+        except Exception as exc:
+            log.warning(f"⚠️ [تطبیق واریانت‌ها] دریافت محصول والد #{pid} ناموفق بود: {exc}")
             p = None
         parents_meta[pid] = p or {}
         return p
 
+    combo_fetch_failures = 0
     for parent_id in grouped:
         _check_recon_cancel(cancel_check)
         parent = _parent(parent_id)
@@ -1030,7 +1037,12 @@ def _fetch_ps_variations(
         parent_mapped = parent_id in mapped_parent_ids
         try:
             combos = ps_list_combinations(config, parent_id, timeout=timeout)
-        except Exception:
+        except Exception as exc:
+            combo_fetch_failures += 1
+            log.warning(
+                f"⚠️ [تطبیق واریانت‌ها] دریافت combinationهای محصول #{parent_id} "
+                f"({parent_sku or parent_name}) ناموفق بود: {exc}"
+            )
             combos = []
         for combo in combos:
             vid = int(combo.get("id") or 0)
@@ -1078,6 +1090,11 @@ def _fetch_ps_variations(
     ]
     _append_empty_parent_variation_rows(parents_list, rows, product_map)
     rows.sort(key=lambda r: (bool(r.synced), str(r.label or "")))
+    if grouped and combo_fetch_failures == len(grouped):
+        log.error(
+            f"❌ [تطبیق واریانت‌ها] دریافت combination برای هر {len(grouped)} محصول متغیر "
+            "ناموفق بود — لیست واریانت‌ها احتمالاً خالی/ناقصه. جزئیات خطا در لاگ‌های بالا."
+        )
     return rows
 
 

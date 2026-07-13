@@ -33,8 +33,20 @@ def get_active_store_site(config=None) -> dict | None:
 
 
 def get_store_display_name(config=None) -> str:
-    """نام فروشگاه فعال — از label سایت در تب تنظیمات یا هاست WC_URL."""
-    site = get_active_store_site(config)
+    """نام فروشگاه فعال — از label سایت در تب تنظیمات یا هاست WC_URL/PS_URL.
+
+    پروفایل‌های چندسایتیِ ذخیره‌شده (WC_SITES) فقط برای ووکامرس هستن —
+    پرستاشاپ هنوز این قابلیت رو نداره؛ پس وقتی پلتفرم فعال پرستاشاپه،
+    اصلاً سراغ WC_SITES نمی‌ریم (وگرنه یه پروفایل ووکامرسیِ قدیمی/باقی‌مونده
+    همیشه اول انتخاب می‌شد و هاست PS_URL هیچ‌وقت نمایش داده نمی‌شد)."""
+    cfg = resolved_store_config(config)
+    from sync_app.core.integrations.commerce_provider import is_prestashop
+
+    if is_prestashop(cfg):
+        host = host_from_url(str(cfg.get("PS_URL") or "").strip(), default="")
+        return host or "فروشگاه"
+
+    site = get_active_store_site(cfg)
     if site:
         label = site_display_label(site)
         url = str(site.get("url") or "").strip()
@@ -44,11 +56,7 @@ def get_store_display_name(config=None) -> str:
         if host:
             return host
 
-    cfg = resolved_store_config(config)
-    from sync_app.core.integrations.commerce_provider import is_prestashop
-
-    url_key = "PS_URL" if is_prestashop(cfg) else "WC_URL"
-    host = host_from_url(str(cfg.get(url_key) or "").strip(), default="")
+    host = host_from_url(str(cfg.get("WC_URL") or "").strip(), default="")
     return host or "فروشگاه"
 
 

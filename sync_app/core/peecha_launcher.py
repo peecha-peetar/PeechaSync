@@ -1073,12 +1073,12 @@ class PeechaLauncher(QWidget):
         self.sql_status_indicator.installEventFilter(self)
         header_layout.addWidget(self.sql_status_indicator, alignment=Qt.AlignVCenter)
 
-        self.wc_status_indicator = QLabel("Woo\n...")
+        self.wc_status_indicator = QLabel("...\n...")
         self.wc_status_indicator.setObjectName("headerWooStatus")
         self.wc_status_indicator.setProperty("role", "header-badge")
         self.wc_status_indicator.setAlignment(Qt.AlignCenter)
         self.wc_status_indicator.setCursor(Qt.PointingHandCursor)
-        self.wc_status_indicator.setToolTip("کلیک کنید تا به تنظیمات WooCommerce بروید")
+        self.wc_status_indicator.setToolTip("کلیک کنید تا به تنظیمات فروشگاه بروید")
         self.wc_status_indicator.setMinimumHeight(HEADER_BADGE_HEIGHT)
         self.wc_status_indicator.installEventFilter(self)
         header_layout.addWidget(self.wc_status_indicator, alignment=Qt.AlignVCenter)
@@ -1134,7 +1134,7 @@ class PeechaLauncher(QWidget):
             "⚖️ تطبیق",
             "reconciliation_tab",
             tab_factory("sync_app.core.tabs.tab_reconciliation", "ReconciliationTab"),
-            tooltip="مقایسه و تطبیق ERP با ووکامرس — برای فروشگاه‌های از قبل فعال",
+            tooltip="مقایسه و تطبیق ERP با فروشگاه — برای فروشگاه‌های از قبل فعال",
         )
         self._register_lazy_tab(
             "📄 لاگ‌ها",
@@ -2218,13 +2218,23 @@ class PeechaLauncher(QWidget):
         self.wc_status_indicator.setMinimumHeight(HEADER_BADGE_HEIGHT)
         self.sql_status_indicator.setMinimumHeight(HEADER_BADGE_HEIGHT)
 
+    def _store_badge_prefix(self) -> str:
+        from sync_app.core.integrations.commerce_provider import is_prestashop
+
+        cfg = load_secure_config(None) or {}
+        return "PS" if is_prestashop(cfg) else "Woo"
+
     def _wc_host_short(self) -> str:
         from urllib.parse import urlparse
 
+        from sync_app.core.integrations.commerce_provider import is_prestashop
         from sync_app.core.wc_api_helper import normalize_wc_store_url
 
         cfg = load_secure_config(None) or {}
-        base = normalize_wc_store_url(cfg.get("WC_URL", ""))
+        if is_prestashop(cfg):
+            base = str(cfg.get("PS_URL") or "").strip().rstrip("/")
+        else:
+            base = normalize_wc_store_url(cfg.get("WC_URL", ""))
         if not base:
             return "تنظیم نشده"
         host = urlparse(base).netloc
@@ -2233,16 +2243,23 @@ class PeechaLauncher(QWidget):
         return base.replace("https://", "").replace("http://", "").split("/")[0]
 
     def _wc_badge_lines(self, ok, *, pending=False) -> tuple[str, str]:
+        prefix = self._store_badge_prefix()
         if pending or ok is None:
-            return "Woo ...", "در حال بررسی..."
+            return f"{prefix} ...", "در حال بررسی..."
         if ok:
             host = self._wc_host_short()
             if self._wc_last_ms > 0:
-                return "Woo آنلاین", f"{host} · {self._wc_last_ms:.0f}ms"
-            return "Woo آنلاین", host
-        return wc_badge_offline_lines(self._wc_last_msg or "")
+                return f"{prefix} آنلاین", f"{host} · {self._wc_last_ms:.0f}ms"
+            return f"{prefix} آنلاین", host
+        return wc_badge_offline_lines(self._wc_last_msg or "", prefix=prefix)
 
     def _build_wc_tooltip(self, wc_ok: bool, wc_msg: str) -> str:
+        from sync_app.core.integrations.commerce_provider import is_prestashop, store_platform_label
+
+        cfg = load_secure_config(None) or {}
+        ps_mode = is_prestashop(cfg)
+        platform_label = store_platform_label(cfg)
+
         lines = []
         msg = (wc_msg or "").strip()
         if msg:
@@ -2250,14 +2267,17 @@ class PeechaLauncher(QWidget):
         if not wc_ok and msg:
             from sync_app.core.connectivity_service import wc_offline_tooltip
 
-            cfg = load_secure_config(None) or {}
-            hint = wc_offline_tooltip(msg, host=(cfg.get("WC_URL") or "").strip())
+            host_key = "PS_URL" if ps_mode else "WC_URL"
+            hint = wc_offline_tooltip(
+                msg, host=(cfg.get(host_key) or "").strip(),
+                target="PrestaShop" if ps_mode else "WooCommerce",
+            )
             if hint and hint not in lines:
                 lines.append(hint)
         age = connectivity_age_label_fa()
         if age:
             lines.append(f"آخرین بررسی: {age}")
-        lines.append("کلیک: تنظیمات ووکامرس")
+        lines.append(f"کلیک: تنظیمات {platform_label}")
         lines.append("دوبار کلیک: بررسی فوری")
         return "\n".join(lines)
 
@@ -2338,7 +2358,7 @@ class PeechaLauncher(QWidget):
         self._paint_header_badge(
             self.wc_status_indicator,
             ok,
-            "Woo",
+            self._store_badge_prefix(),
             sub,
             pending=pending,
             tooltip=tooltip,
@@ -2422,7 +2442,10 @@ class PeechaLauncher(QWidget):
             self._wc_probe_pending = True
             return
         if show_pending:
-            self._paint_wc_badge(None, pending=True, tooltip="در حال بررسی اتصال ووکامرس...")
+            from sync_app.core.integrations.commerce_provider import store_platform_label
+
+            platform_label = store_platform_label(load_secure_config(None) or {})
+            self._paint_wc_badge(None, pending=True, tooltip=f"در حال بررسی اتصال {platform_label}...")
         cfg = load_secure_config(None) or {}
         from sync_app.core.login_window import ConnectivityWorker
 
@@ -2573,7 +2596,7 @@ class PeechaLauncher(QWidget):
             self._paint_header_badge(
                 label,
                 self._wc_display_ok,
-                "Woo",
+                self._store_badge_prefix(),
                 sub,
                 pending=pending,
                 tooltip=getattr(self, "_wc_tooltip", ""),
@@ -2731,7 +2754,7 @@ class PeechaLauncher(QWidget):
             lines.append(f"📂 {counts['categories']:,} دسته‌بندی لینک نشده")
         body = "\n".join(lines) if lines else "موردی یافت نشد."
         QMessageBox.information(
-            self, "موارد بدون لینک به ووکامرس",
+            self, "موارد بدون لینک به فروشگاه",
             body + "\n\n(متغیرها عمداً اینجا نیست چون نگاشت دقیقی براشون نداریم — "
             "برای بررسی متغیرها، خودِ تب «متغیرها» و فیلتر لینک‌نشده رو ببینید.)\n\n"
             "برای دیدن ردیف‌های دقیق، از فیلتر «لینک‌نشده» در تب‌های محصولات/دسته‌بندی‌ها استفاده کنید.",
@@ -2775,8 +2798,13 @@ class PeechaLauncher(QWidget):
             group = getattr(config, "sql_group", None)
             test_btn = getattr(config, "sql_test_button", None)
         else:
+            from sync_app.core.integrations.commerce_provider import is_prestashop
+
             group = getattr(config, "wc_group", None)
-            test_btn = getattr(config, "wc_test_button", None)
+            if is_prestashop(load_secure_config(None) or {}):
+                test_btn = getattr(config, "ps_test_button", None)
+            else:
+                test_btn = getattr(config, "wc_test_button", None)
 
         if group is None:
             return

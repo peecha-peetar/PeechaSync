@@ -101,81 +101,86 @@ def _strip_wc_probe_msg(raw_msg: str) -> str:
     return detail.split("\n")[0].strip()
 
 
-def wc_badge_offline_lines(raw_msg: str) -> tuple[str, str]:
+def wc_badge_offline_lines(raw_msg: str, *, prefix: str = "Woo") -> tuple[str, str]:
     """
-    دو خط badge Woo وقتی آفلاین است.
+    دو خط badge فروشگاه (ووکامرس یا پرستاشاپ) وقتی آفلاین است.
     خط اول: عنوان | خط دوم: پیام دقیق خطا + اقدام.
+
+    پیام دقیق (raw_msg) از خودِ چک اتصال پلتفرم فعال میاد (چه ووکامرس چه
+    پرستاشاپ)، پس همیشه واقعیه — فقط برچسبِ عنوان (prefix) و چندتا پیشنهاد
+    اقدامِ خیلی WC-محور (مثل «از REST API کلید جدید بگیرید») هنوز عمومی
+    نشدن؛ برای پرستاشاپ ممکنه دقیق نباشن.
     """
     detail = _strip_wc_probe_msg(raw_msg)
     category = classify_network_error(raw_msg or detail)
 
     if "ناقص" in detail and "تنظیمات" in detail:
         return (
-            "Woo آفلاین · تنظیمات",
-            "URL یا Consumer Key/Secret خالی است — فرم را کامل کنید و ذخیره بزنید",
+            f"{prefix} آفلاین · تنظیمات",
+            "URL یا کلید API خالی است — فرم را کامل کنید و ذخیره بزنید",
         )
 
     if category == "auth":
-        exact = detail or "Consumer Key/Secret نامعتبر"
+        exact = detail or "کلید API نامعتبر"
         if any(k in exact.lower() for k in ("consumer", "401", "invalid signature")):
             exact = "Consumer Key/Secret نامعتبر"
         return (
-            "Woo آفلاین · کلید API",
-            f"{exact} — کلید منقضی/نامعتبر است؛ از REST API کلید جدید بگیرید",
+            f"{prefix} آفلاین · کلید API",
+            f"{exact} — کلید منقضی/نامعتبر است؛ کلید جدید بسازید",
         )
 
     if category == "vpn_tunnel":
         exact = detail[:90] if detail else "VPN/تونل ناقص"
         return (
-            "Woo آفلاین · VPN/Docker",
+            f"{prefix} آفلاین · VPN/Docker",
             f"{exact} — VPN را Exit کنید، Docker را ببندید، دوباره تست کنید",
         )
 
     if category == "timeout":
         exact = detail or "timeout"
         return (
-            "Woo آفلاین · Timeout",
+            f"{prefix} آفلاین · Timeout",
             f"{exact} — شبکه کند یا فیلتر/VPN؛ اتصال را عوض کنید",
         )
 
     if category == "dns":
         exact = detail or "DNS"
         return (
-            "Woo آفلاین · DNS",
+            f"{prefix} آفلاین · DNS",
             f"{exact} — اینترنت/DNS را چک کنید یا VPN را قطع/وصل کنید",
         )
 
     if category == "ssl":
         exact = detail or "SSL"
         return (
-            "Woo آفلاین · SSL",
+            f"{prefix} آفلاین · SSL",
             f"{exact} — VPN را قطع/وصل کنید یا SSL را در تنظیمات بررسی کنید",
         )
 
     if category == "forbidden" or "403" in (raw_msg or "").lower():
         exact = detail or "HTTP 403"
         return (
-            "Woo آفلاین · 403",
-            f"{exact} — کلید API باید مربوط به همین فروشگاه (WC_URL) در تنظیمات باشد",
+            f"{prefix} آفلاین · 403",
+            f"{exact} — کلید API باید مربوط به همین فروشگاه در تنظیمات باشد",
         )
 
     if category == "refused":
         exact = detail or "اتصال رد شد"
         return (
-            "Woo آفلاین · دسترسی",
+            f"{prefix} آفلاین · دسترسی",
             f"{exact} — فایروال یا پورت بسته",
         )
 
     if "404" in (raw_msg or "").lower() or "404" in detail:
         return (
-            "Woo آفلاین · آدرس API",
-            "آدرس API پیدا نشد (404) — WC_URL را در تنظیمات بررسی کنید",
+            f"{prefix} آفلاین · آدرس API",
+            "آدرس API پیدا نشد (404) — آدرس سایت را در تنظیمات بررسی کنید",
         )
 
     if detail:
-        return ("Woo آفلاین", f"{detail} — تنظیمات و شبکه را بررسی کنید")
+        return (f"{prefix} آفلاین", f"{detail} — تنظیمات و شبکه را بررسی کنید")
 
-    return ("Woo آفلاین", "اتصال برقرار نشد — «تست اتصال ووکامرس» را بزنید")
+    return (f"{prefix} آفلاین", "اتصال برقرار نشد — «تست اتصال» را بزنید")
 
 
 def save_connectivity_cache(
@@ -643,11 +648,11 @@ def probe_all_robust(
     }
 
 
-def wc_offline_tooltip(raw_msg: str, *, host: str = "") -> str:
-    """متن tooltip/badge برای قطع ووکامرس — با تشخیص VPN در صورت امکان."""
+def wc_offline_tooltip(raw_msg: str, *, host: str = "", target: str = "WooCommerce") -> str:
+    """متن tooltip/badge برای قطع فروشگاه (ووکامرس یا پرستاشاپ) — با تشخیص VPN در صورت امکان."""
     from sync_app.core.network_route_check import host_from_url
 
     host_label = host_from_url(host) if "://" in (host or "") else (host or "").strip()
     if not host_label:
         host_label = "فروشگاه"
-    return describe_offline_reason(raw_msg, target="WooCommerce", host=host_label)
+    return describe_offline_reason(raw_msg, target=target, host=host_label)
