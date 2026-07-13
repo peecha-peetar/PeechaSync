@@ -1,7 +1,7 @@
 from PyQt5.QtWidgets import (
     QWidget, QFormLayout, QLineEdit, QLabel, QPushButton,
     QHBoxLayout, QMessageBox, QComboBox, QVBoxLayout, QGroupBox, QScrollArea, QPlainTextEdit, QGridLayout, QCheckBox,
-    QApplication, QFileDialog, QSpinBox, QDoubleSpinBox, QListWidget, QListWidgetItem,
+    QApplication, QFileDialog, QSpinBox, QDoubleSpinBox, QListWidget, QListWidgetItem, QLayout,
 )
 from PyQt5.QtCore import Qt, QObject, QThread, pyqtSignal, QPropertyAnimation, QEasingCurve, QTimer, QUrl
 from PyQt5.QtGui import QDesktopServices
@@ -858,9 +858,10 @@ class SettingsTab(QWidget):
         app_group = QGroupBox("تنظیمات عمومی")
         app_layout = QFormLayout()
 
-        wc_group = QGroupBox("تنظیمات WooCommerce")
+        wc_group = QGroupBox("تنظیمات فروشگاه")
         wc_group.setLayoutDirection(Qt.LeftToRight)
         wc_form_layout = QFormLayout()
+        self.wc_form_layout = wc_form_layout
 
         # تنظیمات عمومی فارسی → لیبل راست-چین
         for layout in [app_layout]:
@@ -1331,14 +1332,17 @@ class SettingsTab(QWidget):
         self.store_platform_combo.setCurrentIndex(_platform_idx if _platform_idx >= 0 else 0)
 
         platform_help = QLabel(
-            "فیلدهای زیر مخصوص ووکامرس‌اند و اگر پلتفرم روی پرستاشاپ باشد استفاده نمی‌شوند — "
-            "برای پرستاشاپ، آدرس و کلید Webservice را در بخش «پرستاشاپ» پایین‌تر وارد کنید."
+            "با انتخاب پلتفرم، فقط فیلدهای همان پلتفرم نمایش داده می‌شوند."
         )
         platform_help.setStyleSheet("color:#64748b; font-size:10px;")
         platform_help.setWordWrap(True)
 
         wc_form_layout.addRow(QLabel("پلتفرم فروشگاه:"), self.store_platform_combo)
         wc_form_layout.addRow(QLabel(""), platform_help)
+
+        wc_section_label = QLabel("ووکامرس (WooCommerce)")
+        wc_section_label.setStyleSheet("font-weight:700; margin-top:10px;")
+        wc_form_layout.addRow(QLabel(""), wc_section_label)
 
         wc_form_layout.addRow(QLabel("سایت فعال:"), wc_site_row)
         wc_form_layout.addRow(QLabel("نام پروفایل:"), self.wc_site_name_input)
@@ -1419,6 +1423,30 @@ class SettingsTab(QWidget):
         wc_form_layout.addRow(english_caption("Webservice API Key:"), self.ps_api_key_input)
         wc_form_layout.addRow(QLabel(""), ps_api_help)
         wc_form_layout.addRow(QLabel(""), self.ps_test_button)
+
+        # --- نمایش/مخفی‌کردن فیلدهای مخصوص هر پلتفرم بر اساس store_platform_combo ---
+        # currency_combo/product_mode_combo عمداً اینجا نیستن — این دو مشترک بین هر
+        # دو پلتفرمن (تبدیل قیمت ERP و نوع محصول)، نه مخصوص ووکامرس.
+        self._wc_only_fields = [
+            wc_section_label,
+            wc_site_row, self.wc_site_name_input, wc_sites_help,
+            self.url_input, self.ck_input, self.cs_input,
+            wc_api_help, self.wc_api_keys_button,
+            wp_username_row, self.wp_app_password_input, wp_help,
+            self.wp_app_password_button, self.wp_test_button,
+            self.timeout_input,
+            site_currency_row, self.site_currency_label, self.site_currency_refresh_btn,
+            wc_test_widget, wc_setup_help,
+        ]
+        self._ps_only_fields = [
+            ps_section_label,
+            self.ps_url_input, self.ps_api_key_input,
+            ps_api_help, self.ps_test_button,
+        ]
+        self.store_platform_combo.currentIndexChanged.connect(
+            lambda _idx: self._apply_platform_field_visibility()
+        )
+        self._apply_platform_field_visibility()
 
         self.monitor_group = QGroupBox("مانیتورینگ عملیات اتصال")
         monitor_layout = QVBoxLayout()
@@ -2921,6 +2949,29 @@ class SettingsTab(QWidget):
             "WC_READ_TIMEOUT": timeout_sec,
             "WC_VERIFY_SSL": bool((self.config or {}).get("WC_VERIFY_SSL", False)),
         }
+
+    def _set_form_field_visible(self, field, visible: bool):
+        """یک ردیف QFormLayout (widget یا layout) رو همراه لیبلش نشون/مخفی می‌کنه."""
+        layout = getattr(self, "wc_form_layout", None)
+        label = layout.labelForField(field) if layout is not None else None
+        if label is not None:
+            label.setVisible(visible)
+        if isinstance(field, QLayout):
+            for i in range(field.count()):
+                w = field.itemAt(i).widget()
+                if w is not None:
+                    w.setVisible(visible)
+        elif field is not None:
+            field.setVisible(visible)
+
+    def _apply_platform_field_visibility(self):
+        """با انتخاب پلتفرم، فیلدهای مخصوص ووکامرس/پرستاشاپ رو جدا نشون می‌ده."""
+        platform = self.store_platform_combo.currentData() or "woocommerce"
+        is_ps = platform == "prestashop"
+        for field in getattr(self, "_wc_only_fields", []):
+            self._set_form_field_visible(field, not is_ps)
+        for field in getattr(self, "_ps_only_fields", []):
+            self._set_form_field_visible(field, is_ps)
 
     def _ps_config_from_form(self):
         return {
