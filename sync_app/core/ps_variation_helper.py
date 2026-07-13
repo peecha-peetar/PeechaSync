@@ -36,6 +36,7 @@ from sync_app.core.ps_sync_helper import (
     ps_call,
     ps_rest_request,
     ps_set_stock_quantity,
+    ps_list_stock_availables_by_attribute,
 )
 
 
@@ -515,6 +516,15 @@ def ps_sync_product_variations(
 
     has_default = any(c.get("default_on") for c in existing_by_ref.values())
 
+    # پیش‌واکشیِ یک‌جای موجودیِ همه‌ی ترکیب‌های این محصول — به‌جای یک GET جدا
+    # به‌ازای هر واریانت (که سرعت سینک رو خیلی پایین می‌آورد)؛ فقط برای
+    # ترکیب‌هایی که از قبل وجود دارن جواب می‌ده (ترکیب‌های تازه‌ساخته‌شده تو
+    # همین دور، طبق معمول با یک GET جدا داخل ps_set_stock_quantity هندل می‌شن).
+    try:
+        stock_rows_by_attr = ps_list_stock_availables_by_attribute(config, product_id, timeout=timeout)
+    except Exception:
+        stock_rows_by_attr = {}
+
     from sync_app.core.stock_mode import (
         STOCK_MODE_ALWAYS, STOCK_MODE_DOWNLOAD, resolve_variation_stock_mode,
         get_variation_stock_mode_override, get_product_stock_mode_override,
@@ -590,7 +600,7 @@ def ps_sync_product_variations(
                     has_default = True
             ps_set_stock_quantity(
                 config, product_id, stock_qty, product_attribute_id=combo_id,
-                out_of_stock=stock_out_of_stock, timeout=timeout,
+                out_of_stock=stock_out_of_stock, known_row=stock_rows_by_attr.get(combo_id), timeout=timeout,
             )
             ok_count += 1
             log.info(f"▸ [{a_code}] واریانت {sku} → قیمت={var_price:g} / موجودی={stock_qty}")

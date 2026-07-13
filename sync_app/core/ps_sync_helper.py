@@ -703,38 +703,6 @@ def ps_update_product(
         lambda: ps_rest_request(cfg, "PUT", f"products/{int(product_id)}", xml_body=body, timeout=timeout),
     )
     _raise_for_status(resp2, f"به‌روزرسانی محصول #{product_id}")
-
-    if out_of_stock is not None or has_variants is not None:
-        # تأیید تشخیصی: آیا فیلدهای out_of_stock/product_type خودِ محصول
-        # (نه stock_availables) واقعاً روی این نصبِ پرستاشاپ نوشتنی/معتبرن؟
-        # بعضی فروشگاه‌ها ممکنه این فیلدها رو روی ریسورس محصول نادیده بگیرن.
-        try:
-            from sync_app.core.sync_utils import log
-
-            verify_resp = ps_rest_request(cfg, "GET", f"products/{int(product_id)}", timeout=timeout)
-            verify_current = _response_json(verify_resp, f"تأیید محصول #{product_id}").get("product") or {}
-            if out_of_stock is not None:
-                actual = verify_current.get("out_of_stock")
-                if str(actual) != str(int(out_of_stock)):
-                    log.warning(
-                        f"⚠️ [تأیید] محصول #{product_id}: فیلد out_of_stock خودِ محصول رو {out_of_stock} "
-                        f"فرستادیم ولی فروشگاه {actual!r} برمی‌گردونه — این فیلد شاید روی این نصب نوشتنی نباشه."
-                    )
-                else:
-                    log.info(f"✔️ [تأیید] محصول #{product_id}: فیلد out_of_stock خودِ محصول = {actual} (مطابق انتظار)")
-            if has_variants is not None:
-                expected_type = "combinations" if has_variants else "standard"
-                actual_type = verify_current.get("product_type")
-                if str(actual_type) != expected_type:
-                    log.warning(
-                        f"⚠️ [تأیید] محصول #{product_id}: product_type رو «{expected_type}» فرستادیم ولی "
-                        f"فروشگاه {actual_type!r} برمی‌گردونه — پنل ادمین شاید ترکیب‌های این محصول رو نبینه."
-                    )
-                else:
-                    log.info(f"✔️ [تأیید] محصول #{product_id}: product_type={actual_type} (مطابق انتظار)")
-        except Exception as verify_exc:
-            log.warning(f"⚠️ [تأیید] محصول #{product_id}: خواندنِ دوباره ناموفق بود: {verify_exc}")
-
     return {"id": int(product_id), "sku": final_sku, "name": final_name, "type": "simple"}
 
 
@@ -942,6 +910,44 @@ def _ps_fetch_stock_available_row(config, product_id: int, *, product_attribute_
     }
 
 
+def ps_list_stock_availables_by_attribute(config, product_id: int, *, timeout=None) -> dict:
+    """{id_product_attribute: row} برای همه‌ی ترکیب‌های یک محصول (+ خودِ محصول،
+    attribute=0) — با یک درخواست. برای سینک واریانت‌ها به‌کار می‌ره تا به‌جای
+    یک GET جدا برای هر واریانت (که سرعت رو خیلی پایین می‌آورد)، همه‌شون
+    یک‌جا واکشی بشن و ps_set_stock_quantity دیگه نیازی به GET نداشته باشه."""
+    cfg = config or {}
+    resp = ps_call(
+        f"دریافت موجودی‌های محصول #{product_id}",
+        lambda: ps_rest_request(
+            cfg, "GET", "stock_availables",
+            params={"filter[id_product]": f"[{int(product_id)}]", "display": "full", "limit": "0,300"},
+            timeout=timeout,
+        ),
+    )
+    data = _response_json(resp, f"دریافت موجودی‌های محصول #{product_id}")
+    rows = _unwrap_list(data, "stock_availables")
+    grouped: dict[int, list[dict]] = {}
+    for row in rows:
+        attr_id = int(row.get("id_product_attribute") or 0)
+        grouped.setdefault(attr_id, []).append(row)
+
+    out: dict[int, dict] = {}
+    for attr_id, attr_rows in grouped.items():
+        picked = _pick_shop_stock_available_row(attr_rows)
+        if not picked:
+            continue
+        sid = int(picked.get("id") or 0)
+        if not sid:
+            continue
+        out[attr_id] = {
+            "id": sid,
+            "quantity": int(picked.get("quantity") or 0),
+            "id_shop": int(picked.get("id_shop") or 0),
+            "id_shop_group": int(picked.get("id_shop_group") or 0),
+        }
+    return out
+
+
 def ps_get_stock_available(config, product_id: int, *, product_attribute_id: int = 0, timeout=None):
     """(stock_available_id, quantity) برای یک محصول ساده (بدون combination) —
     نسخه‌ی سبک _ps_fetch_stock_available_row، برای کالرهایی که فقط شناسه و
@@ -956,7 +962,7 @@ def ps_get_stock_available(config, product_id: int, *, product_attribute_id: int
 
 def ps_set_stock_quantity(
     config, product_id: int, quantity: int, *, product_attribute_id: int = 0,
-    out_of_stock: int = 2, timeout=None,
+    out_of_stock: int = 2, known_row: dict | None = None, timeout=None,
 ) -> bool:
     """
     out_of_stock کنترل می‌کنه که با موجودیِ صفر، خرید از سایت مجاز باشه یا نه:
@@ -967,9 +973,13 @@ def ps_set_stock_quantity(
           می‌شه، اینجا باید صریح ست بشه، چون پیش‌فرض «طبق تنظیم فروشگاه»
           الزاماً همین معنی رو نداره)
       2 = طبق تنظیم پیش‌فرض فروشگاه (Preferences > Products)
+
+    known_row: اگه از قبل (مثلاً از ps_list_stock_availables_by_attribute)
+    id/id_shop/id_shop_group این رکورد رو داریم، پاسش می‌دیم تا یک GET جدا
+    این‌جا لازم نباشه — برای سینک واریانت‌های زیاد، این تفاوت سرعت زیادی داره.
     """
     cfg = config or {}
-    stock_row = _ps_fetch_stock_available_row(
+    stock_row = known_row or _ps_fetch_stock_available_row(
         cfg, product_id, product_attribute_id=product_attribute_id, timeout=timeout,
     )
     if not stock_row:
@@ -1002,64 +1012,6 @@ def ps_set_stock_quantity(
         lambda: ps_rest_request(cfg, "PUT", f"stock_availables/{sid}", xml_body=body, timeout=timeout),
     )
     _raise_for_status(resp, f"به‌روزرسانی موجودی محصول #{product_id}")
-
-    # تأیید تشخیصی: بلافاصله بعد از نوشتن، دوباره می‌خونیم تا مطمئن بشیم
-    # مقداری که واقعاً روی فروشگاه ذخیره شده با چیزی که فرستادیم یکیه — یه
-    # مورد واقعی دیده شده که برنامه موفقیت لاگ می‌کرد ولی پنل پرستاشاپ
-    # مقدار متفاوتی (رد سفارشات) نشون می‌داد. بدون فیلتر id_shop می‌خونیم و
-    # limit رو بالا می‌بریم — چون پرستاشاپ (خصوصاً نسخه‌های جدید، چند
-    # فروشگاهی زیرساختی) ممکنه بیش از یک رکورد stock_availables برای همین
-    # (product, attribute) داشته باشه (یکی به‌ازای هر شاپ) و پنل ادمین از
-    # رکورد شاپِ فعال بخونه، نه لزوماً همونی که ما با limit=0,1 گرفتیم.
-    try:
-        from sync_app.core.sync_utils import log
-
-        verify_resp = ps_rest_request(
-            cfg, "GET", "stock_availables",
-            params={
-                "filter[id_product]": f"[{int(product_id)}]",
-                "filter[id_product_attribute]": f"[{int(product_attribute_id)}]",
-                "display": "full", "limit": "0,20",
-            },
-            timeout=timeout,
-        )
-        verify_rows = _unwrap_list(_response_json(verify_resp, "تأیید موجودی"), "stock_availables")
-        if verify_rows:
-            if len(verify_rows) > 1:
-                log.info(
-                    f"ℹ️ [تأیید] #{product_id}: {len(verify_rows)} رکورد stock_availables برای همین محصول "
-                    "پیدا شد (چندشاپی) — رکوردی که واقعاً نوشتیم رو با id چک می‌کنیم، نه فقط اولی رو:"
-                )
-            for row in verify_rows:
-                log.info(
-                    f"    stock_availables id={row.get('id')} id_shop={row.get('id_shop')!r} "
-                    f"id_shop_group={row.get('id_shop_group')!r} out_of_stock={row.get('out_of_stock')!r} "
-                    f"quantity={row.get('quantity')!r}"
-                )
-            # همون رکوردی که PUT کردیم (sid) رو دقیق پیدا می‌کنیم — نه صرفاً
-            # اولین رکورد لیست — چون توی چندشاپی، رکورد اول لزوماً همونی
-            # نیست که ما نوشتیم.
-            written_row = next((r for r in verify_rows if int(r.get("id") or 0) == sid), None)
-            if written_row is None:
-                log.warning(f"⚠️ [تأیید] #{product_id}: رکورد id={sid} که نوشتیم دیگه توی نتیجه نیست!")
-            else:
-                actual_oos = written_row.get("out_of_stock")
-                actual_qty = written_row.get("quantity")
-                if str(actual_oos) != str(int(out_of_stock)):
-                    log.warning(
-                        f"⚠️ [تأیید] #{product_id} (رکورد id={sid}): نوشتیم out_of_stock={out_of_stock} ولی "
-                        f"فروشگاه الان {actual_oos!r} برمی‌گردونه (quantity={actual_qty!r}) — با هم فرق دارن!"
-                    )
-                else:
-                    log.info(
-                        f"✔️ [تأیید] #{product_id} (رکورد id={sid}): "
-                        f"stock_availables.out_of_stock={actual_oos} (مطابق انتظار)"
-                    )
-        else:
-            log.warning(f"⚠️ [تأیید] #{product_id}: بعد از نوشتن، رکورد stock_availables دیگه پیدا نشد.")
-    except Exception as verify_exc:
-        log.warning(f"⚠️ [تأیید] #{product_id}: خواندنِ دوباره برای تأیید ناموفق بود: {verify_exc}")
-
     return True
 
 
