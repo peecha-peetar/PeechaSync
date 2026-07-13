@@ -765,7 +765,20 @@ def ps_get_stock_available(config, product_id: int, *, product_attribute_id: int
     return sid, qty
 
 
-def ps_set_stock_quantity(config, product_id: int, quantity: int, *, product_attribute_id: int = 0, timeout=None) -> bool:
+def ps_set_stock_quantity(
+    config, product_id: int, quantity: int, *, product_attribute_id: int = 0,
+    out_of_stock: int = 2, timeout=None,
+) -> bool:
+    """
+    out_of_stock کنترل می‌کنه که با موجودیِ صفر، خرید از سایت مجاز باشه یا نه:
+      0 = رد سفارش (موجودی واقعی، همون رفتار پیش‌فرضِ ووکامرس برای
+          manage_stock=True بدون backorder)
+      1 = اجازه‌ی سفارش با وجود موجودیِ صفر (معادل «همیشه موجود»/«دانلودی»
+          ووکامرس — آنجا با manage_stock=False + stock_status=instock انجام
+          می‌شه، اینجا باید صریح ست بشه، چون پیش‌فرض «طبق تنظیم فروشگاه»
+          الزاماً همین معنی رو نداره)
+      2 = طبق تنظیم پیش‌فرض فروشگاه (Preferences > Products)
+    """
     cfg = config or {}
     sid, _qty = ps_get_stock_available(cfg, product_id, product_attribute_id=product_attribute_id, timeout=timeout)
     if not sid:
@@ -779,11 +792,9 @@ def ps_set_stock_quantity(config, product_id: int, quantity: int, *, product_att
         _set_text(node, "id_product", int(product_id))
         _set_text(node, "id_product_attribute", int(product_attribute_id))
         _set_text(node, "quantity", int(quantity))
-        # هر دو فیلد رو Webservice پرستاشاپ برای PUT stock_availables اجباری می‌دونه —
-        # depends_on_stock=0 یعنی موجودی مستقیم از quantity میاد (نه انبار پیشرفته)،
-        # out_of_stock=2 یعنی طبق تنظیم پیش‌فرض فروشگاه (Preferences > Products) عمل کن.
+        # depends_on_stock=0 یعنی موجودی مستقیم از quantity میاد (نه انبار پیشرفته).
         _set_text(node, "depends_on_stock", 0)
-        _set_text(node, "out_of_stock", 2)
+        _set_text(node, "out_of_stock", int(out_of_stock))
 
     body = _build_xml("stock_available", _build)
     resp = ps_call(

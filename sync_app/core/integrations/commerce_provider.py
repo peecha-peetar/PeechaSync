@@ -239,10 +239,13 @@ def _ps_apply_stock_from_payload(config, product_id, body, timeout):
             qty = int(body.get("stock_quantity") or 0)
         except (TypeError, ValueError):
             qty = 0
-        ps_set_stock_quantity(config, product_id, qty, timeout=timeout)
+        # حالت «بر اساس موجودی دیتابیس» — با صفر شدن موجودی، سفارش رد بشه
+        # (معادل رفتار پیش‌فرض ووکامرس برای manage_stock=True بدون backorder).
+        ps_set_stock_quantity(config, product_id, qty, out_of_stock=0, timeout=timeout)
     elif body.get("manage_stock") is False:
-        # «همیشه موجود» / «دانلودی» — موجودی زیاد تا سفارش رد نشود
-        ps_set_stock_quantity(config, product_id, 9999, timeout=timeout)
+        # «همیشه موجود» / «دانلودی» — با موجودیِ صفر هم سفارش مجاز باشه
+        # (out_of_stock=1)، نه فقط یک عدد بزرگ که بالاخره روزی تموم بشه.
+        ps_set_stock_quantity(config, product_id, 9999, out_of_stock=1, timeout=timeout)
 
 
 def _ps_product_create_from_payload(config, body, timeout):

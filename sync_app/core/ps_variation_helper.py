@@ -557,9 +557,13 @@ def ps_sync_product_variations(
         except (TypeError, ValueError):
             raw_stock_qty = 0
         v_mode = resolve_variation_stock_mode(sku, a_code, matched_group, config or {})
-        # «همیشه موجود»/«دانلودی» — موجودی زیاد تا سفارش رد نشه (همون منطق
-        # محصول ساده در commerce_provider._ps_apply_stock_from_payload).
-        stock_qty = 9999 if v_mode in (STOCK_MODE_ALWAYS, STOCK_MODE_DOWNLOAD) else raw_stock_qty
+        # «همیشه موجود»/«دانلودی» — سفارش با موجودیِ صفر هم مجاز باشه
+        # (out_of_stock=1)، نه فقط یک عدد بزرگ که بالاخره تموم بشه؛ حالت
+        # دیتابیس با صفر شدن موجودی سفارش رو رد می‌کنه (out_of_stock=0) —
+        # دقیقاً همون منطق محصول ساده در commerce_provider._ps_apply_stock_from_payload.
+        always_available = v_mode in (STOCK_MODE_ALWAYS, STOCK_MODE_DOWNLOAD)
+        stock_qty = 9999 if always_available else raw_stock_qty
+        stock_out_of_stock = 1 if always_available else 0
 
         try:
             existing_combo = existing_by_ref.get(sku)
@@ -576,7 +580,10 @@ def ps_sync_product_variations(
                 )
                 if is_default:
                     has_default = True
-            ps_set_stock_quantity(config, product_id, stock_qty, product_attribute_id=combo_id, timeout=timeout)
+            ps_set_stock_quantity(
+                config, product_id, stock_qty, product_attribute_id=combo_id,
+                out_of_stock=stock_out_of_stock, timeout=timeout,
+            )
             ok_count += 1
             log.info(f"▸ [{a_code}] واریانت {sku} → قیمت={var_price:g} / موجودی={stock_qty}")
         except Exception as exc:
