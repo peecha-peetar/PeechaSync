@@ -1205,47 +1205,66 @@ class ProductTab(QWidget):
                 row_widget.set_wc_image_count(self._wc_image_count_cache[sku])
 
     def _delete_product_from_wc(self, sku, item, product_name=""):
+        from sync_app.core.integrations.commerce_provider import (
+            is_prestashop, store_platform_label,
+        )
+
+        config = load_secure_config(None) or {}
+        ps_mode = is_prestashop(config)
         product_map = load_product_woo_map()
         wc_id = product_map.get(sku)
         if not wc_id:
             QMessageBox.information(
                 self, "لینک نشده",
-                f"محصول {sku} اصلاً به ووکامرس لینک نشده — چیزی برای حذف روی سایت نیست.",
+                f"محصول {sku} اصلاً به {store_platform_label(config)} لینک نشده — چیزی برای حذف روی سایت نیست.",
             )
             return
 
-        box = QMessageBox(self)
-        box.setWindowTitle("حذف محصول از ووکامرس")
-        box.setText(
-            f"محصول «{product_name or sku}» (کد {sku}) از سایت حذف بشه؟\n\n"
-            "🗑️ زباله‌دان: قابل بازیابی از پنل وردپرس تا وقتی خودتون خالی‌اش کنید.\n"
-            "⚠️ حذف کامل: برای همیشه پاک می‌شه، هیچ راه بازگشتی نداره."
-        )
-        trash_btn = box.addButton("🗑️ انتقال به زباله‌دان", QMessageBox.ActionRole)
-        perm_btn = box.addButton("⚠️ حذف کامل و همیشگی", QMessageBox.DestructiveRole)
-        box.addButton("انصراف", QMessageBox.RejectRole)
-        box.setIcon(QMessageBox.Warning)
-        box.exec_()
-        clicked = box.clickedButton()
-        if clicked not in (trash_btn, perm_btn):
-            return
-        force = clicked is perm_btn
-
-        if force:
-            confirm2 = ask_yes_no(
-                self, "تأیید نهایی حذف کامل",
-                f"مطمئنید؟ محصول «{product_name or sku}» برای همیشه از ووکامرس پاک می‌شه "
-                "و هیچ راه بازگردانی‌ای نداره.",
+        if ps_mode:
+            # پرستاشاپ زباله‌دان (soft-delete) نداره — فقط حذف کامل.
+            confirmed = ask_yes_no(
+                self, "حذف محصول از پرستاشاپ",
+                f"محصول «{product_name or sku}» (کد {sku}) برای همیشه از پرستاشاپ پاک بشه؟\n"
+                "هیچ راه بازگردانی‌ای نداره.",
                 icon=QMessageBox.Warning,
             )
-            if not confirm2:
+            if not confirmed:
                 return
+            force = True
+        else:
+            box = QMessageBox(self)
+            box.setWindowTitle("حذف محصول از ووکامرس")
+            box.setText(
+                f"محصول «{product_name or sku}» (کد {sku}) از سایت حذف بشه؟\n\n"
+                "🗑️ زباله‌دان: قابل بازیابی از پنل وردپرس تا وقتی خودتون خالی‌اش کنید.\n"
+                "⚠️ حذف کامل: برای همیشه پاک می‌شه، هیچ راه بازگشتی نداره."
+            )
+            trash_btn = box.addButton("🗑️ انتقال به زباله‌دان", QMessageBox.ActionRole)
+            perm_btn = box.addButton("⚠️ حذف کامل و همیشگی", QMessageBox.DestructiveRole)
+            box.addButton("انصراف", QMessageBox.RejectRole)
+            box.setIcon(QMessageBox.Warning)
+            box.exec_()
+            clicked = box.clickedButton()
+            if clicked not in (trash_btn, perm_btn):
+                return
+            force = clicked is perm_btn
 
-        config = load_secure_config(None) or {}
+            if force:
+                confirm2 = ask_yes_no(
+                    self, "تأیید نهایی حذف کامل",
+                    f"مطمئنید؟ محصول «{product_name or sku}» برای همیشه از ووکامرس پاک می‌شه "
+                    "و هیچ راه بازگردانی‌ای نداره.",
+                    icon=QMessageBox.Warning,
+                )
+                if not confirm2:
+                    return
 
         def _worker():
-            apply_network_overrides(config)
-            wcapi = build_wcapi(config)
+            from sync_app.core.integrations.commerce_provider import build_store_api
+
+            if not ps_mode:
+                apply_network_overrides(config)
+            wcapi = build_store_api(config)
             resp = wcapi.delete(f"products/{int(wc_id)}", params={"force": force})
             if int(getattr(resp, "status_code", 0) or 0) >= 400:
                 raise RuntimeError(wc_http_error_message(resp))

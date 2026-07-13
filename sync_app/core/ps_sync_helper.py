@@ -595,6 +595,19 @@ def ps_update_product(
     return {"id": int(product_id), "sku": final_sku, "name": final_name, "type": "simple"}
 
 
+def ps_delete_product(config, product_id: int, *, timeout=None) -> bool:
+    """حذف کامل محصول — پرستاشاپ برخلاف ووکامرس زباله‌دان (soft-delete) نداره."""
+    cfg = config or {}
+    resp = ps_call(
+        f"حذف محصول #{product_id}",
+        lambda: ps_rest_request(cfg, "DELETE", f"products/{int(product_id)}", timeout=timeout),
+    )
+    if getattr(resp, "status_code", 0) == 404:
+        return True
+    _raise_for_status(resp, f"حذف محصول #{product_id}")
+    return True
+
+
 def _slugify_reference(sku: str) -> str:
     text = re.sub(r"[^a-zA-Z0-9]+", "-", str(sku or "").strip()).strip("-").lower()
     return text or "product"

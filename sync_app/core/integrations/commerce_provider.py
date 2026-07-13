@@ -405,6 +405,19 @@ def _ps_dispatch(config, method: str, path: str, *, params=None, json_body=None,
                 return data
             if method == "PUT":
                 return _ps_product_update_from_payload(config, pid, body, timeout)
+            if method == "DELETE":
+                from sync_app.core.ps_sync_helper import ps_delete_product
+
+                ps_delete_product(config, pid, timeout=timeout)
+                return {"id": pid, "deleted": True}
+
+    elif clean_path.startswith("combinations/"):
+        cid_str = clean_path.rsplit("/", 1)[-1]
+        if cid_str.isdigit() and method == "DELETE":
+            from sync_app.core.ps_variation_helper import ps_delete_combination
+
+            ps_delete_combination(config, int(cid_str), timeout=timeout)
+            return {"id": int(cid_str), "deleted": True}
 
     raise PrestaShopAPIError(
         f"عملیات '{method} /{clean_path}' هنوز برای پرستاشاپ پیاده‌سازی نشده است "

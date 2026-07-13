@@ -378,6 +378,19 @@ def ps_update_combination(
     _raise_for_status(resp, f"به‌روزرسانی ترکیب واریانت #{combination_id}")
 
 
+def ps_delete_combination(config, combination_id: int, *, timeout=None) -> bool:
+    """حذف کامل یک ترکیب واریانت — پرستاشاپ زباله‌دان نداره."""
+    cfg = config or {}
+    resp = ps_call(
+        f"حذف ترکیب واریانت #{combination_id}",
+        lambda: ps_rest_request(cfg, "DELETE", f"combinations/{int(combination_id)}", timeout=timeout),
+    )
+    if getattr(resp, "status_code", 0) == 404:
+        return True
+    _raise_for_status(resp, f"حذف ترکیب واریانت #{combination_id}")
+    return True
+
+
 # ---------------------------------------------------------------------------
 # ارکستراتور — معادل sync_product_variations ووکامرس
 # ---------------------------------------------------------------------------

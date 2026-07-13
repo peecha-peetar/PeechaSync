@@ -1003,44 +1003,72 @@ class VariationsTab(QWidget):
         run_in_thread(_worker, on_complete=_done, on_error=_fail)
 
     def _delete_variation_from_wc(self, parent_sku, variant_sku, display_name=""):
+        from sync_app.core.integrations.commerce_provider import (
+            is_prestashop, store_platform_label,
+        )
+
+        config = load_secure_config(None) or {}
+        ps_mode = is_prestashop(config)
         product_map = load_product_woo_map()
         parent_wc_id = product_map.get(parent_sku)
         if not parent_wc_id:
             QMessageBox.information(
                 self, "لینک نشده",
-                f"محصول والدِ {variant_sku} (کد {parent_sku}) اصلاً به ووکامرس لینک نشده.",
+                f"محصول والدِ {variant_sku} (کد {parent_sku}) اصلاً به "
+                f"{store_platform_label(config)} لینک نشده.",
             )
             return
 
-        box = QMessageBox(self)
-        box.setWindowTitle("حذف واریانت از ووکامرس")
-        box.setText(
-            f"واریانت «{display_name or variant_sku}» از سایت حذف بشه؟\n\n"
-            "🗑️ زباله‌دان: قابل بازیابی از پنل وردپرس تا وقتی خودتون خالی‌اش کنید.\n"
-            "⚠️ حذف کامل: برای همیشه پاک می‌شه، هیچ راه بازگشتی نداره."
-        )
-        trash_btn = box.addButton("🗑️ انتقال به زباله‌دان", QMessageBox.ActionRole)
-        perm_btn = box.addButton("⚠️ حذف کامل و همیشگی", QMessageBox.DestructiveRole)
-        box.addButton("انصراف", QMessageBox.RejectRole)
-        box.setIcon(QMessageBox.Warning)
-        box.exec_()
-        clicked = box.clickedButton()
-        if clicked not in (trash_btn, perm_btn):
-            return
-        force = clicked is perm_btn
-
-        if force:
-            confirm2 = ask_yes_no(
-                self, "تأیید نهایی حذف کامل",
-                f"مطمئنید؟ واریانت «{display_name or variant_sku}» برای همیشه پاک می‌شه.",
+        if ps_mode:
+            confirmed = ask_yes_no(
+                self, "حذف واریانت از پرستاشاپ",
+                f"واریانت «{display_name or variant_sku}» برای همیشه از پرستاشاپ پاک بشه؟\n"
+                "هیچ راه بازگردانی‌ای نداره.",
                 icon=QMessageBox.Warning,
             )
-            if not confirm2:
+            if not confirmed:
                 return
+            force = True
+        else:
+            box = QMessageBox(self)
+            box.setWindowTitle("حذف واریانت از ووکامرس")
+            box.setText(
+                f"واریانت «{display_name or variant_sku}» از سایت حذف بشه؟\n\n"
+                "🗑️ زباله‌دان: قابل بازیابی از پنل وردپرس تا وقتی خودتون خالی‌اش کنید.\n"
+                "⚠️ حذف کامل: برای همیشه پاک می‌شه، هیچ راه بازگشتی نداره."
+            )
+            trash_btn = box.addButton("🗑️ انتقال به زباله‌دان", QMessageBox.ActionRole)
+            perm_btn = box.addButton("⚠️ حذف کامل و همیشگی", QMessageBox.DestructiveRole)
+            box.addButton("انصراف", QMessageBox.RejectRole)
+            box.setIcon(QMessageBox.Warning)
+            box.exec_()
+            clicked = box.clickedButton()
+            if clicked not in (trash_btn, perm_btn):
+                return
+            force = clicked is perm_btn
 
-        config = load_secure_config(None) or {}
+            if force:
+                confirm2 = ask_yes_no(
+                    self, "تأیید نهایی حذف کامل",
+                    f"مطمئنید؟ واریانت «{display_name or variant_sku}» برای همیشه پاک می‌شه.",
+                    icon=QMessageBox.Warning,
+                )
+                if not confirm2:
+                    return
 
         def _worker():
+            if ps_mode:
+                from sync_app.core.ps_variation_helper import (
+                    ps_delete_combination, ps_list_combinations,
+                )
+
+                combos = ps_list_combinations(config, int(parent_wc_id))
+                match = next((c for c in combos if c.get("reference") == variant_sku), None)
+                if not match:
+                    raise RuntimeError("این واریانت روی پرستاشاپ پیدا نشد (شاید قبلاً حذف شده).")
+                ps_delete_combination(config, int(match["id"]))
+                return {"id": match["id"], "deleted": True}
+
             apply_network_overrides(config)
             wcapi = build_wcapi(config)
             resp = wcapi.get(f"products/{int(parent_wc_id)}/variations", params={"sku": variant_sku})
