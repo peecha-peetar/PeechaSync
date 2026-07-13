@@ -578,7 +578,8 @@ def _visibility_from_wc(catalog_visibility: str) -> str:
 def ps_create_product(
     config, *, sku: str, name: str, price, description: str = "",
     category_ids: list[int] | None = None, active: bool = True,
-    catalog_visibility: str = "visible", out_of_stock: int | None = None, timeout=None,
+    catalog_visibility: str = "visible", out_of_stock: int | None = None,
+    has_variants: bool = False, timeout=None,
 ) -> dict:
     cfg = config or {}
     lang_id = ps_lang_id(cfg)
@@ -596,6 +597,13 @@ def ps_create_product(
         _set_text(node, "state", 1)
         _set_text(node, "visibility", _visibility_from_wc(catalog_visibility))
         _set_text(node, "id_category_default", default_cat)
+        # product_type — از پرستاشاپ ۸/۹ به بعد، محصول باید صریحاً
+        # «combinations» باشه تا هم پنل ادمین ترکیب‌های ساخته‌شده رو به رسمیت
+        # بشناسه (وگرنه صفحه‌ی «تولید ترکیب‌ها» رو نشون می‌ده انگار هیچ
+        # ترکیبی نیست)، هم موجودیِ واقعیِ خرید از سطح خودِ هر ترکیب خونده بشه
+        # نه از رکورد کلیِ محصول (که ما همیشه «همیشه موجود» می‌فرستیم چون
+        # بی‌معنیه — موجودیِ واقعی مال هر ترکیبه).
+        _set_text(node, "product_type", "combinations" if has_variants else "standard")
         # out_of_stock هم روی خودِ محصول (نه فقط stock_availables) ست می‌شه —
         # پرستاشاپ موقع ذخیره‌ی محصول از فیلد out_of_stock خودِ محصول برای
         # هم‌گام‌سازیِ stock_availables استفاده می‌کنه؛ اگه این‌جا نباشه، هر PUT
@@ -622,7 +630,7 @@ def ps_update_product(
     config, product_id: int, *, sku: str | None = None, name: str | None = None,
     price=None, description: str | None = None, category_ids: list[int] | None = None,
     active: bool | None = None, catalog_visibility: str | None = None,
-    out_of_stock: int | None = None, timeout=None,
+    out_of_stock: int | None = None, has_variants: bool | None = None, timeout=None,
 ) -> dict:
     cfg = config or {}
     lang_id = ps_lang_id(cfg)
@@ -659,6 +667,13 @@ def ps_update_product(
         _set_text(node, "state", 1)
         _set_text(node, "visibility", final_visibility)
         _set_text(node, "id_category_default", default_cat)
+        # product_type — مثل ps_create_product؛ اگه صریح پاس داده نشده باشه
+        # (has_variants=None)، مقدار فعلیِ محصول حفظ می‌شه.
+        if has_variants is not None:
+            final_product_type = "combinations" if has_variants else "standard"
+        else:
+            final_product_type = str(current.get("product_type") or "standard")
+        _set_text(node, "product_type", final_product_type)
         # مثل ps_create_product — اگه صریح پاس داده نشده باشه، مقدار فعلیِ
         # محصول حفظ می‌شه (نه اینکه ریست بشه به پیش‌فرض) تا این PUT مقدارِ
         # درستِ out_of_stock که یه فراخوانیِ قبلی ست کرده رو خراب نکنه.
@@ -681,23 +696,34 @@ def ps_update_product(
     )
     _raise_for_status(resp2, f"به‌روزرسانی محصول #{product_id}")
 
-    if out_of_stock is not None:
-        # تأیید تشخیصی: آیا فیلد out_of_stockِ خودِ محصول (نه stock_availables)
-        # واقعاً روی این نصبِ پرستاشاپ نوشتنی/معتبره؟ بعضی فروشگاه‌ها ممکنه
-        # این فیلد رو روی ریسورس محصول نادیده بگیرن.
+    if out_of_stock is not None or has_variants is not None:
+        # تأیید تشخیصی: آیا فیلدهای out_of_stock/product_type خودِ محصول
+        # (نه stock_availables) واقعاً روی این نصبِ پرستاشاپ نوشتنی/معتبرن؟
+        # بعضی فروشگاه‌ها ممکنه این فیلدها رو روی ریسورس محصول نادیده بگیرن.
         try:
             from sync_app.core.sync_utils import log
 
             verify_resp = ps_rest_request(cfg, "GET", f"products/{int(product_id)}", timeout=timeout)
             verify_current = _response_json(verify_resp, f"تأیید محصول #{product_id}").get("product") or {}
-            actual = verify_current.get("out_of_stock")
-            if str(actual) != str(int(out_of_stock)):
-                log.warning(
-                    f"⚠️ [تأیید] محصول #{product_id}: فیلد out_of_stock خودِ محصول رو {out_of_stock} "
-                    f"فرستادیم ولی فروشگاه {actual!r} برمی‌گردونه — این فیلد شاید روی این نصب نوشتنی نباشه."
-                )
-            else:
-                log.info(f"✔️ [تأیید] محصول #{product_id}: فیلد out_of_stock خودِ محصول = {actual} (مطابق انتظار)")
+            if out_of_stock is not None:
+                actual = verify_current.get("out_of_stock")
+                if str(actual) != str(int(out_of_stock)):
+                    log.warning(
+                        f"⚠️ [تأیید] محصول #{product_id}: فیلد out_of_stock خودِ محصول رو {out_of_stock} "
+                        f"فرستادیم ولی فروشگاه {actual!r} برمی‌گردونه — این فیلد شاید روی این نصب نوشتنی نباشه."
+                    )
+                else:
+                    log.info(f"✔️ [تأیید] محصول #{product_id}: فیلد out_of_stock خودِ محصول = {actual} (مطابق انتظار)")
+            if has_variants is not None:
+                expected_type = "combinations" if has_variants else "standard"
+                actual_type = verify_current.get("product_type")
+                if str(actual_type) != expected_type:
+                    log.warning(
+                        f"⚠️ [تأیید] محصول #{product_id}: product_type رو «{expected_type}» فرستادیم ولی "
+                        f"فروشگاه {actual_type!r} برمی‌گردونه — پنل ادمین شاید ترکیب‌های این محصول رو نبینه."
+                    )
+                else:
+                    log.info(f"✔️ [تأیید] محصول #{product_id}: product_type={actual_type} (مطابق انتظار)")
         except Exception as verify_exc:
             log.warning(f"⚠️ [تأیید] محصول #{product_id}: خواندنِ دوباره ناموفق بود: {verify_exc}")
 
@@ -744,6 +770,10 @@ def ps_try_set_price_visibility(config, product_id: int, *, timeout=None) -> boo
             # حفظ out_of_stock فعلی — این PUT نباید حالت موجودیِ ست‌شده توسط
             # ps_update_product/_ps_apply_stock_from_payload رو بی‌صدا ریست کنه.
             _set_text(node, "out_of_stock", _int_or_default(current.get("out_of_stock"), 2))
+            # حفظ product_type فعلی — وگرنه محصولِ ترکیبی («combinations») به
+            # «standard» ریست می‌شه و پنل ادمین دیگه ترکیب‌های ساخته‌شده رو
+            # به رسمیت نمی‌شناسه.
+            _set_text(node, "product_type", str(current.get("product_type") or "standard"))
 
         body = _build_xml("product", _build)
         resp2 = ps_call(
@@ -799,6 +829,8 @@ def ps_update_product_seo(
         _set_text(node, "show_price", _int_or_default(current.get("show_price"), 1))
         # حفظ out_of_stock فعلی — این PUT نباید حالت موجودیِ ست‌شده رو ریست کنه.
         _set_text(node, "out_of_stock", _int_or_default(current.get("out_of_stock"), 2))
+        # حفظ product_type فعلی — وگرنه محصولِ ترکیبی به «standard» ریست می‌شه.
+        _set_text(node, "product_type", str(current.get("product_type") or "standard"))
         final_description = description if description is not None else _lang_value(current.get("description"), lang_id)
         _set_lang_text(node, "description", final_description, lang_id)
         final_short = short_description if short_description is not None else _lang_value(current.get("description_short"), lang_id)

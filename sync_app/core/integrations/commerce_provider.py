@@ -282,6 +282,7 @@ def _ps_product_create_from_payload(config, body, timeout):
     active = str(body.get("status") or "publish") == "publish"
     catalog_visibility = str(body.get("catalog_visibility") or "visible")
     qty, out_of_stock = _ps_resolve_stock_fields(body)
+    has_variants = str(body.get("type") or "simple") == "variable"
 
     created = ps_create_product(
         config,
@@ -293,6 +294,7 @@ def _ps_product_create_from_payload(config, body, timeout):
         active=active,
         catalog_visibility=catalog_visibility,
         out_of_stock=out_of_stock,
+        has_variants=has_variants,
         timeout=timeout,
     )
     _ps_apply_stock_from_payload(config, created["id"], qty, out_of_stock if out_of_stock is not None else 0, timeout)
@@ -327,6 +329,7 @@ def _ps_product_update_from_payload(config, product_id, body, timeout):
     if "status" in body:
         active = str(body.get("status") or "publish") == "publish"
     qty, out_of_stock = _ps_resolve_stock_fields(body)
+    has_variants = str(body.get("type") or "").strip() == "variable" if "type" in body else None
 
     ps_update_product(
         config,
@@ -339,6 +342,7 @@ def _ps_product_update_from_payload(config, product_id, body, timeout):
         active=active,
         catalog_visibility=body.get("catalog_visibility"),
         out_of_stock=out_of_stock,
+        has_variants=has_variants,
         timeout=timeout,
     )
     _ps_apply_stock_from_payload(config, product_id, qty, out_of_stock if out_of_stock is not None else 0, timeout)
