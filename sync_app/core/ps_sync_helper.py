@@ -915,7 +915,11 @@ def ps_set_stock_quantity(
     # تأیید تشخیصی: بلافاصله بعد از نوشتن، دوباره می‌خونیم تا مطمئن بشیم
     # مقداری که واقعاً روی فروشگاه ذخیره شده با چیزی که فرستادیم یکیه — یه
     # مورد واقعی دیده شده که برنامه موفقیت لاگ می‌کرد ولی پنل پرستاشاپ
-    # مقدار متفاوتی (رد سفارشات) نشون می‌داد.
+    # مقدار متفاوتی (رد سفارشات) نشون می‌داد. بدون فیلتر id_shop می‌خونیم و
+    # limit رو بالا می‌بریم — چون پرستاشاپ (خصوصاً نسخه‌های جدید، چند
+    # فروشگاهی زیرساختی) ممکنه بیش از یک رکورد stock_availables برای همین
+    # (product, attribute) داشته باشه (یکی به‌ازای هر شاپ) و پنل ادمین از
+    # رکورد شاپِ فعال بخونه، نه لزوماً همونی که ما با limit=0,1 گرفتیم.
     try:
         from sync_app.core.sync_utils import log
 
@@ -924,12 +928,23 @@ def ps_set_stock_quantity(
             params={
                 "filter[id_product]": f"[{int(product_id)}]",
                 "filter[id_product_attribute]": f"[{int(product_attribute_id)}]",
-                "display": "full", "limit": "0,1",
+                "display": "full", "limit": "0,20",
             },
             timeout=timeout,
         )
         verify_rows = _unwrap_list(_response_json(verify_resp, "تأیید موجودی"), "stock_availables")
         if verify_rows:
+            if len(verify_rows) > 1:
+                log.warning(
+                    f"⚠️ [تأیید] #{product_id}: {len(verify_rows)} رکورد stock_availables برای همین محصول "
+                    "پیدا شد (نه فقط یکی) — احتمالاً چندشاپیه و پنل ادمین از رکورد دیگه‌ای می‌خونه:"
+                )
+            for row in verify_rows:
+                log.info(
+                    f"    stock_availables id={row.get('id')} id_shop={row.get('id_shop')!r} "
+                    f"id_shop_group={row.get('id_shop_group')!r} out_of_stock={row.get('out_of_stock')!r} "
+                    f"quantity={row.get('quantity')!r}"
+                )
             actual_oos = verify_rows[0].get("out_of_stock")
             actual_qty = verify_rows[0].get("quantity")
             if str(actual_oos) != str(int(out_of_stock)):
