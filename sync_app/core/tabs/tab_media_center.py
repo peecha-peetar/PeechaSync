@@ -537,7 +537,7 @@ class MediaCenterTab(QWidget):
                 name = name_by_code.get(a_code, "—")
                 manual_code = manual_by_code.get(a_code, "") or "—"
                 if a_code not in product_map:
-                    results.append((file_code, name, a_code, manual_code, len(items), "⚠️ این کالا با ووکامرس سینک نشده", None))
+                    results.append((file_code, name, a_code, manual_code, len(items), "⚠️ این کالا با فروشگاه سینک نشده", None))
                     continue
                 results.append((file_code, name, a_code, manual_code, len(items), "✅ آماده‌ی آپلود", items))
             return results

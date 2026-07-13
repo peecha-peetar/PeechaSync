@@ -82,7 +82,7 @@ class HomeTab(QWidget):
         hero_badge.setObjectName("homeHeroBadge")
         hero_header_layout.addWidget(hero_badge)
 
-        hero_title = QLabel("خوش آمدید — همگام‌سازی ERP ↔ ووکامرس")
+        hero_title = QLabel("خوش آمدید — همگام‌سازی ERP ↔ فروشگاه آنلاین")
         hero_title.setObjectName("homeHeroTitle")
         hero_title.setWordWrap(True)
         hero_header_layout.addWidget(hero_title)

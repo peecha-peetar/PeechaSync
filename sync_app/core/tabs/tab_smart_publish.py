@@ -356,7 +356,7 @@ class SmartPublishSettingsTab(QWidget):
 
         form_row = QHBoxLayout()
         self.pipeline_name_input = QLineEdit()
-        self.pipeline_name_input.setPlaceholderText("اسم روش پردازش تصویر (مثلاً «آماده برای ووکامرس»)")
+        self.pipeline_name_input.setPlaceholderText("اسم روش پردازش تصویر (مثلاً «آماده برای فروشگاه»)")
         form_row.addWidget(self.pipeline_name_input)
         layout.addLayout(form_row)
 

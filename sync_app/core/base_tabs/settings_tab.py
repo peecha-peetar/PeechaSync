@@ -834,7 +834,7 @@ class SettingsTab(QWidget):
         title.setAlignment(Qt.AlignCenter)
         outer_layout.addWidget(title)
 
-        subtitle = QLabel("پیکربندی پایگاه داده، API ووکامرس و تنظیمات ظاهری برنامه")
+        subtitle = QLabel("پیکربندی پایگاه داده، API فروشگاه و تنظیمات ظاهری برنامه")
         subtitle.setProperty("role", "caption")
         subtitle.setAlignment(Qt.AlignCenter)
         outer_layout.addWidget(subtitle)
@@ -996,7 +996,10 @@ class SettingsTab(QWidget):
         self.price_combo.addItems([f"لیست قیمت {i}" for i in range(1, 11)])
         self.price_combo.setCurrentIndex(self.config.get("PRICE_LIST_INDEX", 0))
 
-        self.sale_price_enabled_cb = QCheckBox("ارسال قیمت ویژه به ووکامرس (Sale Price)")
+        self.sale_price_enabled_cb = QCheckBox("ارسال قیمت ویژه (Sale Price) — فقط ووکامرس")
+        self.sale_price_enabled_cb.setToolTip(
+            "پرستاشاپ معادل مستقیم برای «قیمت ویژه» ندارد — این تنظیم فقط روی ووکامرس اثر دارد."
+        )
         self.sale_price_enabled_cb.setLayoutDirection(Qt.RightToLeft)
         self.sale_price_enabled_cb.setChecked(bool(self.config.get("SALE_PRICE_LIST_ENABLED")))
         self.sale_price_combo = QComboBox()
@@ -1085,7 +1088,7 @@ class SettingsTab(QWidget):
         self.auto_update_enabled_checkbox.setMinimumHeight(36)
         self.auto_update_enabled_checkbox.setToolTip(
             "وقتی فعال باشد، با شروع برنامه نسخه جدید از آدرس سرور لایسنس (تنظیمات) بررسی و نصب می‌شود.\n"
-            "لایسنس، تنظیمات SQL/ووکامرس و نقشه‌ها حفظ می‌شوند."
+            "لایسنس، تنظیمات SQL/فروشگاه و نقشه‌ها حفظ می‌شوند."
         )
 
         # ── چک‌باکس‌های انتخاب فیلدهای همگام‌سازی (محصول/دسته/ویژگی/متغیر) ──
@@ -1179,7 +1182,7 @@ class SettingsTab(QWidget):
             field.setMinimumHeight(38)
 
         self.currency_combo = QComboBox()
-        self.currency_combo.addItem("تومان (ووکامرس → ERP ×۱۰)", True)
+        self.currency_combo.addItem("تومان (فروشگاه → ERP ×۱۰)", True)
         self.currency_combo.addItem("ریال (بدون تبدیل)", False)
         is_toman_saved = self.config.get("WC_CURRENCY_IS_TOMAN", True)
         self.currency_combo.setCurrentIndex(0 if is_toman_saved else 1)
@@ -1473,7 +1476,7 @@ class SettingsTab(QWidget):
         copy_monitor_btn = QPushButton("کپی لاگ")
         copy_monitor_btn.setFlat(True)
         copy_monitor_btn.setMinimumHeight(30)
-        copy_monitor_btn.setToolTip("کپی کل گزارش تست SQL و ووکامرس در کلیپبورد")
+        copy_monitor_btn.setToolTip("کپی کل گزارش تست SQL و فروشگاه در کلیپبورد")
         copy_monitor_btn.clicked.connect(self.copy_monitor_logs)
         monitor_toolbar.addWidget(copy_monitor_btn)
 
@@ -1518,9 +1521,9 @@ class SettingsTab(QWidget):
         customer_form.setVerticalSpacing(10)
 
         self.default_customer_mode_combo = QComboBox()
-        self.default_customer_mode_combo.addItem("مشتریان سایت ووردپرس (خریداران ثبت‌نام‌شده)", "website")
+        self.default_customer_mode_combo.addItem("مشتریان سایت (خریداران ثبت‌نام‌شده)", "website")
         self.default_customer_mode_combo.addItem("مشتری ثابت (کد مشتری مشخص)", "fixed")
-        self.default_customer_mode_combo.addItem("همه مشتریان ووکامرس", "all")
+        self.default_customer_mode_combo.addItem("همه مشتریان فروشگاه", "all")
         saved_mode = self.config.get("DEFAULT_CUSTOMER_MODE", "website")
         mode_idx = self.default_customer_mode_combo.findData(saved_mode)
         if mode_idx >= 0:
@@ -1538,7 +1541,7 @@ class SettingsTab(QWidget):
         self._on_default_customer_mode_changed()  # نمایش/مخفی کردن بر اساس مقدار اولیه
 
         # ── گروه فیلدهای قابل‌انتخاب همگام‌سازی (محصول/دسته/ویژگی/متغیر) ──
-        fields_group = QGroupBox("فیلدهای همگام‌سازی (SQL → ووکامرس)")
+        fields_group = QGroupBox("فیلدهای همگام‌سازی (SQL → فروشگاه)")
         fields_layout = QVBoxLayout()
         fields_layout.setSpacing(6)
         fields_hint = QLabel(
@@ -1555,7 +1558,7 @@ class SettingsTab(QWidget):
         self.parallel_workers_spin.setRange(1, 10)
         self.parallel_workers_spin.setValue(min(10, int(self.config.get("WC_PARALLEL_WORKERS", 10) or 10)))
         self.parallel_workers_spin.setToolTip(
-            "چندتا محصول با هم (هم‌زمان) به ووکامرس ارسال بشه.\n"
+            "چندتا محصول با هم (هم‌زمان) به فروشگاه ارسال بشه.\n"
             "عدد بیشتر = سریع‌تر، ولی فشار بیشتر رو هاست سایت.\n"
             "حداکثر ۱۰ (بیشتر از این، خیلی از هاست‌ها این رفتار رو حمله‌ی DDoS "
             "تشخیص می‌دن و IP سرور شما رو موقتاً بلاک می‌کنن)."

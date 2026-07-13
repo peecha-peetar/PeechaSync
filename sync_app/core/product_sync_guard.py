@@ -208,7 +208,10 @@ class ProductSyncPreviewDialog(QDialog):
     @staticmethod
     def ask(parent, previews: list[ProductSyncPreviewRow], config: dict | None = None) -> bool:
         config = config or load_secure_config(None) or {}
-        host = urlparse(str(config.get("WC_URL") or "")).netloc or "فروشگاه"
+        from sync_app.core.integrations.commerce_provider import is_prestashop
+
+        url_key = "PS_URL" if is_prestashop(config) else "WC_URL"
+        host = urlparse(str(config.get(url_key) or "")).netloc or "فروشگاه"
         dialog = ProductSyncPreviewDialog(parent, previews, host)
         dialog.exec_()
         return dialog._confirmed

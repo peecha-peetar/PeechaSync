@@ -143,7 +143,10 @@ class CustomerTab(SitePreviewLoaderMixin, SyncTab):
 
     def _fetch_site_customers(self):
         try:
+            from sync_app.core.integrations.commerce_provider import store_platform_label
+
             cfg = load_secure_config(None) or {}
+            platform_label = store_platform_label(cfg)
             mode = get_customer_mode(cfg)
             if mode == "fixed":
                 code = (cfg.get("DEFAULT_CUSTOMER_CODE") or "00005").strip()
@@ -159,7 +162,7 @@ class CustomerTab(SitePreviewLoaderMixin, SyncTab):
                     max_customers=40,
                     timeout=preview_timeout,
                 )
-                mode_label = "همه مشتریان ووکامرس"
+                mode_label = f"همه مشتریان {platform_label}"
             else:
                 try:
                     customers = customersync.get_buyers_preview_from_orders(
@@ -197,7 +200,7 @@ class CustomerTab(SitePreviewLoaderMixin, SyncTab):
                     ids.append(int(cid))
                 except Exception:
                     pass
-                items.append(f"{name}{guest_tag} | کد WC: #{cid} | ایمیل: {email}")
+                items.append(f"{name}{guest_tag} | کد: #{cid} | ایمیل: {email}")
 
             if len(customers) > 40:
                 items.append(f"... و {len(customers) - 40} مورد دیگر")

@@ -78,7 +78,7 @@ CATEGORY_LOG_TOKENS = (
     "زیرگروه",
     "بروزرسانی گروه",
     "همگام‌سازی دسته",
-    "خطای بررسی ووکامرس",
+    "خطای بررسی فروشگاه",
     "بررسی وضعیت دسته",
     "دریافت categories",
     "تب دسته‌بندی",
@@ -196,7 +196,7 @@ def resource_path(relative_path):
 
 
 # ---------------------------------------------------------
-# Worker برای بررسی وضعیت دسته‌بندی‌ها در ووکامرس
+# Worker برای بررسی وضعیت دسته‌بندی‌ها در فروشگاه
 # ---------------------------------------------------------
 class ImageLoaderWorker(QObject):
     """دانلود async تصویر پیش‌نمایش — روی thread جداگانه اجرا می‌شه"""
@@ -221,7 +221,7 @@ class ImageLoaderWorker(QObject):
 
 
 class WCCategoryCheckWorker(QObject):
-    """بررسی نامک (slug) دسته‌بندی‌ها در ووکامرس و مقایسه با نرم‌افزار"""
+    """بررسی نامک (slug) دسته‌بندی‌ها در فروشگاه و مقایسه با نرم‌افزار"""
     finished = pyqtSignal(dict, list)  # (wc_slug_map, all_wc_cats)
     error = pyqtSignal(str)
 
@@ -247,7 +247,7 @@ class WCCategoryCheckWorker(QObject):
             timeout = wc_sync_timeout(self.config)
 
             if not wc_url or not ck or not cs:
-                self.error.emit("تنظیمات ووکامرس کامل نیست.")
+                self.error.emit("تنظیمات فروشگاه کامل نیست.")
                 return
 
             categories_endpoint = wc_endpoint(self.config.get("WC_URL", ""), "products/categories")
@@ -404,7 +404,7 @@ class CategoryTab(QWidget):
 
         self.category_link_filter = QComboBox()
         self.category_link_filter.addItem("همه گروه‌ها", "all")
-        self.category_link_filter.addItem("✅ فقط لینک‌شده به ووکامرس", "linked")
+        self.category_link_filter.addItem("✅ فقط لینک‌شده به فروشگاه", "linked")
         self.category_link_filter.addItem("⭕ فقط لینک‌نشده", "unlinked")
         self.category_link_filter.setMinimumHeight(36)
         self.category_link_filter.currentIndexChanged.connect(
@@ -500,7 +500,7 @@ class CategoryTab(QWidget):
         self.refresh_button.clicked.connect(self.on_refresh_clicked)
 
         self.wc_check_button = CompactCaptionButton("🔍 بررسی وضعیت")
-        self.wc_check_button.setToolTip("بررسی وضعیت دسته‌بندی‌ها در ووکامرس")
+        self.wc_check_button.setToolTip("بررسی وضعیت دسته‌بندی‌ها در فروشگاه")
         self.wc_check_button.clicked.connect(self._on_wc_check_clicked)
 
         self._sync_button_idle_text = "📤 همگام‌سازی"
@@ -520,7 +520,7 @@ class CategoryTab(QWidget):
         )
         self.send_cat_images_button = CompactCaptionButton(self._cat_images_idle_text)
         self.send_cat_images_button.setProperty("compactActionRole", "images")
-        self.send_cat_images_button.setToolTip("ارسال تصاویر دسته‌بندی‌ها به ووکامرس")
+        self.send_cat_images_button.setToolTip("ارسال تصاویر دسته‌بندی‌ها به فروشگاه")
         self.send_cat_images_button.clicked.connect(self._on_send_cat_images_clicked)
 
         self.wc_admin_button = make_wc_admin_open_button(
@@ -973,7 +973,7 @@ class CategoryTab(QWidget):
         self.save_selected_groups()
 
     def _filter_tree(self, text):
-        """فیلتر کردن درخت بر اساس متن جستجو + وضعیت لینک ووکامرس"""
+        """فیلتر کردن درخت بر اساس متن جستجو + وضعیت لینک فروشگاه"""
         search = text.strip().lower()
         link_mode = self.category_link_filter.currentData() if hasattr(self, "category_link_filter") else "all"
 
@@ -1123,7 +1123,7 @@ class CategoryTab(QWidget):
         return dejavu_category_slug(code)
 
     def _wc_category_synced(self, name, code):
-        """ملاک: کد ERP در slug ووکامرس + تطابق نام با ERP"""
+        """ملاک: کد ERP در slug فروشگاه + تطابق نام با ERP"""
         if not self._wc_slug_map:
             return False
         code = str(code or "").strip()
@@ -1187,8 +1187,8 @@ class CategoryTab(QWidget):
         layout = QVBoxLayout(dialog)
 
         layout.addWidget(QLabel(
-            f"{len(mismatches)} دسته در ووکامرس نامک درست دارند ولی نام با ERP فرق دارد.\n"
-            "می‌توانید نام و نامک را طبق ERP در ووکامرس به‌روزرسانی کنید."
+            f"{len(mismatches)} دسته در فروشگاه نامک درست دارند ولی نام با ERP فرق دارد.\n"
+            "می‌توانید نام و نامک را طبق ERP در فروشگاه به‌روزرسانی کنید."
         ))
 
         lst = QListWidget()
@@ -1203,7 +1203,7 @@ class CategoryTab(QWidget):
         layout.addWidget(lst)
 
         row_btns = QHBoxLayout()
-        fix_btn = QPushButton("به‌روزرسانی همه در ووکامرس (طبق ERP)")
+        fix_btn = QPushButton("به‌روزرسانی همه در فروشگاه (طبق ERP)")
         fix_btn.clicked.connect(lambda: self._repair_wc_mismatches(mismatches, dialog))
         close_btn = QPushButton("بستن")
         close_btn.clicked.connect(dialog.reject)
@@ -1239,7 +1239,7 @@ class CategoryTab(QWidget):
                     log.info(f"✅ به‌روزرسانی WC دسته: {row['erp_name']}")
             except Exception as exc:
                 log.error(f"❌ خطا در به‌روزرسانی WC دسته {row['erp_name']}: {exc}")
-        QMessageBox.information(self, "پایان", f"{fixed} دسته در ووکامرس به‌روزرسانی شد.")
+        QMessageBox.information(self, "پایان", f"{fixed} دسته در فروشگاه به‌روزرسانی شد.")
         dialog.accept()
         self.check_wc_status()
 
@@ -1256,12 +1256,12 @@ class CategoryTab(QWidget):
                     return (child.data(0, Qt.UserRole) or "").strip()
         return ""
 
-    # ── بررسی وضعیت دسته‌بندی‌ها در ووکامرس ──────────────────
+    # ── بررسی وضعیت دسته‌بندی‌ها در فروشگاه ──────────────────
     def _on_wc_check_clicked(self):
         self._action_ops.handle_click("wc_check", self._start_wc_check)
 
     def _start_wc_check(self):
-        """دریافت دسته‌بندی‌های ووکامرس و مقایسه نامک با درخت SQL"""
+        """دریافت دسته‌بندی‌های فروشگاه و مقایسه نامک با درخت SQL"""
         if not ensure_connectivity(self, need_sql=False, need_wc=True, live=True):
             return
         if self._wc_check_thread is not None:
@@ -1269,7 +1269,7 @@ class CategoryTab(QWidget):
         if not self._action_ops.begin("wc_check", working_text="⏳ در حال بررسی..."):
             return
 
-        self._set_categories_status("loading", "🔍 در حال اتصال به ووکامرس...")
+        self._set_categories_status("loading", "🔍 در حال اتصال به فروشگاه...")
         self.config = load_secure_config(None)
 
         self._wc_check_thread = QThread(self)
@@ -1296,7 +1296,7 @@ class CategoryTab(QWidget):
         if self._wc_check_thread is not None:
             self._wc_check_thread.quit()
         self._action_ops.set_stopping("wc_check")
-        self._set_categories_status("warning", "⏹ در حال توقف بررسی ووکامرس...")
+        self._set_categories_status("warning", "⏹ در حال توقف بررسی فروشگاه...")
 
     def _apply_icons_from_category_map(self):
         """بعد sync از category_map بخون."""
@@ -1324,13 +1324,13 @@ class CategoryTab(QWidget):
         )
 
     def _on_wc_check_done(self, wc_slug_map, all_wc_cats):
-        """پس از دریافت دسته‌بندی‌های ووکامرس، مقایسه با SQL"""
+        """پس از دریافت دسته‌بندی‌های فروشگاه، مقایسه با SQL"""
         self._wc_slug_map = wc_slug_map
-        log.info(f"✅ {len(wc_slug_map)} دسته‌بندی از ووکامرس دریافت شد")
+        log.info(f"✅ {len(wc_slug_map)} دسته‌بندی از فروشگاه دریافت شد")
 
         self._apply_wc_status_to_tree()
 
-        # دسته‌بندی‌های ووکامرس که با pattern dejavu تطابق ندارند (orphan)
+        # دسته‌بندی‌های فروشگاه که با pattern dejavu تطابق ندارند (orphan)
         orphan_cats = []
         for cat in all_wc_cats:
             slug = unquote((cat.get("slug") or "").strip().lower())
@@ -1343,10 +1343,10 @@ class CategoryTab(QWidget):
                     "dejavu_code": dejavu_code
                 })
 
-        status_text = f"✅ بررسی ووکامرس تمام شد - {len(wc_slug_map)} دسته"
+        status_text = f"✅ بررسی فروشگاه تمام شد - {len(wc_slug_map)} دسته"
         if orphan_cats:
             status_text += f" | {len(orphan_cats)} دسته مغایر"
-            log.warning(f"⚠️ {len(orphan_cats)} دسته‌بندی در ووکامرس که در نرم‌افزار نیستند:")
+            log.warning(f"⚠️ {len(orphan_cats)} دسته‌بندی در فروشگاه که در نرم‌افزار نیستند:")
             for cat in orphan_cats:
                 log.warning(f"  - {cat['name']} (slug: {cat['slug']})")
             self._show_orphan_dialog(orphan_cats)
@@ -1405,7 +1405,7 @@ class CategoryTab(QWidget):
         self.update_selected_list_only()
 
     def _apply_wc_status_to_tree(self):
-        """اعمال آیکون وضعیت ووکامرس (🟢/🔴) روی هر آیتم درخت"""
+        """اعمال آیکون وضعیت فروشگاه (🟢/🔴) روی هر آیتم درخت"""
         if not self._wc_slug_map:
             return
 
@@ -1440,15 +1440,15 @@ class CategoryTab(QWidget):
             self._filter_tree(self.search_input.text())
 
     def _show_orphan_dialog(self, orphan_cats):
-        """دیالوگ دسته‌های ووکامرس بدون معادل ERP — حذف از سایت"""
+        """دیالوگ دسته‌های فروشگاه بدون معادل ERP — حذف از سایت"""
         dialog = QDialog(self)
-        dialog.setWindowTitle("دسته‌بندی‌های مغایر در ووکامرس")
+        dialog.setWindowTitle("دسته‌بندی‌های مغایر در فروشگاه")
         dialog.setLayoutDirection(Qt.RightToLeft)
         dialog.setMinimumWidth(560)
         dialog_layout = QVBoxLayout(dialog)
 
         label = QLabel(
-            f"این دسته‌ها در ووکامرس هستند ولی در ERP نیستند ({len(orphan_cats)} مورد).\n"
+            f"این دسته‌ها در فروشگاه هستند ولی در ERP نیستند ({len(orphan_cats)} مورد).\n"
             "ملاک تطابق: نامک (slug). برای همگام‌سازی از تب دسته‌بندی، گروه ERP را تیک بزنید."
         )
         label.setWordWrap(True)
@@ -1466,7 +1466,7 @@ class CategoryTab(QWidget):
         dialog_layout.addWidget(orphan_list)
 
         action_row = QHBoxLayout()
-        delete_btn = QPushButton("حذف از ووکامرس")
+        delete_btn = QPushButton("حذف از فروشگاه")
         delete_btn.clicked.connect(lambda: self._delete_orphan_categories(orphan_cats, dialog))
         close_btn = QPushButton("بستن")
         close_btn.clicked.connect(dialog.reject)
@@ -1483,7 +1483,7 @@ class CategoryTab(QWidget):
         answer = QMessageBox.question(
             self,
             "تأیید حذف",
-            f"{len(orphan_cats)} دسته از ووکامرس حذف شود؟\nاین عمل قابل بازگشت نیست.",
+            f"{len(orphan_cats)} دسته از فروشگاه حذف شود؟\nاین عمل قابل بازگشت نیست.",
             QMessageBox.Yes | QMessageBox.No,
         )
         if answer != QMessageBox.Yes:
@@ -1508,16 +1508,16 @@ class CategoryTab(QWidget):
             except Exception as exc:
                 log.error(f"❌ خطا در حذف دسته {cat.get('name')}: {exc}")
 
-        QMessageBox.information(self, "پایان", f"{deleted} دسته از ووکامرس حذف شد.")
+        QMessageBox.information(self, "پایان", f"{deleted} دسته از فروشگاه حذف شد.")
         dialog.accept()
         self.check_wc_status()
 
     def _on_wc_check_error(self, error_msg):
         if str(error_msg).strip() == "متوقف شد":
-            log.info("⏹ بررسی وضعیت ووکامرس متوقف شد.")
-            self._set_categories_status("warning", "⏹ بررسی وضعیت ووکامرس متوقف شد.")
+            log.info("⏹ بررسی وضعیت فروشگاه متوقف شد.")
+            self._set_categories_status("warning", "⏹ بررسی وضعیت فروشگاه متوقف شد.")
         else:
-            log.error(f"❌ خطای بررسی ووکامرس: {error_msg}")
+            log.error(f"❌ خطای بررسی فروشگاه: {error_msg}")
             status = error_msg.strip().split("\n")[0]
             if len(status) > 140:
                 status = status[:137] + "..."
@@ -1576,10 +1576,10 @@ class CategoryTab(QWidget):
 
     def _begin_categories_sync_ui(self):
         self._sync_started_at = time.monotonic()
-        self._live_log_hint = "⏳ همگام‌سازی دسته‌ها با ووکامرس..."
+        self._live_log_hint = "⏳ همگام‌سازی دسته‌ها با فروشگاه..."
         self._action_ops.begin("sync")
         self.load_progress.setVisible(True)
-        self._set_categories_status("loading", "⏳ در حال بررسی اتصال ووکامرس...")
+        self._set_categories_status("loading", "⏳ در حال بررسی اتصال فروشگاه...")
         try:
             self.log_panel_controller.ensure_visible()
         except Exception:
@@ -1648,7 +1648,7 @@ class CategoryTab(QWidget):
             self._restore_temp_excluded_codes()
             self._set_categories_status(
                 "warning",
-                "⚠️ اتصال SQL یا ووکامرس برقرار نشد — دوباره تلاش کنید.",
+                "⚠️ اتصال SQL یا فروشگاه برقرار نشد — دوباره تلاش کنید.",
             )
             return
 
@@ -1699,7 +1699,7 @@ class CategoryTab(QWidget):
                 QMessageBox.warning(
                     self,
                     "همگام‌سازی ناموفق",
-                    f"هیچ دسته‌ای در WooCommerce ثبت نشد.\n"
+                    f"هیچ دسته‌ای در فروشگاه ثبت نشد.\n"
                     f"خطا در: {names}\n\n{wc_hint}",
                 )
             elif failed:
@@ -1719,7 +1719,7 @@ class CategoryTab(QWidget):
                 QMessageBox.warning(
                     self,
                     "همگام‌سازی ناموفق",
-                    f"هیچ دسته‌ای در WooCommerce ثبت نشد.\n\n{wc_hint}",
+                    f"هیچ دسته‌ای در فروشگاه ثبت نشد.\n\n{wc_hint}",
                 )
             else:
                 msg = f"✅ {synced} از {total} دسته شناسایی شد."
@@ -2113,7 +2113,7 @@ class CategoryTab(QWidget):
             self,
             "حذف تصویر",
             f"تصویر لوکال دسته {full_code} حذف شود؟\n"
-            "(تصویر روی سایت ووکامرس تغییری نمی‌کند.)",
+            "(تصویر روی سایت فروشگاه تغییری نمی‌کند.)",
             QMessageBox.Yes | QMessageBox.No,
         )
         if confirm != QMessageBox.Yes:
@@ -2136,7 +2136,7 @@ class CategoryTab(QWidget):
         self.image_preview.hide()
 
     def _on_selected_hover(self, item):
-        """hover روی لیست گروه‌های انتخابی — نمایش تصویر لوکال یا ووکامرس"""
+        """hover روی لیست گروه‌های انتخابی — نمایش تصویر لوکال یا فروشگاه"""
         full_code = item.data(Qt.UserRole) or ""
         s_name = item.data(Qt.UserRole + 1) or ""
         if not full_code:
@@ -2163,7 +2163,7 @@ class CategoryTab(QWidget):
                     self.image_preview.show()
                     return
 
-        # fallback: تصویر ووکامرس (async — بدون block کردن UI)
+        # fallback: تصویر فروشگاه (async — بدون block کردن UI)
         image_url = self._get_wc_category_image_url(s_name, full_code)
         if not image_url:
             self.image_preview.hide()
@@ -2208,7 +2208,7 @@ class CategoryTab(QWidget):
             QMessageBox.information(self, "توقف", "عملیات فعالی برای توقف یافت نشد.")
 
     def _send_category_images_to_woo(self):
-        """ارسال تصاویر آپلودشده دسته‌بندی‌ها به ووکامرس"""
+        """ارسال تصاویر آپلودشده دسته‌بندی‌ها به فروشگاه"""
         to_process, skipped, stale_removed = self._collect_categories_for_image_upload()
         selected_count = self.selected_list.count()
 
@@ -2228,7 +2228,7 @@ class CategoryTab(QWidget):
 
         confirm_lines = [
             f"از {selected_count} دسته انتخاب‌شده، {len(to_process)} تصویر واقعی برای ارسال آماده است.",
-            f"آیا {len(to_process)} تصویر به ووکامرس ارسال شود؟",
+            f"آیا {len(to_process)} تصویر به فروشگاه ارسال شود؟",
         ]
         ignored = len(skipped) + len(stale_removed)
         if ignored:
@@ -2341,7 +2341,7 @@ class CategoryTab(QWidget):
         ]
         if still_missing:
             detail = (
-                f"{len(still_missing)} دسته در ووکامرس پیدا نشد "
+                f"{len(still_missing)} دسته در فروشگاه پیدا نشد "
                 f"({', '.join(still_missing[:4])}{'...' if len(still_missing) > 4 else ''}).\n"
                 "ابتدا «بررسی وضعیت» یا «همگام‌سازی» دسته‌ها را بزنید."
             )
@@ -2364,7 +2364,7 @@ class CategoryTab(QWidget):
                 cat_id = resolve_wc_category_id(full_code, category_map, slug_map)
                 if not cat_id:
                     log.warning(
-                        f"⚠️ دسته {full_code} ({s_name}) در ووکامرس پیدا نشد — "
+                        f"⚠️ دسته {full_code} ({s_name}) در فروشگاه پیدا نشد — "
                         f"ابتدا «همگام‌سازی» دسته‌ها را بزنید."
                     )
                     fail_count += 1
@@ -2507,11 +2507,11 @@ class CategoryTab(QWidget):
             ):
                 wp_hint = (
                     "\n\nتوجه: آپلود تصویر به wp/v2/media نیاز به WP Username + Application Password دارد "
-                    "(نه Consumer Key/Secret ووکامرس)."
+                    "(نه Consumer Key/Secret فروشگاه)."
                 )
             if "products/categories" in low or "wc/v3" in low:
                 wp_hint = (
-                    "\n\nتوجه: تنظیم تصویر روی دسته از API ووکامرس (Consumer Key با مجوز Write) انجام می‌شود — "
+                    "\n\nتوجه: تنظیم تصویر روی دسته از API فروشگاه (Consumer Key با مجوز Write) انجام می‌شود — "
                     "نه Application Password."
                 )
             QMessageBox.critical(

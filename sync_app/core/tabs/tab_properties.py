@@ -236,14 +236,17 @@ class PropertiesTab(SyncTab):
 
     def run_script(self):
         """همگام‌سازی ویژگی‌ها در پس‌زمینه"""
+        from sync_app.core.integrations.commerce_provider import store_platform_label
+
+        platform_label = store_platform_label(load_secure_config(None) or {})
         log.info(f"{PROPERTIES_LOG_MARKER} شروع همگام‌سازی ───")
         self.refresh_logs()
         if not self.run_job_in_background(
             Poshakproperties.main,
-            busy_text="⏳ در حال همگام‌سازی با ووکامرس...",
+            busy_text=f"⏳ در حال همگام‌سازی با {platform_label}...",
             success_message=None,
-            loading_status="⏳ همگام‌سازی ویژگی‌ها با ووکامرس...",
-            live_log_hint="⏳ همگام‌سازی ویژگی‌ها با WooCommerce...",
+            loading_status=f"⏳ همگام‌سازی ویژگی‌ها با {platform_label}...",
+            live_log_hint=f"⏳ همگام‌سازی ویژگی‌ها با {platform_label}...",
         ):
             return
 

@@ -137,7 +137,7 @@ class VariationRowWidget(QWidget):
         row.addWidget(self.stock_mode_combo)
 
         self.delete_button = make_row_button(
-            "🗑️", "حذف این واریانت از ووکامرس (موقت/زباله‌دان یا برای همیشه)", kind="danger"
+            "🗑️", "حذف این واریانت از فروشگاه (موقت/زباله‌دان یا برای همیشه)", kind="danger"
         )
         self.delete_button.clicked.connect(self._handle_delete)
         row.addWidget(self.delete_button)
@@ -184,8 +184,8 @@ class VariationRowWidget(QWidget):
     def set_wc_image_count(self, count: int):
         import re
         current = self.title.text()
-        current = re.sub(r"\s*\|\s*ووکامرس: \d+$", "", current)
-        self.title.setText(f"{current} | ووکامرس: {count}")
+        current = re.sub(r"\s*\|\s*فروشگاه: \d+$", "", current)
+        self.title.setText(f"{current} | فروشگاه: {count}")
 
     def set_image_count(self, count):
         n = int(count or 0)
@@ -391,7 +391,7 @@ class VariationsTab(QWidget):
         self.var_edit_image_btn.clicked.connect(self._edit_images_for_checked_variations)
 
         self.var_remove_image_btn = CompactCaptionButton("🗑 حذف تصویر واریانت")
-        self.var_remove_image_btn.setToolTip("حذف تصاویر انتخاب‌شده از حافظه محلی (و در صورت تأیید، از ووکامرس)")
+        self.var_remove_image_btn.setToolTip("حذف تصاویر انتخاب‌شده از حافظه محلی (و در صورت تأیید، از فروشگاه)")
         self.var_remove_image_btn.clicked.connect(self._remove_images_for_checked_variations)
 
         self._var_images_idle_text = "📤 انتقال تصاویر واریانت"
@@ -406,7 +406,7 @@ class VariationsTab(QWidget):
         )
         self.var_send_image_btn = CompactCaptionButton(self._var_images_idle_text)
         self.var_send_image_btn.setProperty("compactActionRole", "upload")
-        self.var_send_image_btn.setToolTip("ارسال تصاویر انتخاب‌شده واریانت‌ها به ووکامرس")
+        self.var_send_image_btn.setToolTip("ارسال تصاویر انتخاب‌شده واریانت‌ها به فروشگاه")
         self.var_send_image_btn.clicked.connect(self._on_send_variation_images_clicked)
 
         self.wc_admin_button = make_wc_admin_open_button(
@@ -415,9 +415,9 @@ class VariationsTab(QWidget):
             button_factory=CompactCaptionButton,
         )
 
-        self.check_wc_images_button = CompactCaptionButton("🖼️ بررسی تعداد تصویر ووکامرس")
+        self.check_wc_images_button = CompactCaptionButton("🖼️ بررسی تعداد تصویر فروشگاه")
         self.check_wc_images_button.setToolTip(
-            "برای هر محصولِ والدِ نمایش‌داده‌شده، لیست واریانت‌هاش رو از ووکامرس "
+            "برای هر محصولِ والدِ نمایش‌داده‌شده، لیست واریانت‌هاش رو از فروشگاه "
             "می‌گیره و تعداد تصویر هر واریانت رو کنارش نشون می‌ده."
         )
         self.check_wc_images_button.clicked.connect(self._check_wc_variation_image_counts)
@@ -943,12 +943,12 @@ class VariationsTab(QWidget):
 
     def _check_wc_variation_image_counts(self):
         self.check_wc_images_button.setEnabled(False)
-        self.check_wc_images_button.setText("⏳ در حال دریافت از ووکامرس...")
+        self.check_wc_images_button.setText("⏳ در حال دریافت از فروشگاه...")
         config = load_secure_config(None) or {}
         product_map = load_product_woo_map()
 
         # SKU محصول والدِ هرکدوم از واریانت‌های نمایش‌داده‌شده — چون endpoint
-        # واریانت‌های ووکامرس زیرمجموعه‌ی هر محصوله، نه یه لیست تخت مشترک.
+        # واریانت‌های فروشگاه زیرمجموعه‌ی هر محصوله، نه یه لیست تخت مشترک.
         parent_skus = set()
         for i in range(self.variation_list.count()):
             item = self.variation_list.item(i)
@@ -982,7 +982,7 @@ class VariationsTab(QWidget):
         def _done(counts):
             self._wc_image_count_cache.update(counts)
             self.check_wc_images_button.setEnabled(True)
-            self.check_wc_images_button.setText("🖼️ بررسی تعداد تصویر ووکامرس")
+            self.check_wc_images_button.setText("🖼️ بررسی تعداد تصویر فروشگاه")
             for i in range(self.variation_list.count()):
                 item = self.variation_list.item(i)
                 sku = str(item.data(Qt.UserRole) or "").strip()
@@ -992,12 +992,12 @@ class VariationsTab(QWidget):
                 if isinstance(row_widget, VariationRowWidget):
                     row_widget.set_wc_image_count(self._wc_image_count_cache[sku])
             QMessageBox.information(
-                self, "انجام شد", f"تعداد تصویر {len(counts)} واریانت از ووکامرس دریافت شد."
+                self, "انجام شد", f"تعداد تصویر {len(counts)} واریانت از فروشگاه دریافت شد."
             )
 
         def _fail(msg):
             self.check_wc_images_button.setEnabled(True)
-            self.check_wc_images_button.setText("🖼️ بررسی تعداد تصویر ووکامرس")
+            self.check_wc_images_button.setText("🖼️ بررسی تعداد تصویر فروشگاه")
             QMessageBox.critical(self, "خطا", f"دریافت تعداد تصویر ناموفق بود:\n{msg}")
 
         run_in_thread(_worker, on_complete=_done, on_error=_fail)
@@ -1031,7 +1031,7 @@ class VariationsTab(QWidget):
             force = True
         else:
             box = QMessageBox(self)
-            box.setWindowTitle("حذف واریانت از ووکامرس")
+            box.setWindowTitle("حذف واریانت از فروشگاه")
             box.setText(
                 f"واریانت «{display_name or variant_sku}» از سایت حذف بشه؟\n\n"
                 "🗑️ زباله‌دان: قابل بازیابی از پنل وردپرس تا وقتی خودتون خالی‌اش کنید.\n"
@@ -1076,7 +1076,7 @@ class VariationsTab(QWidget):
                 raise RuntimeError(wc_http_error_message(resp))
             found = resp.json()
             if not isinstance(found, list) or not found:
-                raise RuntimeError("این واریانت روی ووکامرس پیدا نشد (شاید قبلاً حذف شده).")
+                raise RuntimeError("این واریانت روی فروشگاه پیدا نشد (شاید قبلاً حذف شده).")
             variation_id = found[0]["id"]
             del_resp = wcapi.delete(
                 f"products/{int(parent_wc_id)}/variations/{variation_id}", params={"force": force}
@@ -1235,7 +1235,7 @@ class VariationsTab(QWidget):
             self,
             "حذف تصویر",
             f"تصویر(های) انتخاب‌شده واریانت {vsku} حذف شود؟\n"
-            "(تصویر روی سایت ووکامرس تا زمان «انتقال» تغییری نمی‌کند.)",
+            "(تصویر روی سایت فروشگاه تا زمان «انتقال» تغییری نمی‌کند.)",
             QMessageBox.Yes | QMessageBox.No,
         )
         if confirm != QMessageBox.Yes:
@@ -1246,7 +1246,7 @@ class VariationsTab(QWidget):
     def _open_variation_pipeline_dialog(self, vsku, item):
         """
         اجرای روش پردازش تصویر Smart Publish روی تصویرِ محلیِ آماده‌شده‌ی این واریانت.
-        برخلاف محصولات، اینجا هیچ تماس زنده‌ای با ووکامرس گرفته نمی‌شود —
+        برخلاف محصولات، اینجا هیچ تماس زنده‌ای با فروشگاه گرفته نمی‌شود —
         فقط فایل محلی (که با دکمه‌ی «انتقال» بعداً به سایت می‌رود) پردازش می‌شود.
         """
         from sync_app.core.smart_publish import (
@@ -1575,8 +1575,8 @@ class VariationsTab(QWidget):
         self._refresh_variation_labels_for_skus(set(with_images))
         if ask_yes_no(
             self,
-            "حذف از ووکامرس",
-            "تصویر از سایت (ووکامرس) هم برای همین واریانت‌ها حذف شود؟",
+            "حذف از فروشگاه",
+            "تصویر از سایت (فروشگاه) هم برای همین واریانت‌ها حذف شود؟",
             tone="warning",
             default_yes=False,
         ):
@@ -1639,9 +1639,9 @@ class VariationsTab(QWidget):
             ok = int((result or {}).get("ok", 0) or 0)
             fail = int((result or {}).get("fail", 0) or 0)
             if ok:
-                QMessageBox.information(self, "ووکامرس", f"تصویر {ok} واریانت از سایت حذف شد.")
+                QMessageBox.information(self, "فروشگاه", f"تصویر {ok} واریانت از سایت حذف شد.")
             if fail:
-                QMessageBox.warning(self, "ووکامرس", f"{fail} واریانت از سایت به‌روز نشد — لاگ را ببینید.")
+                QMessageBox.warning(self, "فروشگاه", f"{fail} واریانت از سایت به‌روز نشد — لاگ را ببینید.")
 
         def fail(err):
             QMessageBox.warning(self, "خطا", str(err))
@@ -1763,7 +1763,7 @@ class VariationsTab(QWidget):
     def _begin_var_images_ui(self):
         self._action_ops.begin("var_images", working_text="⏳ در حال انتقال تصاویر...")
         self._sync_started_at = time.monotonic()
-        self._live_log_hint = "⏳ انتقال تصاویر واریانت به ووکامرس..."
+        self._live_log_hint = "⏳ انتقال تصاویر واریانت به فروشگاه..."
         self.sync_progress.setFormat("%p% — انتقال تصاویر")
         self.sync_progress.setValue(5)
         self.sync_progress.setVisible(True)
@@ -2039,13 +2039,13 @@ class VariationsTab(QWidget):
         self._sync_started_at = time.monotonic()
         self._sync_progress_total = 0
         self._sync_progress_current = 0
-        self._live_log_hint = "⏳ همگام‌سازی واریانت‌ها با ووکامرس..."
+        self._live_log_hint = "⏳ همگام‌سازی واریانت‌ها با فروشگاه..."
         self.sync_progress.setValue(0)
         self.sync_progress.setVisible(True)
         self.sync_detail_label.setText("آماده‌سازی اتصال و دریافت ویژگی‌ها...")
         self.sync_detail_label.setVisible(True)
         self._action_ops.begin("sync")
-        self._set_variations_status("loading", "⏳ در حال همگام‌سازی واریانت‌ها با ووکامرس...")
+        self._set_variations_status("loading", "⏳ در حال همگام‌سازی واریانت‌ها با فروشگاه...")
         try:
             self.log_panel_controller.ensure_visible()
         except Exception:

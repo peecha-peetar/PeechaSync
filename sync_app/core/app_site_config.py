@@ -45,7 +45,10 @@ def get_store_display_name(config=None) -> str:
             return host
 
     cfg = resolved_store_config(config)
-    host = host_from_url(str(cfg.get("WC_URL") or "").strip(), default="")
+    from sync_app.core.integrations.commerce_provider import is_prestashop
+
+    url_key = "PS_URL" if is_prestashop(cfg) else "WC_URL"
+    host = host_from_url(str(cfg.get(url_key) or "").strip(), default="")
     return host or "فروشگاه"
 
 

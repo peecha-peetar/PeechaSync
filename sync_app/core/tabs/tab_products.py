@@ -124,7 +124,7 @@ class ProductRowWidget(QWidget):
         row.addWidget(self.smart_prep_button)
 
         self.delete_button = make_row_button(
-            "🗑️", "حذف این محصول از ووکامرس (موقت/زباله‌دان یا برای همیشه)", kind="danger"
+            "🗑️", "حذف این محصول از فروشگاه (موقت/زباله‌دان یا برای همیشه)", kind="danger"
         )
         self.delete_button.clicked.connect(self._handle_delete)
         row.addWidget(self.delete_button)
@@ -150,7 +150,7 @@ class ProductRowWidget(QWidget):
         self.stock_group_button = make_row_button(
             "🔗",
             "این محصول رو «فرعی» یه کد کالای دیگه کن:\n"
-            "خودش دیگه به ووکامرس ارسال نشه، فقط موجودیش\n"
+            "خودش دیگه به فروشگاه ارسال نشه، فقط موجودیش\n"
             "به اون کالای اصلی اضافه بشه.",
             kind="neutral",
         )
@@ -237,8 +237,8 @@ class ProductRowWidget(QWidget):
         current = self.title.text()
         # اگه قبلاً یه‌بار اضافه شده، اول پاکش کن تا تکراری نشه
         import re
-        current = re.sub(r"\s*\|\s*ووکامرس: \d+$", "", current)
-        self.title.setText(f"{current} | ووکامرس: {count}")
+        current = re.sub(r"\s*\|\s*فروشگاه: \d+$", "", current)
+        self.title.setText(f"{current} | فروشگاه: {count}")
 
     def set_manual_upload_count(self, count):
         """تعداد تصاویر دستی — ✔ سبز و دکمه حذف."""
@@ -403,7 +403,7 @@ class ProductTab(QWidget):
 
         self.product_link_filter = QComboBox()
         self.product_link_filter.addItem("همه محصولات", "all")
-        self.product_link_filter.addItem("✅ فقط لینک‌شده به ووکامرس", "linked")
+        self.product_link_filter.addItem("✅ فقط لینک‌شده به فروشگاه", "linked")
         self.product_link_filter.addItem("⭕ فقط لینک‌نشده", "unlinked")
         self.product_link_filter.setMinimumHeight(36)
         self.product_link_filter.currentIndexChanged.connect(
@@ -441,7 +441,7 @@ class ProductTab(QWidget):
         self.image_presence_filter.setMinimumHeight(36)
         self.image_presence_filter.setToolTip(
             "فیلتر بر اساس اینکه محصول تو دیتابیس ERP و/یا سایت تصویر داره یا نه.\n"
-            "برای تصویر «سایت»، اول یه‌بار دکمه‌ی «بررسی تعداد تصویر ووکامرس» رو بزنید."
+            "برای تصویر «سایت»، اول یه‌بار دکمه‌ی «بررسی تعداد تصویر فروشگاه» رو بزنید."
         )
         self.image_presence_filter.currentIndexChanged.connect(
             lambda _=0: self._filter_products(self.product_search.text())
@@ -477,22 +477,22 @@ class ProductTab(QWidget):
         self.refresh_button.clicked.connect(self._on_refresh_clicked)
 
         self.sync_button = CompactCaptionButton(self._sync_button_idle_text)
-        self.sync_button.setToolTip("ارسال محصولات انتخاب‌شده به ووکامرس")
+        self.sync_button.setToolTip("ارسال محصولات انتخاب‌شده به فروشگاه")
         self.sync_button.clicked.connect(self._on_sync_clicked)
 
         self.upload_images_button = CompactCaptionButton(self._upload_images_idle_text)
         self.upload_images_button.setProperty("compactActionRole", "images")
-        self.upload_images_button.setToolTip("انتقال تصاویر محصولات انتخابی به ووکامرس")
+        self.upload_images_button.setToolTip("انتقال تصاویر محصولات انتخابی به فروشگاه")
         self.upload_images_button.clicked.connect(self._on_upload_images_clicked)
 
         self.wc_admin_button = make_wc_admin_open_button(
             self, "products", button_factory=CompactCaptionButton
         )
 
-        self.check_wc_images_button = CompactCaptionButton("🖼️ بررسی تعداد تصویر ووکامرس")
+        self.check_wc_images_button = CompactCaptionButton("🖼️ بررسی تعداد تصویر فروشگاه")
         self.check_wc_images_button.setToolTip(
             "با یه درخواست کارآمد (نه یکی‌یکی)، تعداد واقعی تصویر هر محصول رو "
-            "از ووکامرس می‌گیره و کنار تعداد تصویر ERP نشون می‌ده."
+            "از فروشگاه می‌گیره و کنار تعداد تصویر ERP نشون می‌ده."
         )
         self.check_wc_images_button.clicked.connect(self._check_wc_image_counts)
 
@@ -1014,7 +1014,7 @@ class ProductTab(QWidget):
         auto_pipeline = pipelines.get(auto_pipeline_name) if auto_pipeline_name else None
 
         # اطلاعاتی که مراحل «حک متن» و «QR کد» بهشون نیاز دارن — کد کالا،
-        # نام محصول، و لینک محصول رو سایت (اگه قبلاً به ووکامرس لینک شده باشه).
+        # نام محصول، و لینک محصول رو سایت (اگه قبلاً به فروشگاه لینک شده باشه).
         product_name = str(item.data(Qt.UserRole + 4) or "") if item else ""
         product_url = ""
         try:
@@ -1083,7 +1083,7 @@ class ProductTab(QWidget):
             self,
             "حذف تصاویر",
             f"تصاویر دستی محصول {sku} حذف شوند؟\n"
-            "(تصاویر ERP و گالری ووکامرس تغییری نمی‌کند.)",
+            "(تصاویر ERP و گالری فروشگاه تغییری نمی‌کند.)",
             QMessageBox.Yes | QMessageBox.No,
         )
         if confirm != QMessageBox.Yes:
@@ -1152,7 +1152,7 @@ class ProductTab(QWidget):
 
     def _check_wc_image_counts(self):
         self.check_wc_images_button.setEnabled(False)
-        self.check_wc_images_button.setText("⏳ در حال دریافت از ووکامرس...")
+        self.check_wc_images_button.setText("⏳ در حال دریافت از فروشگاه...")
         config = load_secure_config(None) or {}
 
         def _worker():
@@ -1180,21 +1180,21 @@ class ProductTab(QWidget):
         def _done(counts):
             self._wc_image_count_cache.update(counts)
             self.check_wc_images_button.setEnabled(True)
-            self.check_wc_images_button.setText("🖼️ بررسی تعداد تصویر ووکامرس")
+            self.check_wc_images_button.setText("🖼️ بررسی تعداد تصویر فروشگاه")
             self._refresh_row_texts_with_wc_counts()
             QMessageBox.information(
-                self, "انجام شد", f"تعداد تصویر {len(counts)} محصول از ووکامرس دریافت شد."
+                self, "انجام شد", f"تعداد تصویر {len(counts)} محصول از فروشگاه دریافت شد."
             )
 
         def _fail(msg):
             self.check_wc_images_button.setEnabled(True)
-            self.check_wc_images_button.setText("🖼️ بررسی تعداد تصویر ووکامرس")
-            QMessageBox.critical(self, "خطا", f"دریافت تعداد تصویر از ووکامرس ناموفق بود:\n{msg}")
+            self.check_wc_images_button.setText("🖼️ بررسی تعداد تصویر فروشگاه")
+            QMessageBox.critical(self, "خطا", f"دریافت تعداد تصویر از فروشگاه ناموفق بود:\n{msg}")
 
         run_in_thread(_worker, on_complete=_done, on_error=_fail)
 
     def _refresh_row_texts_with_wc_counts(self):
-        """بعد از دریافت تعداد تصویر ووکامرس، متن هر ردیف رو (بدون بارگذاری مجدد از SQL) به‌روز می‌کنه."""
+        """بعد از دریافت تعداد تصویر فروشگاه، متن هر ردیف رو (بدون بارگذاری مجدد از SQL) به‌روز می‌کنه."""
         for i in range(self.product_list.count()):
             item = self.product_list.item(i)
             sku = str(item.data(Qt.UserRole) or "").strip()
@@ -1233,7 +1233,7 @@ class ProductTab(QWidget):
             force = True
         else:
             box = QMessageBox(self)
-            box.setWindowTitle("حذف محصول از ووکامرس")
+            box.setWindowTitle("حذف محصول از فروشگاه")
             box.setText(
                 f"محصول «{product_name or sku}» (کد {sku}) از سایت حذف بشه؟\n\n"
                 "🗑️ زباله‌دان: قابل بازیابی از پنل وردپرس تا وقتی خودتون خالی‌اش کنید.\n"
@@ -1252,7 +1252,7 @@ class ProductTab(QWidget):
             if force:
                 confirm2 = ask_yes_no(
                     self, "تأیید نهایی حذف کامل",
-                    f"مطمئنید؟ محصول «{product_name or sku}» برای همیشه از ووکامرس پاک می‌شه "
+                    f"مطمئنید؟ محصول «{product_name or sku}» برای همیشه از فروشگاه پاک می‌شه "
                     "و هیچ راه بازگردانی‌ای نداره.",
                     icon=QMessageBox.Warning,
                 )
@@ -1290,7 +1290,7 @@ class ProductTab(QWidget):
             QMessageBox.information(
                 self,
                 "ابتدا همگام‌سازی کنید",
-                f"محصول {sku} هنوز با ووکامرس همگام نشده — ابتدا سینک کنید.",
+                f"محصول {sku} هنوز با فروشگاه همگام نشده — ابتدا سینک کنید.",
             )
             return
 
@@ -1487,7 +1487,7 @@ class ProductTab(QWidget):
         if not wc_id:
             QMessageBox.information(
                 self, "ابتدا همگام‌سازی کنید",
-                f"محصول {sku} هنوز با ووکامرس همگام نشده — ابتدا سینک کنید.",
+                f"محصول {sku} هنوز با فروشگاه همگام نشده — ابتدا سینک کنید.",
             )
             return
 
@@ -1563,8 +1563,8 @@ class ProductTab(QWidget):
             "description": "",
         }
 
-        # لینک کوتاه محصول — فقط اگه این محصول از قبل به ووکامرس لینک شده
-        # باشه (چون بدون شناسه‌ی ووکامرس، لینکی برای ساختن نیست). از فرمت
+        # لینک کوتاه محصول — فقط اگه این محصول از قبل به فروشگاه لینک شده
+        # باشه (چون بدون شناسه‌ی فروشگاه، لینکی برای ساختن نیست). از فرمت
         # کوتاه خودِ وردپرس (?p=ID) استفاده می‌شه، نه یه سرویس کوتاه‌کننده‌ی
         # بیرونی — چون نه وابستگی جدید لازم داره نه اتصال اینترنت اضافه.
         short_link = ""
@@ -1690,7 +1690,7 @@ class ProductTab(QWidget):
         if not wc_id:
             QMessageBox.information(
                 self, "ابتدا همگام‌سازی کنید",
-                f"محصول {sku} هنوز با ووکامرس همگام نشده — ابتدا سینک کنید.",
+                f"محصول {sku} هنوز با فروشگاه همگام نشده — ابتدا سینک کنید.",
             )
             return
 
@@ -1794,7 +1794,7 @@ class ProductTab(QWidget):
         if not ProductSyncPreviewDialog.ask(self, previews, self.config):
             self._restore_temp_disabled_skus()
             return
-        if not confirm_live_site_backup(self, "ارسال محصولات به ووکامرس"):
+        if not confirm_live_site_backup(self, "ارسال محصولات به فروشگاه"):
             self._restore_temp_disabled_skus()
             return
 
@@ -1818,7 +1818,7 @@ class ProductTab(QWidget):
         self.sync_detail_label.setText("آماده‌سازی ارسال...")
         self.sync_detail_label.setVisible(True)
         self._sync_live_timer.start()
-        self._set_products_status("loading", "⏳ در حال ارسال محصولات به ووکامرس...")
+        self._set_products_status("loading", "⏳ در حال ارسال محصولات به فروشگاه...")
 
     def _hidden_checked_skus(self) -> set:
         """SKUهایی که تیک‌خورده‌ان ولی الان (به‌خاطر فیلتر) روی صفحه مخفی‌ان."""
@@ -1868,11 +1868,11 @@ class ProductTab(QWidget):
         self.refresh_logs()
         ok_count = (result or {}).get("ok", 0) if isinstance(result, dict) else 0
         if ok_count > 0:
-            self._set_products_status("success", f"✅ {ok_count} محصول با موفقیت به ووکامرس ارسال شد.")
+            self._set_products_status("success", f"✅ {ok_count} محصول با موفقیت به فروشگاه ارسال شد.")
             QMessageBox.information(
                 self,
                 "موفق",
-                f"{ok_count} محصول با موفقیت به ووکامرس ارسال شد.",
+                f"{ok_count} محصول با موفقیت به فروشگاه ارسال شد.",
             )
         else:
             self._set_products_status(
@@ -1902,7 +1902,7 @@ class ProductTab(QWidget):
         self._set_products_status("error", f"❌ {short}")
         QMessageBox.critical(self, "خطا در همگام‌سازی", str(message))
 
-    # ─── ارسال تصاویر به ووکامرس ──────────────────────────────────────────────
+    # ─── ارسال تصاویر به فروشگاه ──────────────────────────────────────────────
 
     def _get_wp_base_url(self):
         """استخراج آدرس پایه وردپرس از WC_URL تنظیمات"""
@@ -1957,7 +1957,7 @@ class ProductTab(QWidget):
         return ready, skipped_no_image, pruned
 
     def _send_selected_images_to_woo(self):
-        """ارسال تصاویر محصولات انتخابی به ووکامرس (دستی یا از ERP)"""
+        """ارسال تصاویر محصولات انتخابی به فروشگاه (دستی یا از ERP)"""
         to_process, skipped, pruned = self._collect_products_for_image_upload()
         selected_checked = sum(
             1
@@ -1979,10 +1979,10 @@ class ProductTab(QWidget):
             return
 
         msg_box = QMessageBox(self)
-        msg_box.setWindowTitle("تصاویر موجود در ووکامرس")
+        msg_box.setWindowTitle("تصاویر موجود در فروشگاه")
         intro = (
             f"از {selected_checked} محصول تیک‌خورده، {len(to_process)} محصول تصویر واقعی دارند.\n\n"
-            "اگر محصولی از قبل در ووکامرس تصویر داشته باشد چه کاری انجام شود؟"
+            "اگر محصولی از قبل در فروشگاه تصویر داشته باشد چه کاری انجام شود؟"
         )
         if skipped:
             intro += f"\n\n({len(skipped)} محصول بدون تصویر نادیده گرفته می‌شود)"
@@ -2103,7 +2103,7 @@ class ProductTab(QWidget):
                     break
 
                 if not isinstance(res, list) or not res:
-                    log.warning(f"⚠️ محصول {sku} در ووکامرس پیدا نشد — رد شد.")
+                    log.warning(f"⚠️ محصول {sku} در فروشگاه پیدا نشد — رد شد.")
                     fail_count += 1
                     continue
 
@@ -2247,7 +2247,7 @@ class ProductTab(QWidget):
             if not detail or "application password" in detail.lower() or "wp/v2/media" in detail.lower():
                 wp_hint = "\n\nتنظیمات: WP Username + Application Password"
             if "products" in detail.lower() and "wc/v3" not in detail.lower():
-                wp_hint = "\n\nتنظیم تصویر محصول از API ووکامرس (Consumer Key با Write) انجام می‌شود."
+                wp_hint = "\n\nتنظیم تصویر محصول از API فروشگاه (Consumer Key با Write) انجام می‌شود."
             QMessageBox.critical(
                 self,
                 "خطا",
@@ -2537,7 +2537,7 @@ class ProductTab(QWidget):
             self.log_view.setPlainText(f"خطا در خواندن لاگ: {e}")
 
     def _filter_products(self, text):
-        """فیلتر لیست محصولات بر اساس متن جستجو + وضعیت لینک ووکامرس + نوع محصول + گروه موجودی"""
+        """فیلتر لیست محصولات بر اساس متن جستجو + وضعیت لینک فروشگاه + نوع محصول + گروه موجودی"""
         search = text.strip().lower()
         link_mode = self.product_link_filter.currentData() if hasattr(self, "product_link_filter") else "all"
         type_mode = self.product_type_filter.currentData() if hasattr(self, "product_type_filter") else "all"

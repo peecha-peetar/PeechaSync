@@ -520,6 +520,9 @@ class StatCard(QFrame):
         if subtitle:
             self.subtitle_label.setText(subtitle)
 
+    def set_title(self, title):
+        self.title_label.setText(title)
+
 
 class HealthCard(QFrame):
     def __init__(self, title, icon, parent=None):
@@ -578,6 +581,9 @@ class HealthCard(QFrame):
         self.badge.style().polish(self.badge)
         self.detail_label.setText(detail or "—")
         self.meta_label.setText(meta or "")
+
+    def set_title(self, title):
+        self.title_label.setText(title)
 
 
 class DashboardTab(QWidget):
@@ -643,20 +649,20 @@ class DashboardTab(QWidget):
         hero_title = QLabel("📊 مرکز فرمان پیچا")
         hero_title.setObjectName("dashHeroTitle")
         hero_top.addWidget(hero_title)
-        hero_title.setToolTip("نمای کلی وضعیت اتصال‌ها، داده‌های ERP و آمار ووکامرس در یک صفحه")
+        hero_title.setToolTip("نمای کلی وضعیت اتصال‌ها، داده‌های ERP و آمار فروشگاه در یک صفحه")
         hero_top.addStretch()
 
         self.refresh_btn = QPushButton("↻ بازخوانی")
         self.refresh_btn.setObjectName("dashRefreshBtn")
         self.refresh_btn.setCursor(Qt.PointingHandCursor)
         self.refresh_btn.setMinimumHeight(36)
-        self.refresh_btn.setToolTip("بارگذاری دوباره وضعیت SQL، API ووکامرس، KPIها و جداول")
+        self.refresh_btn.setToolTip("بارگذاری دوباره وضعیت SQL، API فروشگاه، KPIها و جداول")
         self.refresh_btn.clicked.connect(self.load_data)
         hero_top.addWidget(self.refresh_btn)
         hero_layout.addLayout(hero_top)
 
         hero_sub = QLabel(
-            "نمای یکپارچه دیتابیس ERP (SQL Server)، فروشگاه ووکامرس/وردپرس و وضعیت همگام‌سازی"
+            "نمای یکپارچه دیتابیس ERP (SQL Server)، فروشگاه آنلاین و وضعیت همگام‌سازی"
         )
         hero_sub.setWordWrap(True)
         hero_sub.setObjectName("dashHeroSub")
@@ -678,7 +684,7 @@ class DashboardTab(QWidget):
         # ── سلامت سیستم ───────────────────────────────
         health_title = QLabel("وضعیت اتصال‌ها")
         health_title.setProperty("role", "section-title")
-        health_title.setToolTip("نتیجه اتصال زنده به SQL Server، API ووکامرس و وضعیت سایت")
+        health_title.setToolTip("نتیجه اتصال زنده به SQL Server، API فروشگاه و وضعیت سایت")
         self._section_labels.append(health_title)
         self._root.addWidget(health_title)
         health_hint = QLabel(
@@ -691,8 +697,8 @@ class DashboardTab(QWidget):
         health_row = QHBoxLayout()
         health_row.setSpacing(12)
         self._health_sql = HealthCard("SQL Server — ERP", "🗄️")
-        self._health_wc = HealthCard("ووکامرس API", "🛒")
-        self._health_wp = HealthCard("وردپرس / فروشگاه", "🌐")
+        self._health_wc = HealthCard("API فروشگاه", "🛒")
+        self._health_wp = HealthCard("فروشگاه آنلاین", "🌐")
         for card in (self._health_sql, self._health_wc, self._health_wp):
             health_row.addWidget(card)
         self._root.addLayout(health_row)
@@ -715,16 +721,16 @@ class DashboardTab(QWidget):
         self._kpi_grid.setSpacing(12)
         self._card_sql_products = StatCard("کالاهای ERP", "—", "کل رکوردهای Article", "📦", "#1a2785")
         self._card_sync_scope = StatCard("دامنه همگام‌سازی", "—", "گروه‌های انتخاب‌شده", "🎯", "#7c3aed")
-        self._card_wc_products = StatCard("محصولات ووکامرس", "—", "منتشرشده در سایت", "🏷️", "#2563eb")
-        self._card_customers = StatCard("مشتریان سایت", "—", "حساب‌های ووکامرس", "👥", "#0891b2")
+        self._card_wc_products = StatCard("محصولات فروشگاه", "—", "منتشرشده در سایت", "🏷️", "#2563eb")
+        self._card_customers = StatCard("مشتریان سایت", "—", "حساب‌های فروشگاه", "👥", "#0891b2")
         self._card_orders = StatCard("سفارشات ماه", "—", "گزارش فروش ماه جاری", "🧾", "#d97706")
         self._card_revenue = StatCard("درآمد ماه", "—", "خالص فروش ماه جاری", "💰", "#16a34a")
         self._card_sql_products.setToolTip("تعداد کل کالاهای موجود در ERP (جدول Article)")
         self._card_sync_scope.setToolTip("تعداد زیرگروه‌های انتخابی و کالاهای داخل دامنه همگام‌سازی")
-        self._card_wc_products.setToolTip("تعداد محصولات ثبت‌شده در ووکامرس")
-        self._card_customers.setToolTip("تعداد حساب‌های مشتری در سایت ووکامرس")
-        self._card_orders.setToolTip("تعداد سفارشات ماه جاری بر اساس گزارش ووکامرس")
-        self._card_revenue.setToolTip("فروش/درآمد ماه جاری از گزارش‌های WooCommerce")
+        self._card_wc_products.setToolTip("تعداد محصولات ثبت‌شده در فروشگاه")
+        self._card_customers.setToolTip("تعداد حساب‌های مشتری در سایت فروشگاه")
+        self._card_orders.setToolTip("تعداد سفارشات ماه جاری بر اساس گزارش فروش فروشگاه")
+        self._card_revenue.setToolTip("فروش/درآمد ماه جاری از گزارش‌های فروشگاه")
 
         cards = [
             self._card_sql_products, self._card_sync_scope, self._card_wc_products,
@@ -815,11 +821,11 @@ class DashboardTab(QWidget):
             insight_layout.addWidget(lbl)
 
         self._insight_erp = QLabel("ERP: —")
-        self._insight_wc = QLabel("ووکامرس: —")
+        self._insight_wc = QLabel("فروشگاه: —")
         self._insight_recon = QLabel("تطبیق: —")
         self._insight_sync = QLabel("همگام‌سازی: —")
         self._insight_erp.setToolTip("اطلاعات سرور/دیتابیس ERP، تعداد گروه‌ها و لیست قیمت فعال")
-        self._insight_wc.setToolTip("نسخه و آمار فروشگاه ووکامرس/وردپرس")
+        self._insight_wc.setToolTip("نسخه/ارز و آمار فروشگاه آنلاین")
         self._insight_recon.setToolTip("تعداد جفت‌های ثبت‌شده در product_woo_map")
         self._insight_sync.setToolTip("بررسی آمادگی عملیات همگام‌سازی بر اساس اتصال‌ها و گروه‌های انتخابی")
         for lbl in (self._insight_erp, self._insight_wc, self._insight_recon, self._insight_sync):
@@ -844,7 +850,7 @@ class DashboardTab(QWidget):
         revenue_layout = QVBoxLayout(revenue_frame)
         self._revenue_chart = MiniBarChart()
         revenue_layout.addWidget(self._revenue_chart)
-        revenue_frame.setToolTip("روند فروش ۱۴ روز اخیر (تومان) — بر اساس گزارش فروش ووکامرس")
+        revenue_frame.setToolTip("روند فروش ۱۴ روز اخیر (تومان) — بر اساس گزارش فروش فروشگاه")
         charts_row.addWidget(revenue_frame, 1)
 
         topprod_frame = QFrame()
@@ -860,18 +866,18 @@ class DashboardTab(QWidget):
         health_layout = QVBoxLayout(health_frame)
         self._health_chart = MiniBarChart()
         health_layout.addWidget(self._health_chart)
-        health_frame.setToolTip("تعداد محصولات لینک‌شده در برابر لینک‌نشده به ووکامرس")
+        health_frame.setToolTip("تعداد محصولات لینک‌شده در برابر لینک‌نشده به فروشگاه")
         charts_row.addWidget(health_frame, 1)
 
         self._root.addLayout(charts_row)
 
         # ── جداول ────────────────────────────────────
         self._orders_table = self._build_table(
-            "آخرین سفارشات ووکامرس",
+            "آخرین سفارشات فروشگاه",
             ["شناسه", "مشتری", "وضعیت", "مبلغ", "تاریخ"],
             min_h=200,
         )
-        self._orders_table["frame"].setToolTip("آخرین سفارشات ثبت‌شده در ووکامرس برای پایش سریع وضعیت فروش")
+        self._orders_table["frame"].setToolTip("آخرین سفارشات ثبت‌شده در فروشگاه برای پایش سریع وضعیت فروش")
         self._root.addWidget(self._orders_table["frame"])
 
         bottom = QHBoxLayout()
@@ -887,7 +893,7 @@ class DashboardTab(QWidget):
             min_h=170,
         )
         self._top_table["frame"].setToolTip("کالاهای پرفروش ماه جاری برای تصمیم‌گیری روی موجودی و قیمت")
-        self._pending_table["frame"].setToolTip("سفارشات در وضعیت processing که معمولاً در صف انتقال به ERP هستند")
+        self._pending_table["frame"].setToolTip("سفارشاتی که هنوز پرداخت/تکمیل نشده‌اند و معمولاً در صف انتقال به ERP هستند")
         bottom.addWidget(self._top_table["frame"], 1)
         bottom.addWidget(self._pending_table["frame"], 1)
         self._root.addLayout(bottom)
@@ -898,7 +904,7 @@ class DashboardTab(QWidget):
         self.footer_status.setProperty("state", "info")
         footer_row = QHBoxLayout(self.footer_status)
         footer_row.setContentsMargins(10, 6, 10, 6)
-        self.footer_message = QLabel("💡 برای داده کامل، تنظیمات SQL و WooCommerce را کامل کنید سپس «بازخوانی» بزنید.")
+        self.footer_message = QLabel("💡 برای داده کامل، تنظیمات SQL و فروشگاه را کامل کنید سپس «بازخوانی» بزنید.")
         self.footer_message.setObjectName("reconStatusMessage")
         self.footer_message.setWordWrap(True)
         footer_row.addWidget(self.footer_message, 1)
@@ -952,10 +958,10 @@ class DashboardTab(QWidget):
 
         if wc_ok:
             self._health_wc.set_status(True, "API فعال")
-            self._health_wp.set_status(True, "وردپرس در دسترس")
+            self._health_wp.set_status(True, "فروشگاه در دسترس")
         else:
             self._health_wc.set_status(False, "اتصال قطع شد")
-            self._health_wp.set_status(False, "نیاز به اتصال ووکامرس", warning=True)
+            self._health_wp.set_status(False, "نیاز به اتصال فروشگاه", warning=True)
 
     def _apply_dashboard_theme(self):
         cfg = load_secure_config(None) or {}
@@ -1080,17 +1086,21 @@ class DashboardTab(QWidget):
         if self._thread and self._thread.isRunning():
             return
 
-        needs_setup = (not config.get("SQL_CONN_STRING")) or (not config.get("WC_URL"))
+        from sync_app.core.integrations.commerce_provider import is_prestashop, store_platform_label
+
+        store_url_configured = bool(config.get("PS_URL")) if is_prestashop(config) else bool(config.get("WC_URL"))
+        needs_setup = (not config.get("SQL_CONN_STRING")) or (not store_url_configured)
+        platform_label = store_platform_label(config)
 
         self.refresh_btn.setEnabled(False)
         self.load_progress.setVisible(True)
         if needs_setup:
-            msg = "راهنما: برای داده کامل داشبورد، ابتدا تنظیمات SQL و WooCommerce را کامل کنید."
+            msg = f"راهنما: برای داده کامل داشبورد، ابتدا تنظیمات SQL و {platform_label} را کامل کنید."
             self.status_label.setText(f"{msg} | در حال جمع‌آوری...")
             self._set_footer_status("warning", f"⚠ {msg}")
         else:
-            self.status_label.setText("در حال جمع‌آوری داده از SQL و ووکامرس...")
-            self._set_footer_status("loading", "⏳ در حال بارگذاری آمار ERP و ووکامرس...")
+            self.status_label.setText(f"در حال جمع‌آوری داده از SQL و {platform_label}...")
+            self._set_footer_status("loading", f"⏳ در حال بارگذاری آمار ERP و {platform_label}...")
 
         self._worker = DashboardWorker(config)
         self._thread = QThread(self)
@@ -1148,9 +1158,13 @@ class DashboardTab(QWidget):
 
         wc_ok = woo.get("ok", False)
         if wc_ok:
+            version_detail = (
+                f"پرستاشاپ | ارز: {woo.get('currency') or '—'}" if woo.get("platform") == "prestashop"
+                else f"WC {woo.get('wc_version', '—')}"
+            )
             self._health_wc.set_status(
                 True,
-                f"API فعال | WC {woo.get('wc_version', '—')}",
+                f"API فعال | {version_detail}",
                 f"Host: {cfg.get('wc_host', '—')}",
             )
         elif woo.get("configured"):
@@ -1186,7 +1200,7 @@ class DashboardTab(QWidget):
             self._health_wp.set_status(
                 False,
                 cfg.get("wc_host", "—"),
-                "نیاز به اتصال ووکامرس",
+                "نیاز به اتصال فروشگاه",
                 warning=not woo.get("configured"),
             )
 
@@ -1228,7 +1242,7 @@ class DashboardTab(QWidget):
         )
         sync_ready = sql.get("ok") and wc_ok and sel > 0 and map_count > 0
         if sync_ready:
-            sync_msg = "آماده همگام‌سازی — ERP و ووکامرس متصل، گروه‌ها انتخاب و تطبیق ثبت شده است."
+            sync_msg = "آماده همگام‌سازی — ERP و فروشگاه متصل، گروه‌ها انتخاب و تطبیق ثبت شده است."
             footer_state = "success"
             footer_msg = "✓ داشبورد به‌روز شد — سیستم برای همگام‌سازی آماده به نظر می‌رسد."
         elif sql.get("ok") and wc_ok and sel > 0 and map_count == 0:
@@ -1236,7 +1250,7 @@ class DashboardTab(QWidget):
             footer_state = "warning"
             footer_msg = "⚠ نگاشت تطبیق خالی است — قبل از همگام‌سازی خودکار، تب تطبیق را انجام دهید."
         else:
-            sync_msg = "برای همگام‌سازی کامل: اتصال SQL/ووکامرس را بررسی و در تب دسته‌بندی گروه انتخاب کنید."
+            sync_msg = "برای همگام‌سازی کامل: اتصال SQL/فروشگاه را بررسی و در تب دسته‌بندی گروه انتخاب کنید."
             footer_state = "info"
             footer_msg = f"ℹ آخرین بروزرسانی: {loaded_at}"
         self._insight_sync.setText(f"<b>همگام‌سازی</b><br>{sync_msg}")

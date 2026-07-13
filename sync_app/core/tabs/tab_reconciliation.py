@@ -2627,7 +2627,7 @@ class ReconciliationTab(QWidget):
         self.reject_auto_btn.setEnabled(False)
         self._set_status(
             "loading",
-            f"⏳ در حال دریافت {ENTITY_LABELS.get(entity, entity)} از ERP و ووکامرس...",
+            f"⏳ در حال دریافت {ENTITY_LABELS.get(entity, entity)} از ERP و فروشگاه...",
         )
 
     def _end_load_comparison_ui(self):
@@ -2653,7 +2653,7 @@ class ReconciliationTab(QWidget):
             if manual:
                 self._set_status(
                     "error",
-                    "❌ اتصال SQL یا WooCommerce برقرار نیست — "
+                    "❌ اتصال SQL یا فروشگاه برقرار نیست — "
                     "ابتدا دکمه‌های بالای برنامه را سبز کنید.",
                 )
             return
