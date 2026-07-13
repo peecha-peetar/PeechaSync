@@ -1,6 +1,8 @@
 """
 Site Health — بررسی وضعیت فنی فروشگاه:
-SSL، سرعت پاسخ سایت، سلامت API ووکامرس، اتصال SQL، و لینک‌های کلیدی سایت.
+SSL، سرعت پاسخ سایت، سلامت API فروشگاه (ووکامرس یا پرستاشاپ)، اتصال SQL،
+و لینک‌های کلیدی سایت (فقط ووکامرس — مسیرهای /shop و /cart قراردادِ
+ثابت پرستاشاپ نیستند، پس برای آن پلتفرم حدس زده نمی‌شوند).
 """
 
 from __future__ import annotations
@@ -74,6 +76,19 @@ def check_wc_api(config: dict) -> HealthCheckResult:
         return HealthCheckResult("API ووکامرس", False, f"اتصال ناموفق بود: {exc}", "critical")
 
 
+def check_store_api(config: dict) -> HealthCheckResult:
+    """معادل platform-aware چک بالا — برای ووکامرس یا پرستاشاپ، از همون
+    تابع اتصالی که تب تنظیمات هم استفاده می‌کنه (check_store_connection)."""
+    from sync_app.core.integrations.commerce_provider import check_store_connection, store_platform_label
+
+    label = f"API {store_platform_label(config)}"
+    try:
+        ok, message, _currency = check_store_connection(config, update_config_status=False)
+        return HealthCheckResult(label, ok, message, "critical" if not ok else "info")
+    except Exception as exc:
+        return HealthCheckResult(label, False, f"اتصال ناموفق بود: {exc}", "critical")
+
+
 def check_sql_connection(config: dict) -> HealthCheckResult:
     """آیا اتصال به SQL Server (ERP) برقرار می‌شود؟"""
     from sync_app.core.sql_connection_helper import open_sql_connection
@@ -118,13 +133,17 @@ def check_key_pages(url: str) -> list[HealthCheckResult]:
 
 def run_all_checks(config: dict) -> list[HealthCheckResult]:
     """اجرای همه‌ی چک‌های سلامت سایت — این تابع کند است (چند درخواست شبکه)، در Thread پس‌زمینه صدا بزنید."""
-    url = str(config.get("WC_URL") or "").strip()
+    from sync_app.core.integrations.commerce_provider import is_prestashop
+
+    ps_mode = is_prestashop(config)
+    url = str((config.get("PS_URL") if ps_mode else config.get("WC_URL")) or "").strip()
     results = []
     results.append(check_sql_connection(config))
-    results.append(check_wc_api(config))
+    results.append(check_store_api(config))
     results.append(check_ssl(url))
     results.append(check_site_speed(url))
-    results.extend(check_key_pages(url))
+    if not ps_mode:
+        results.extend(check_key_pages(url))
     return results
 
 

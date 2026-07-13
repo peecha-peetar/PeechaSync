@@ -1,4 +1,5 @@
-"""تب گزارش سئو و سلامت سایت — بررسی کلی محصولات از روی داده‌ی زنده‌ی ووکامرس."""
+"""تب گزارش سئو و سلامت سایت — بررسی کلی محصولات از روی داده‌ی زنده‌ی فروشگاه
+(ووکامرس یا پرستاشاپ)."""
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QCheckBox,
@@ -9,8 +10,11 @@ from PyQt5.QtCore import Qt
 
 from sync_app.core.secure_config_loader import load_secure_config
 from sync_app.core.threading_helper import run_in_thread
+from sync_app.core.integrations.commerce_provider import is_prestashop, store_platform_label
 from sync_app.core.wc_sync_helper import build_wcapi, apply_network_overrides, wc_call
-from sync_app.core.seo_helper import analyze_product_seo_live, apply_seo_fixes
+from sync_app.core.seo_helper import (
+    analyze_product_seo_live, apply_seo_fixes, analyze_ps_product_seo, apply_ps_seo_fixes,
+)
 
 PRODUCT_FIELDS = "id,name,short_description,description,images,categories,meta_data"
 
@@ -41,20 +45,16 @@ class SeoHealthTab(QWidget):
         title.setAlignment(Qt.AlignCenter)
         outer.addWidget(title)
 
-        subtitle = QLabel("بررسی زنده‌ی محصولات ووکامرس از نظر عنوان، توضیحات، Alt، متا دیسکریپشن، کلمات کلیدی")
+        subtitle = QLabel("بررسی زنده‌ی محصولات فروشگاه از نظر عنوان، توضیحات، Alt، متا دیسکریپشن، کلمات کلیدی")
         subtitle.setProperty("role", "caption")
         subtitle.setAlignment(Qt.AlignCenter)
         outer.addWidget(subtitle)
 
-        caveat = QLabel(
-            "⚠️ چک‌های متا (دیسکریپشن/عنوان سئو/کلمات کلیدی) فقط وقتی درست کار می‌کنند که افزونه‌ی "
-            "سئوی سایت (Yoast/Rank Math) آن فیلدها را در REST API عمومی expose کرده باشد. اگر همیشه "
-            "«ندارد» نشان می‌دهد ولی مطمئنید مقدار دارید، یعنی افزونه‌ی سایت آن را در API عمومی "
-            "نمی‌گذارد — این یک محدودیت شناخته‌شده است، نه باگ."
-        )
-        caveat.setWordWrap(True)
-        caveat.setStyleSheet("color:#b45309; font-size:11px;")
-        outer.addWidget(caveat)
+        self.caveat = QLabel()
+        self.caveat.setWordWrap(True)
+        self.caveat.setStyleSheet("color:#b45309; font-size:11px;")
+        self._set_platform_caveat()
+        outer.addWidget(self.caveat)
 
         top_row = QHBoxLayout()
         self.run_btn = QPushButton("🔍 اجرای بررسی سئو")
@@ -88,6 +88,22 @@ class SeoHealthTab(QWidget):
         self.table.setColumnWidth(4, 40)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         outer.addWidget(self.table)
+
+    def _set_platform_caveat(self):
+        cfg = load_secure_config(None) or {}
+        if is_prestashop(cfg):
+            self.caveat.setText(
+                "ℹ️ روی پرستاشاپ، فیلدهای «متا دیسکریپشن/عنوان سئو/کلمات کلیدی» فیلد بومی محصول "
+                "هستند (نه متادیتای یک افزونه) — پس همیشه قابل‌اعتمادند. چک/رفع «Alt تصویر» برای "
+                "پرستاشاپ در این نسخه پشتیبانی نمی‌شود."
+            )
+        else:
+            self.caveat.setText(
+                "⚠️ چک‌های متا (دیسکریپشن/عنوان سئو/کلمات کلیدی) فقط وقتی درست کار می‌کنند که افزونه‌ی "
+                "سئوی سایت (Yoast/Rank Math) آن فیلدها را در REST API عمومی expose کرده باشد. اگر همیشه "
+                "«ندارد» نشان می‌دهد ولی مطمئنید مقدار دارید، یعنی افزونه‌ی سایت آن را در API عمومی "
+                "نمی‌گذارد — این یک محدودیت شناخته‌شده است، نه باگ."
+            )
 
     def _toggle_select_all_rows(self, state):
         checked = bool(state)
@@ -131,12 +147,35 @@ class SeoHealthTab(QWidget):
         self.bulk_fix_btn.setEnabled(False)
         self.run_btn.setEnabled(False)
         config = load_secure_config(None) or {}
+        ps_mode = is_prestashop(config)
         results = {"ok": 0, "failed": 0, "failed_names": []}
 
         def _worker():
+            updated_bundles = {}
+            if ps_mode:
+                from sync_app.core.ps_sync_helper import ps_get_product, ps_list_categories
+
+                categories = ps_list_categories(config)
+                cat_by_id = {int(c["id"]): c for c in categories if isinstance(c, dict) and c.get("id")}
+                for i, (row, wc_id, to_send, _image_id, _extra_ids, name) in enumerate(targets, start=1):
+                    self.summary_label.setText(f"⏳ در حال رفع {i}/{len(targets)}: {name}")
+                    try:
+                        apply_ps_seo_fixes(config, wc_id, to_send)
+                        product = ps_get_product(config, wc_id)
+                        cats = (product or {}).get("categories") or []
+                        cat_id = int(cats[0].get("id") or 0) if cats and isinstance(cats[0], dict) else 0
+                        category_name = str((cat_by_id.get(cat_id) or {}).get("name") or "")
+                        updated_bundles[row] = (
+                            wc_id, analyze_ps_product_seo(product or {}, category_name=category_name)
+                        )
+                        results["ok"] += 1
+                    except Exception:
+                        results["failed"] += 1
+                        results["failed_names"].append(name)
+                return updated_bundles
+
             apply_network_overrides(config)
             wcapi = build_wcapi(config)
-            updated_bundles = {}
             for i, (row, wc_id, to_send, image_id, extra_image_ids, name) in enumerate(targets, start=1):
                 self.summary_label.setText(f"⏳ در حال رفع {i}/{len(targets)}: {name}")
                 try:
@@ -170,8 +209,14 @@ class SeoHealthTab(QWidget):
 
     def _run_check(self):
         config = load_secure_config(None) or {}
-        if not config.get("WC_URL"):
-            QMessageBox.warning(self, "تنظیمات ناقص", "ابتدا آدرس سایت ووکامرس را در تنظیمات وارد کنید.")
+        self._set_platform_caveat()
+        ps_mode = is_prestashop(config)
+        store_configured = bool(config.get("PS_URL")) if ps_mode else bool(config.get("WC_URL"))
+        if not store_configured:
+            QMessageBox.warning(
+                self, "تنظیمات ناقص",
+                f"ابتدا آدرس سایت {store_platform_label(config)} را در تنظیمات وارد کنید.",
+            )
             return
 
         self.run_btn.setEnabled(False)
@@ -179,6 +224,8 @@ class SeoHealthTab(QWidget):
         self.summary_label.setText("")
 
         def _worker():
+            if ps_mode:
+                return self._fetch_and_score_ps(config)
             apply_network_overrides(config)
             wcapi = build_wcapi(config)
             return self._fetch_and_score(wcapi)
@@ -194,6 +241,25 @@ class SeoHealthTab(QWidget):
             QMessageBox.critical(self, "خطا", f"بررسی سئو ناموفق بود:\n{msg}")
 
         run_in_thread(_worker, on_complete=_done, on_error=_fail)
+
+    def _fetch_and_score_ps(self, config):
+        from sync_app.core.ps_sync_helper import ps_list_products, ps_list_categories
+
+        categories = ps_list_categories(config)
+        cat_by_id = {int(c["id"]): c for c in categories if isinstance(c, dict) and c.get("id")}
+
+        rows = []
+        for item in ps_list_products(config):
+            if not isinstance(item, dict) or not item.get("id"):
+                continue
+            cats = item.get("categories") or []
+            cat_id = int(cats[0].get("id") or 0) if cats and isinstance(cats[0], dict) else 0
+            category_name = str((cat_by_id.get(cat_id) or {}).get("name") or "")
+            bundle = analyze_ps_product_seo(item, category_name=category_name)
+            rows.append((item["id"], bundle))
+
+        rows.sort(key=lambda r: r[1]["current_score"])
+        return rows
 
     def _fetch_and_score(self, wcapi):
         rows = []
@@ -340,8 +406,11 @@ class SeoHealthTab(QWidget):
 
     def _send_fix(self, row, wc_id, to_send, image_id, extra_image_ids=None):
         config = load_secure_config(None) or {}
+        ps_mode = is_prestashop(config)
 
         def _worker():
+            if ps_mode:
+                return self._apply_and_rescan_ps(config, wc_id, to_send)
             apply_network_overrides(config)
             wcapi = build_wcapi(config)
             apply_seo_fixes(wcapi, config, wc_id, to_send, image_id, extra_image_ids)
@@ -358,3 +427,15 @@ class SeoHealthTab(QWidget):
             QMessageBox.critical(self, "خطا", f"ارسال ناموفق بود:\n{msg}")
 
         run_in_thread(_worker, on_complete=_done, on_error=_fail)
+
+    def _apply_and_rescan_ps(self, config, product_id, to_send):
+        from sync_app.core.ps_sync_helper import ps_get_product, ps_list_categories
+
+        apply_ps_seo_fixes(config, product_id, to_send)
+        product = ps_get_product(config, product_id)
+        categories = ps_list_categories(config)
+        cat_by_id = {int(c["id"]): c for c in categories if isinstance(c, dict) and c.get("id")}
+        cats = (product or {}).get("categories") or []
+        cat_id = int(cats[0].get("id") or 0) if cats and isinstance(cats[0], dict) else 0
+        category_name = str((cat_by_id.get(cat_id) or {}).get("name") or "")
+        return analyze_ps_product_seo(product or {}, category_name=category_name)

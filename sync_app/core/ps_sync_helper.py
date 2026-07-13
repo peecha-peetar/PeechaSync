@@ -446,6 +446,10 @@ def _product_to_wc_shape(entry: dict, lang_id: int, *, stock_quantity: int | Non
         "categories": [{"id": int(entry.get("id_category_default") or 0)}] if entry.get("id_category_default") else [],
         "images": [],
         "description": _lang_value(entry.get("description"), lang_id),
+        "short_description": _lang_value(entry.get("description_short"), lang_id),
+        "meta_title": _lang_value(entry.get("meta_title"), lang_id),
+        "meta_description": _lang_value(entry.get("meta_description"), lang_id),
+        "meta_keywords": _lang_value(entry.get("meta_keywords"), lang_id),
     }
 
 
@@ -654,6 +658,55 @@ def ps_update_product(
     )
     _raise_for_status(resp2, f"به‌روزرسانی محصول #{product_id}")
     return {"id": int(product_id), "sku": final_sku, "name": final_name, "type": "simple"}
+
+
+def ps_update_product_seo(
+    config, product_id: int, *, description: str | None = None,
+    short_description: str | None = None, meta_title: str | None = None,
+    meta_description: str | None = None, meta_keywords: str | None = None, timeout=None,
+) -> None:
+    """به‌روزرسانی فیلدهای سئوی بومی محصول — برخلاف ووکامرس/Yoast، این‌ها
+    فیلد رسمی محصول پرستاشاپن (نه متادیتای یک افزونه‌ی جدا)، پس نیازی به
+    نوشتن هم‌زمان چند کلید حدسی (مثل Yoast/RankMath) نیست.
+
+    مثل ps_update_product، چون Webservice پرستاشاپ فیلد ست‌نشده رو توی PUT
+    خالی می‌کنه، اول رکورد کامل فعلی خونده می‌شه.
+    """
+    cfg = config or {}
+    lang_id = ps_lang_id(cfg)
+    resp = ps_call(
+        f"دریافت محصول #{product_id} برای به‌روزرسانی سئو",
+        lambda: ps_rest_request(cfg, "GET", f"products/{int(product_id)}", timeout=timeout),
+    )
+    current = _response_json(resp, f"دریافت محصول #{product_id}").get("product") or {}
+
+    def _build(node):
+        _set_text(node, "id", int(product_id))
+        _set_text(node, "reference", str(current.get("reference") or ""))
+        _set_lang_text(node, "name", _lang_value(current.get("name"), lang_id), lang_id)
+        _set_lang_text(node, "link_rewrite", _lang_value(current.get("link_rewrite"), lang_id), lang_id)
+        _set_text(node, "price", f"{float(current.get('price') or 0):.6f}")
+        _set_text(node, "active", int(current.get("active") or 0))
+        _set_text(node, "state", 1)
+        _set_text(node, "visibility", str(current.get("visibility") or "both"))
+        _set_text(node, "id_category_default", int(current.get("id_category_default") or PS_DEFAULT_PARENT_CATEGORY_ID))
+        final_description = description if description is not None else _lang_value(current.get("description"), lang_id)
+        _set_lang_text(node, "description", final_description, lang_id)
+        final_short = short_description if short_description is not None else _lang_value(current.get("description_short"), lang_id)
+        _set_lang_text(node, "description_short", final_short, lang_id)
+        final_meta_title = meta_title if meta_title is not None else _lang_value(current.get("meta_title"), lang_id)
+        _set_lang_text(node, "meta_title", final_meta_title, lang_id)
+        final_meta_desc = meta_description if meta_description is not None else _lang_value(current.get("meta_description"), lang_id)
+        _set_lang_text(node, "meta_description", final_meta_desc, lang_id)
+        final_meta_kw = meta_keywords if meta_keywords is not None else _lang_value(current.get("meta_keywords"), lang_id)
+        _set_lang_text(node, "meta_keywords", final_meta_kw, lang_id)
+
+    body = _build_xml("product", _build)
+    resp2 = ps_call(
+        f"به‌روزرسانی سئوی محصول #{product_id}",
+        lambda: ps_rest_request(cfg, "PUT", f"products/{int(product_id)}", xml_body=body, timeout=timeout),
+    )
+    _raise_for_status(resp2, f"به‌روزرسانی سئوی محصول #{product_id}")
 
 
 def ps_delete_product(config, product_id: int, *, timeout=None) -> bool:

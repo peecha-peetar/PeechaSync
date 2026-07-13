@@ -286,6 +286,110 @@ def analyze_product_seo_live(live: dict, *, fallback_name: str = "", fallback_de
     }
 
 
+def score_ps_product_seo(product: dict) -> SeoResult:
+    """معادل score_product_seo برای پرستاشاپ — بدون چک Alt تصویر (رجوع کن به
+    analyze_ps_product_seo برای توضیح این حذف عمدی)."""
+    p = product or {}
+    name = _clean(p.get("name"))
+    desc = _clean(p.get("description"))
+
+    title_ok = MIN_TITLE_LEN <= len(name) <= MAX_TITLE_LEN
+    checks = [
+        SeoCheck(
+            "طول عنوان مناسب", title_ok,
+            f"عنوان {len(name)} کاراکتر — بازه‌ی پیشنهادی {MIN_TITLE_LEN} تا {MAX_TITLE_LEN}",
+            missing_label="طول عنوان نامناسب",
+        ),
+        SeoCheck("توضیحات کافی دارد", len(desc) >= MIN_DESC_LEN, missing_label="توضیحات ناکافی"),
+        SeoCheck("توضیح کوتاه دارد", bool(_clean(p.get("short_description"))), missing_label="بدون توضیح کوتاه"),
+        SeoCheck("متا دیسکریپشن دارد", bool(_clean(p.get("meta_description"))), missing_label="بدون متا دیسکریپشن"),
+        SeoCheck("عنوان سئو دارد", bool(_clean(p.get("seo_title"))), missing_label="بدون عنوان سئو"),
+        SeoCheck("کلمات کلیدی دارد", bool(_clean(p.get("meta_keywords"))), missing_label="بدون کلمات کلیدی"),
+        SeoCheck("دسته‌بندی دارد", bool(p.get("has_category")), missing_label="بدون دسته‌بندی"),
+    ]
+    return SeoResult(checks=checks)
+
+
+def analyze_ps_product_seo(product: dict, *, category_name: str = "") -> dict:
+    """معادل analyze_product_seo_live برای پرستاشاپ.
+
+    برخلاف نسخه‌ی ووکامرس، این تابع از فیلدهای بومی محصول پرستاشاپ
+    (meta_title/meta_description/meta_keywords/description_short) می‌خونه —
+    نه از متادیتای یک افزونه‌ی جدا مثل Yoast — پس این چک‌ها همیشه قابل‌اعتماد
+    هستن، نه وابسته به اینکه افزونه‌ای آن‌ها را در API عمومی گذاشته باشه یا نه.
+
+    ⚠️ چک/رفعِ «Alt تصویر» عمداً برای پرستاشاپ پیاده نشده — چون خوندن/نوشتن
+    legend هر تصویر پرستاشاپ نیاز به تماس‌های Webservice جداگانه‌ی هنوز
+    تأییدنشده داره؛ به‌جای حدس زدن یک مسیر ممکنه اشتباه، این چک از
+    امتیازدهی پرستاشاپ کلاً حذف شده (امتیاز از ۷ چک، نه ۸).
+
+    product باید شامل این فیلدها باشد (شکل _product_to_wc_shape پرستاشاپ):
+    name, description, short_description, meta_title, meta_description,
+    meta_keywords, categories.
+    """
+    name = str(product.get("name") or "").strip()
+    description = str(product.get("description") or "")
+    short_description = str(product.get("short_description") or "").strip()
+    meta_desc = str(product.get("meta_description") or "").strip()
+    seo_title = str(product.get("meta_title") or "").strip()
+    meta_keywords = str(product.get("meta_keywords") or "").strip()
+    has_category = bool(product.get("categories"))
+
+    seo_input = {
+        "name": name,
+        "description": description,
+        "short_description": short_description,
+        "meta_description": meta_desc,
+        "seo_title": seo_title,
+        "meta_keywords": meta_keywords,
+        "has_category": has_category,
+    }
+    current = score_ps_product_seo(seo_input)
+
+    gen_input = {"name": name, "description": description, "category": category_name}
+    suggestions = {}
+    if len(description.strip()) < MIN_DESC_LEN:
+        suggestions["description"] = description.strip()
+    if not short_description:
+        suggestions["short_description"] = generate_short_description(gen_input)
+    if not meta_desc:
+        suggestions["meta_description"] = generate_meta_description(gen_input)
+    if not seo_title:
+        suggestions["seo_title"] = generate_seo_title(gen_input)
+    if not meta_keywords:
+        suggestions["meta_keywords"] = "، ".join(generate_keywords(gen_input))
+
+    return {
+        "name": name,
+        "current_score": current.score,
+        "checks": current.checks,
+        "image_id": None,
+        "missing_alt_image_ids": [],
+        "has_image": False,
+        "suggestions": suggestions,
+    }
+
+
+def apply_ps_seo_fixes(config: dict, product_id: int, to_send: dict, *, timeout=None) -> None:
+    """اعمال پیشنهادهای سئو روی پرستاشاپ — معادل apply_seo_fixes ولی بدون
+    alt_text (رجوع کن به analyze_ps_product_seo)."""
+    from sync_app.core.ps_sync_helper import ps_update_product_seo
+
+    kwargs = {}
+    if "description" in to_send:
+        kwargs["description"] = to_send["description"]
+    if "short_description" in to_send:
+        kwargs["short_description"] = to_send["short_description"]
+    if "meta_description" in to_send:
+        kwargs["meta_description"] = to_send["meta_description"]
+    if "seo_title" in to_send:
+        kwargs["meta_title"] = to_send["seo_title"]
+    if "meta_keywords" in to_send:
+        kwargs["meta_keywords"] = to_send["meta_keywords"]
+    if kwargs:
+        ps_update_product_seo(config, product_id, timeout=timeout, **kwargs)
+
+
 def apply_seo_fixes(wcapi, config: dict, wc_id: int, to_send: dict, image_id, extra_image_ids: list | None = None) -> None:
     """
     ارسال فیلدهای انتخاب‌شده (short_description/meta_description/seo_title/meta_keywords/alt_text).

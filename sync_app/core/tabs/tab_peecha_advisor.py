@@ -12,6 +12,7 @@ from PyQt5.QtCore import Qt
 
 from sync_app.core.secure_config_loader import load_secure_config
 from sync_app.core.threading_helper import run_in_thread
+from sync_app.core.integrations.commerce_provider import is_prestashop
 from sync_app.core.wc_sync_helper import build_wcapi, apply_network_overrides, wc_call
 from sync_app.core.sql_connection_helper import open_sql_connection
 from sync_app.core.category_resolver import load_category_map
@@ -19,12 +20,13 @@ from sync_app.core.category_rules import resolve_product_categories
 from sync_app.core.article_price import resolve_article_price
 from sync_app.core.product_woo_map_helper import load_product_woo_map
 from sync_app.core.media_center import product_readiness, is_valid_image_data, is_valid_image_file
-from sync_app.core.seo_helper import analyze_product_seo_live
+from sync_app.core.seo_helper import analyze_product_seo_live, analyze_ps_product_seo
 from sync_app.core.site_health_helper import run_all_checks, overall_health_score
 
 FIX_HINTS = {
     "اتصال SQL": "تب «⚙️ تنظیمات» → بخش SQL",
     "API ووکامرس": "تب «⚙️ تنظیمات» → بخش ووکامرس",
+    "API پرستاشاپ": "تب «⚙️ تنظیمات» → بخش پرستاشاپ",
     "SSL": "سمت هاست/دامنه‌ی سایت — نصب یا تمدید گواهی SSL",
     "سرعت سایت": "بهینه‌سازی هاست/کش سایت (خارج از کنترل پیچا)",
     "سئو": "تب «🩺 سئو و سلامت سایت»",
@@ -131,7 +133,9 @@ class PeechaAdvisorTab(QWidget):
         run_in_thread(_worker, on_complete=_done, on_error=_fail)
 
     def _seo_summary(self, config):
-        """میانگین امتیاز سئو و تعداد محصولات ضعیف — از روی داده‌ی زنده‌ی ووکامرس."""
+        """میانگین امتیاز سئو و تعداد محصولات ضعیف — از روی داده‌ی زنده‌ی فروشگاه."""
+        if is_prestashop(config):
+            return self._seo_summary_ps(config)
         if not config.get("WC_URL"):
             return None, 0
         try:
@@ -163,6 +167,33 @@ class PeechaAdvisorTab(QWidget):
                 page += 1
                 if page > 20:  # سقف ایمنی برای فروشگاه‌های خیلی بزرگ
                     break
+
+            if not scores:
+                return None, 0
+            avg = round(sum(scores) / len(scores))
+            weak = sum(1 for s in scores if s < 60)
+            return avg, weak
+        except Exception:
+            return None, 0
+
+    def _seo_summary_ps(self, config):
+        if not config.get("PS_URL"):
+            return None, 0
+        try:
+            from sync_app.core.ps_sync_helper import ps_list_products, ps_list_categories
+
+            categories = ps_list_categories(config)
+            cat_by_id = {int(c["id"]): c for c in categories if isinstance(c, dict) and c.get("id")}
+
+            scores = []
+            for item in ps_list_products(config):
+                if not isinstance(item, dict) or not item.get("id"):
+                    continue
+                cats = item.get("categories") or []
+                cat_id = int(cats[0].get("id") or 0) if cats and isinstance(cats[0], dict) else 0
+                category_name = str((cat_by_id.get(cat_id) or {}).get("name") or "")
+                bundle = analyze_ps_product_seo(item, category_name=category_name)
+                scores.append(bundle["current_score"])
 
             if not scores:
                 return None, 0
