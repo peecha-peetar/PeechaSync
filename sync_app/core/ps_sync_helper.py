@@ -91,10 +91,48 @@ def _int_or_default(value, default: int) -> int:
 
 
 def _set_lang_text(parent, tag, value, lang_id):
+    """lang_id می‌تونه یک int (یه زبان) یا لیستی از intها (چند زبان) باشه —
+    برای فیلدهای چندزبانه (نام/توضیحات/...) که باید توی همه‌ی زبان‌های فعالِ
+    فروشگاه یکسان نوشته بشن، نه فقط یک زبانِ ثابت (وگرنه اگه زبانِ پیش‌فرضِ
+    نمایشِ پنل با اونی که نوشتیم یکی نباشه، محتوا می‌ره ولی دیده نمی‌شه)."""
     el = ET.SubElement(parent, tag)
-    lang_el = ET.SubElement(el, "language", {"id": str(lang_id)})
-    lang_el.text = "" if value is None else str(value)
+    ids = lang_id if isinstance(lang_id, (list, tuple, set)) else [lang_id]
+    text = "" if value is None else str(value)
+    for lid in ids:
+        lang_el = ET.SubElement(el, "language", {"id": str(lid)})
+        lang_el.text = text
     return el
+
+
+_ps_lang_ids_cache: dict[str, list[int]] = {}
+
+
+def ps_all_lang_ids(config, *, timeout=None) -> list[int]:
+    """همه‌ی id زبان‌های فروشگاه — نه فقط PS_LANG_ID (پیش‌فرضش همیشه ۱ه).
+    یه فروشگاه واقعی گزارش کرد که توضیحاتِ محصول با موفقیت نوشته و حتی با
+    GET دوباره هم تأیید می‌شد، ولی توی پنل خالی دیده می‌شد — علتش این بود
+    که پنل زبانِ پیش‌فرضِ نمایشش با PS_LANG_ID=1 یکی نبود، پس محتوا توی
+    زبانی نوشته می‌شد که پنل نشونش نمی‌داد. برای مطمئن‌شدن، مقدار رو برای
+    همه‌ی زبان‌های فعالِ فروشگاه می‌نویسیم، نه فقط یکی."""
+    cfg = config or {}
+    cache_key = str(cfg.get("PS_URL") or "").strip()
+    if cache_key and cache_key in _ps_lang_ids_cache:
+        return _ps_lang_ids_cache[cache_key]
+
+    ids = [ps_lang_id(cfg)]
+    try:
+        resp = ps_rest_request(cfg, "GET", "languages", params={"display": "full"}, timeout=timeout)
+        data = _response_json(resp, "دریافت زبان‌های فروشگاه")
+        rows = _unwrap_list(data, "languages")
+        fetched = sorted({int(r.get("id")) for r in rows if isinstance(r, dict) and r.get("id")})
+        if fetched:
+            ids = fetched
+    except Exception:
+        pass
+
+    if cache_key:
+        _ps_lang_ids_cache[cache_key] = ids
+    return ids
 
 
 def _build_xml(resource_name: str, build_fn) -> bytes:
@@ -388,13 +426,13 @@ def ps_get_category(config, category_id: int, *, timeout=None) -> dict:
 
 def ps_create_category(config, *, name: str, slug: str, parent: int = 0, timeout=None) -> dict:
     cfg = config or {}
-    lang_id = ps_lang_id(cfg)
+    all_lang_ids = ps_all_lang_ids(cfg, timeout=timeout)
     parent_id = int(parent or cfg.get("PS_ROOT_CATEGORY_ID") or PS_DEFAULT_PARENT_CATEGORY_ID)
 
     def _build(node):
         _set_text(node, "id_parent", parent_id)
-        _set_lang_text(node, "name", name, lang_id)
-        _set_lang_text(node, "link_rewrite", slug, lang_id)
+        _set_lang_text(node, "name", name, all_lang_ids)
+        _set_lang_text(node, "link_rewrite", slug, all_lang_ids)
         _set_text(node, "active", 1)
 
     body = _build_xml("category", _build)
@@ -412,7 +450,7 @@ def ps_update_category(
 ) -> dict:
     """PUT کامل — چون Webservice پرستاشاپ فیلد ست‌نشده رو خالی می‌کنه، اول رکورد فعلی خونده می‌شه."""
     cfg = config or {}
-    lang_id = ps_lang_id(cfg)
+    all_lang_ids = ps_all_lang_ids(cfg, timeout=timeout)
     current = ps_get_category(cfg, category_id, timeout=timeout)
     final_name = name if name is not None else current.get("name")
     final_slug = slug if slug is not None else current.get("slug")
@@ -421,8 +459,8 @@ def ps_update_category(
     def _build(node):
         _set_text(node, "id", int(category_id))
         _set_text(node, "id_parent", final_parent)
-        _set_lang_text(node, "name", final_name, lang_id)
-        _set_lang_text(node, "link_rewrite", final_slug, lang_id)
+        _set_lang_text(node, "name", final_name, all_lang_ids)
+        _set_lang_text(node, "link_rewrite", final_slug, all_lang_ids)
         _set_text(node, "active", 1)
 
     body = _build_xml("category", _build)
@@ -582,16 +620,16 @@ def ps_create_product(
     has_variants: bool = False, timeout=None,
 ) -> dict:
     cfg = config or {}
-    lang_id = ps_lang_id(cfg)
+    all_lang_ids = ps_all_lang_ids(cfg, timeout=timeout)
     cat_ids = [int(c) for c in (category_ids or []) if int(c or 0) > 0]
     default_cat = cat_ids[-1] if cat_ids else int(cfg.get("PS_ROOT_CATEGORY_ID") or PS_DEFAULT_PARENT_CATEGORY_ID)
 
     def _build(node):
         _set_text(node, "reference", sku)
-        _set_lang_text(node, "name", name, lang_id)
-        _set_lang_text(node, "link_rewrite", _slugify_reference(sku), lang_id)
+        _set_lang_text(node, "name", name, all_lang_ids)
+        _set_lang_text(node, "link_rewrite", _slugify_reference(sku), all_lang_ids)
         if description:
-            _set_lang_text(node, "description", description, lang_id)
+            _set_lang_text(node, "description", description, all_lang_ids)
         _set_text(node, "price", f"{float(price or 0):.6f}")
         _set_text(node, "active", 1 if active else 0)
         _set_text(node, "state", 1)
@@ -634,6 +672,7 @@ def ps_update_product(
 ) -> dict:
     cfg = config or {}
     lang_id = ps_lang_id(cfg)
+    all_lang_ids = ps_all_lang_ids(cfg, timeout=timeout)
     resp = ps_call(
         f"دریافت محصول #{product_id} برای به‌روزرسانی",
         lambda: ps_rest_request(cfg, "GET", f"products/{int(product_id)}", timeout=timeout),
@@ -654,11 +693,11 @@ def ps_update_product(
     def _build(node):
         _set_text(node, "id", int(product_id))
         _set_text(node, "reference", final_sku)
-        _set_lang_text(node, "name", final_name, lang_id)
+        _set_lang_text(node, "name", final_name, all_lang_ids)
         _set_lang_text(
             node, "link_rewrite",
             _lang_value(current.get("link_rewrite"), lang_id) or _slugify_reference(final_sku),
-            lang_id,
+            all_lang_ids,
         )
         # برخلاف بقیه‌ی این تابع، description قبلاً وقتی None بود کلاً از XML
         # حذف می‌شد (نه اینکه مقدار فعلی حفظ بشه) — و چون Webservice پرستاشاپ
@@ -669,7 +708,7 @@ def ps_update_product(
             description if description is not None
             else _lang_value(current.get("description"), lang_id)
         )
-        _set_lang_text(node, "description", final_description, lang_id)
+        _set_lang_text(node, "description", final_description, all_lang_ids)
         _set_text(node, "price", f"{float(final_price or 0):.6f}")
         _set_text(node, "active", final_active)
         _set_text(node, "state", 1)
@@ -740,6 +779,7 @@ def ps_try_set_price_visibility(config, product_id: int, *, timeout=None) -> boo
     """
     cfg = config or {}
     lang_id = ps_lang_id(cfg)
+    all_lang_ids = ps_all_lang_ids(cfg, timeout=timeout)
     try:
         resp = ps_call(
             f"دریافت محصول #{product_id} برای تنظیم نمایش قیمت",
@@ -750,9 +790,9 @@ def ps_try_set_price_visibility(config, product_id: int, *, timeout=None) -> boo
         def _build(node):
             _set_text(node, "id", int(product_id))
             _set_text(node, "reference", str(current.get("reference") or ""))
-            _set_lang_text(node, "name", _lang_value(current.get("name"), lang_id), lang_id)
+            _set_lang_text(node, "name", _lang_value(current.get("name"), lang_id), all_lang_ids)
             _set_lang_text(
-                node, "link_rewrite", _lang_value(current.get("link_rewrite"), lang_id), lang_id,
+                node, "link_rewrite", _lang_value(current.get("link_rewrite"), lang_id), all_lang_ids,
             )
             _set_text(node, "price", f"{float(current.get('price') or 0):.6f}")
             _set_text(node, "active", int(current.get("active") or 0))
@@ -806,6 +846,7 @@ def ps_update_product_seo(
     """
     cfg = config or {}
     lang_id = ps_lang_id(cfg)
+    all_lang_ids = ps_all_lang_ids(cfg, timeout=timeout)
     resp = ps_call(
         f"دریافت محصول #{product_id} برای به‌روزرسانی سئو",
         lambda: ps_rest_request(cfg, "GET", f"products/{int(product_id)}", timeout=timeout),
@@ -815,8 +856,8 @@ def ps_update_product_seo(
     def _build(node):
         _set_text(node, "id", int(product_id))
         _set_text(node, "reference", str(current.get("reference") or ""))
-        _set_lang_text(node, "name", _lang_value(current.get("name"), lang_id), lang_id)
-        _set_lang_text(node, "link_rewrite", _lang_value(current.get("link_rewrite"), lang_id), lang_id)
+        _set_lang_text(node, "name", _lang_value(current.get("name"), lang_id), all_lang_ids)
+        _set_lang_text(node, "link_rewrite", _lang_value(current.get("link_rewrite"), lang_id), all_lang_ids)
         _set_text(node, "price", f"{float(current.get('price') or 0):.6f}")
         _set_text(node, "active", int(current.get("active") or 0))
         _set_text(node, "state", 1)
@@ -829,15 +870,15 @@ def ps_update_product_seo(
         # حفظ product_type فعلی — وگرنه محصولِ ترکیبی به «standard» ریست می‌شه.
         _set_text(node, "product_type", str(current.get("product_type") or "standard"))
         final_description = description if description is not None else _lang_value(current.get("description"), lang_id)
-        _set_lang_text(node, "description", final_description, lang_id)
+        _set_lang_text(node, "description", final_description, all_lang_ids)
         final_short = short_description if short_description is not None else _lang_value(current.get("description_short"), lang_id)
-        _set_lang_text(node, "description_short", final_short, lang_id)
+        _set_lang_text(node, "description_short", final_short, all_lang_ids)
         final_meta_title = meta_title if meta_title is not None else _lang_value(current.get("meta_title"), lang_id)
-        _set_lang_text(node, "meta_title", final_meta_title, lang_id)
+        _set_lang_text(node, "meta_title", final_meta_title, all_lang_ids)
         final_meta_desc = meta_description if meta_description is not None else _lang_value(current.get("meta_description"), lang_id)
-        _set_lang_text(node, "meta_description", final_meta_desc, lang_id)
+        _set_lang_text(node, "meta_description", final_meta_desc, all_lang_ids)
         final_meta_kw = meta_keywords if meta_keywords is not None else _lang_value(current.get("meta_keywords"), lang_id)
-        _set_lang_text(node, "meta_keywords", final_meta_kw, lang_id)
+        _set_lang_text(node, "meta_keywords", final_meta_kw, all_lang_ids)
 
     body = _build_xml("product", _build)
     resp2 = ps_call(

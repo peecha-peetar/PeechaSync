@@ -37,6 +37,7 @@ from sync_app.core.ps_sync_helper import (
     ps_rest_request,
     ps_set_stock_quantity,
     ps_list_stock_availables_by_attribute,
+    ps_all_lang_ids,
 )
 
 
@@ -84,11 +85,11 @@ def ps_list_attribute_groups(config, *, timeout=None) -> list[dict]:
 
 def ps_create_attribute_group(config, name: str, *, group_type: str = "select", timeout=None) -> dict:
     cfg = config or {}
-    lang_id = ps_lang_id(cfg)
+    all_lang_ids = ps_all_lang_ids(cfg, timeout=timeout)
 
     def _build(node):
-        _set_lang_text(node, "name", name, lang_id)
-        _set_lang_text(node, "public_name", name, lang_id)
+        _set_lang_text(node, "name", name, all_lang_ids)
+        _set_lang_text(node, "public_name", name, all_lang_ids)
         _set_text(node, "group_type", group_type)
         _set_text(node, "position", 0)
 
@@ -131,14 +132,14 @@ def ps_get_attribute_group(config, group_id: int, *, timeout=None) -> dict | Non
 def ps_update_attribute_group(config, group_id: int, *, name: str, timeout=None) -> None:
     """PUT کامل — چون Webservice پرستاشاپ فیلد ست‌نشده رو خالی می‌کنه، اول رکورد فعلی خونده می‌شه."""
     cfg = config or {}
-    lang_id = ps_lang_id(cfg)
+    all_lang_ids = ps_all_lang_ids(cfg, timeout=timeout)
     current = ps_get_attribute_group(cfg, group_id, timeout=timeout) or {}
     group_type = str(current.get("group_type") or "select")
 
     def _build(node):
         _set_text(node, "id", int(group_id))
-        _set_lang_text(node, "name", name, lang_id)
-        _set_lang_text(node, "public_name", name, lang_id)
+        _set_lang_text(node, "name", name, all_lang_ids)
+        _set_lang_text(node, "public_name", name, all_lang_ids)
         _set_text(node, "group_type", group_type)
         _set_text(node, "position", 0)
 
@@ -189,11 +190,11 @@ def ps_list_attribute_values(config, group_id: int, *, timeout=None) -> list[dic
 
 def ps_create_attribute_value(config, group_id: int, value_name: str, *, timeout=None) -> dict:
     cfg = config or {}
-    lang_id = ps_lang_id(cfg)
+    all_lang_ids = ps_all_lang_ids(cfg, timeout=timeout)
 
     def _build(node):
         _set_text(node, "id_attribute_group", int(group_id))
-        _set_lang_text(node, "name", value_name, lang_id)
+        _set_lang_text(node, "name", value_name, all_lang_ids)
         _set_text(node, "position", 0)
 
     body = _build_xml("product_option_value", _build)
@@ -234,14 +235,14 @@ def ps_get_attribute_value(config, value_id: int, *, timeout=None) -> dict | Non
 def ps_update_attribute_value(config, value_id: int, *, name: str, timeout=None) -> None:
     """PUT کامل — اول رکورد فعلی خونده می‌شه تا id_attribute_group از دست نره."""
     cfg = config or {}
-    lang_id = ps_lang_id(cfg)
+    all_lang_ids = ps_all_lang_ids(cfg, timeout=timeout)
     current = ps_get_attribute_value(cfg, value_id, timeout=timeout) or {}
     group_id = int(current.get("group_id") or 0)
 
     def _build(node):
         _set_text(node, "id", int(value_id))
         _set_text(node, "id_attribute_group", group_id)
-        _set_lang_text(node, "name", name, lang_id)
+        _set_lang_text(node, "name", name, all_lang_ids)
         _set_text(node, "position", 0)
 
     body = _build_xml("product_option_value", _build)
