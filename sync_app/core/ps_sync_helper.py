@@ -703,6 +703,27 @@ def ps_update_product(
         lambda: ps_rest_request(cfg, "PUT", f"products/{int(product_id)}", xml_body=body, timeout=timeout),
     )
     _raise_for_status(resp2, f"به‌روزرسانی محصول #{product_id}")
+
+    if description:
+        # تأیید تشخیصی موقت: چک می‌کنه واقعاً همون تعداد کاراکتری که
+        # فرستادیم روی فروشگاه نشسته — چون گزارش شده که با اینکه لاگِ ارسال
+        # موفقیت نشون می‌ده، پنل پرستاشاپ توضیحات رو خالی نشون می‌ده.
+        try:
+            from sync_app.core.sync_utils import log
+
+            verify_resp = ps_rest_request(cfg, "GET", f"products/{int(product_id)}", timeout=timeout)
+            verify_current = _response_json(verify_resp, f"تأیید محصول #{product_id}").get("product") or {}
+            actual_desc = _lang_value(verify_current.get("description"), lang_id)
+            if len(actual_desc) < len(description) * 0.5:
+                log.warning(
+                    f"⚠️ [تأیید] محصول #{product_id}: {len(description)} کاراکتر توضیحات فرستادیم ولی "
+                    f"فروشگاه فقط {len(actual_desc)} کاراکتر برمی‌گردونه — احتمالاً بریده/رد شده."
+                )
+            else:
+                log.info(f"✔️ [تأیید] محصول #{product_id}: توضیحات با {len(actual_desc)} کاراکتر ذخیره شد.")
+        except Exception as verify_exc:
+            log.warning(f"⚠️ [تأیید] محصول #{product_id}: خواندنِ دوباره‌ی توضیحات ناموفق بود: {verify_exc}")
+
     return {"id": int(product_id), "sku": final_sku, "name": final_name, "type": "simple"}
 
 
