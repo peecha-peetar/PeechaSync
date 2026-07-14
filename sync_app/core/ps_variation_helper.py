@@ -516,19 +516,25 @@ def ps_sync_product_variations(
 
     has_default = any(c.get("default_on") for c in existing_by_ref.values())
 
-    # پیش‌واکشیِ یک‌جای موجودیِ همه‌ی ترکیب‌های این محصول — به‌جای یک GET جدا
-    # به‌ازای هر واریانت (که سرعت سینک رو خیلی پایین می‌آورد)؛ فقط برای
-    # ترکیب‌هایی که از قبل وجود دارن جواب می‌ده (ترکیب‌های تازه‌ساخته‌شده تو
-    # همین دور، طبق معمول با یک GET جدا داخل ps_set_stock_quantity هندل می‌شن).
-    try:
-        stock_rows_by_attr = ps_list_stock_availables_by_attribute(config, product_id, timeout=timeout)
-    except Exception:
-        stock_rows_by_attr = {}
-
     from sync_app.core.stock_mode import (
         STOCK_MODE_ALWAYS, STOCK_MODE_DOWNLOAD, resolve_variation_stock_mode,
         get_variation_stock_mode_override, get_product_stock_mode_override,
     )
+    from sync_app.core.field_sync_config import is_field_enabled
+
+    stock_field_enabled = is_field_enabled(config or {}, "SYNC_FIELD_VARIATION_STOCK")
+
+    # پیش‌واکشیِ یک‌جای موجودیِ همه‌ی ترکیب‌های این محصول — به‌جای یک GET جدا
+    # به‌ازای هر واریانت (که سرعت سینک رو خیلی پایین می‌آورد)؛ فقط برای
+    # ترکیب‌هایی که از قبل وجود دارن جواب می‌ده (ترکیب‌های تازه‌ساخته‌شده تو
+    # همین دور، طبق معمول با یک GET جدا داخل ps_set_stock_quantity هندل می‌شن).
+    # اگه فیلد موجودیِ واریانت اصلاً غیرفعاله، این پیش‌واکشی کلاً لازم نیست.
+    stock_rows_by_attr: dict = {}
+    if stock_field_enabled:
+        try:
+            stock_rows_by_attr = ps_list_stock_availables_by_attribute(config, product_id, timeout=timeout)
+        except Exception:
+            stock_rows_by_attr = {}
 
     matched_group = next(
         (g for g in (config or {}).get("SELECTED_SUB_GROUPS") or [] if a_code.startswith(g)), "",
@@ -563,25 +569,29 @@ def ps_sync_product_variations(
         except (TypeError, ValueError):
             var_price = 0.0
         price_impact = var_price - base_price
-        try:
-            raw_stock_qty = max(0, int(var.get("stock_quantity") or 0))
-        except (TypeError, ValueError):
-            raw_stock_qty = 0
-        v_mode = resolve_variation_stock_mode(sku, a_code, matched_group, config or {})
-        if get_variation_stock_mode_override(config or {}, sku):
-            _mode_source = "override واریانت"
-        elif get_product_stock_mode_override(config or {}, a_code):
-            _mode_source = "override محصول"
-        else:
-            _mode_source = f"دسته‌بندی «{matched_group}»"
-        log.info(f"📦 [{a_code}] واریانت {sku} حالت موجودی resolve شد: {v_mode} (منبع: {_mode_source})")
-        # «همیشه موجود»/«دانلودی» — سفارش با موجودیِ صفر هم مجاز باشه
-        # (out_of_stock=1)، نه فقط یک عدد بزرگ که بالاخره تموم بشه؛ حالت
-        # دیتابیس با صفر شدن موجودی سفارش رو رد می‌کنه (out_of_stock=0) —
-        # دقیقاً همون منطق محصول ساده در commerce_provider._ps_apply_stock_from_payload.
-        always_available = v_mode in (STOCK_MODE_ALWAYS, STOCK_MODE_DOWNLOAD)
-        stock_qty = 9999 if always_available else raw_stock_qty
-        stock_out_of_stock = 1 if always_available else 0
+
+        stock_qty = None
+        stock_out_of_stock = None
+        if stock_field_enabled:
+            try:
+                raw_stock_qty = max(0, int(var.get("stock_quantity") or 0))
+            except (TypeError, ValueError):
+                raw_stock_qty = 0
+            v_mode = resolve_variation_stock_mode(sku, a_code, matched_group, config or {})
+            if get_variation_stock_mode_override(config or {}, sku):
+                _mode_source = "override واریانت"
+            elif get_product_stock_mode_override(config or {}, a_code):
+                _mode_source = "override محصول"
+            else:
+                _mode_source = f"دسته‌بندی «{matched_group}»"
+            log.info(f"📦 [{a_code}] واریانت {sku} حالت موجودی resolve شد: {v_mode} (منبع: {_mode_source})")
+            # «همیشه موجود»/«دانلودی» — سفارش با موجودیِ صفر هم مجاز باشه
+            # (out_of_stock=1)، نه فقط یک عدد بزرگ که بالاخره تموم بشه؛ حالت
+            # دیتابیس با صفر شدن موجودی سفارش رو رد می‌کنه (out_of_stock=0) —
+            # دقیقاً همون منطق محصول ساده در commerce_provider._ps_apply_stock_from_payload.
+            always_available = v_mode in (STOCK_MODE_ALWAYS, STOCK_MODE_DOWNLOAD)
+            stock_qty = 9999 if always_available else raw_stock_qty
+            stock_out_of_stock = 1 if always_available else 0
 
         try:
             existing_combo = existing_by_ref.get(sku)
@@ -598,12 +608,14 @@ def ps_sync_product_variations(
                 )
                 if is_default:
                     has_default = True
-            ps_set_stock_quantity(
-                config, product_id, stock_qty, product_attribute_id=combo_id,
-                out_of_stock=stock_out_of_stock, known_row=stock_rows_by_attr.get(combo_id), timeout=timeout,
-            )
+            if stock_field_enabled:
+                ps_set_stock_quantity(
+                    config, product_id, stock_qty, product_attribute_id=combo_id,
+                    out_of_stock=stock_out_of_stock, known_row=stock_rows_by_attr.get(combo_id), timeout=timeout,
+                )
             ok_count += 1
-            log.info(f"▸ [{a_code}] واریانت {sku} → قیمت={var_price:g} / موجودی={stock_qty}")
+            stock_label = str(stock_qty) if stock_field_enabled else "دست‌نخورده (فیلد موجودی غیرفعال)"
+            log.info(f"▸ [{a_code}] واریانت {sku} → قیمت={var_price:g} / موجودی={stock_label}")
         except Exception as exc:
             log.error(f"❌ واریانت {sku} روی پرستاشاپ: {exc}")
             failed_count += 1

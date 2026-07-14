@@ -135,8 +135,15 @@ def _apply_field_sync_config(payload, config, *, is_create):
         payload.pop("categories", None)
     if not is_field_enabled(cfg, "SYNC_FIELD_PRODUCT_VISIBILITY"):
         payload.pop("catalog_visibility", None)
-    if not is_field_enabled(cfg, "SYNC_FIELD_PRODUCT_STOCK") and payload.get("type") == "simple":
-        # فقط برای محصول ساده — manage_stock=False محصول متغیر یک تنظیم فنی است، نه داده انبار
+    # روی ووکامرس، manage_stock=False برای محصول متغیر یک تنظیم فنیِ ثابته
+    # (نه دادهٔ انبار)، پس این چک‌باکس روش بی‌اثره. ولی روی پرستاشاپ، سطح
+    # محصولِ ترکیبی هم موجودیِ واقعیِ resolve‌شده رو حمل می‌کنه (برای رفع
+    # باگ «محصول ترکیبی همیشه موجود می‌موند») — پس اونجا این چک‌باکس باید
+    # برای محصول متغیر هم اعمال بشه.
+    stock_field_applies = payload.get("type") == "simple" or (
+        payload.get("type") == "variable" and is_prestashop(cfg)
+    )
+    if not is_field_enabled(cfg, "SYNC_FIELD_PRODUCT_STOCK") and stock_field_applies:
         payload.pop("manage_stock", None)
         payload.pop("stock_quantity", None)
     return payload
