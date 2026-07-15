@@ -594,7 +594,7 @@ def _create_attribute(wcapi, attr_name, attrs_map, all_attrs):
 
 
 def sync_attributes_dynamic(wcapi, attributes_data_dejavu, config=None):
-    from sync_app.core.sync_change_cache import load_hash_cache, save_hash_cache, compute_hash
+    from sync_app.core.sync_change_cache import load_hash_cache, save_hash_cache, should_skip_unchanged
     from sync_app.core.field_sync_config import all_field_keys
 
     stats = {
@@ -626,7 +626,7 @@ def sync_attributes_dynamic(wcapi, attributes_data_dejavu, config=None):
 
         attr_created = False
         norm_key = _match_key(attr_name)
-        row_hash = compute_hash({"terms": sorted(terms), "settings": settings_fingerprint})
+        hash_payload = {"terms": sorted(terms), "settings": settings_fingerprint}
 
         # ۱. جستجو با نام/slug در Woo
         attr_id = _resolve_attr_id(existing_attributes, existing_attrs_map, attr_name)
@@ -635,7 +635,8 @@ def sync_attributes_dynamic(wcapi, attributes_data_dejavu, config=None):
         # شده (یعنی همین الان تأیید شد که رو فروشگاه هست و نامش می‌خونه) — اگه
         # مجموعه‌ی termهای ERP هم دقیقاً با آخرین سینکِ موفق یکی باشه، نیازی
         # به GETِ جداگانه‌ی verify/terms و بررسیِ دوباره نیست.
-        if attr_id and hash_cache.get(norm_key) == row_hash:
+        skip, cache_entry, changed_parts = should_skip_unchanged(norm_key, hash_payload, hash_cache, attr_id)
+        if skip:
             claimed_attr_ids.add(int(attr_id))
             if norm_key:
                 updated_id_map[norm_key] = int(attr_id)
@@ -643,6 +644,8 @@ def sync_attributes_dynamic(wcapi, attributes_data_dejavu, config=None):
             stats["attrs_already_ok"] += 1
             skipped += 1
             continue
+        if attr_id and changed_parts and norm_key in hash_cache:
+            log.info(f"{_LOG} 🔍 [{attr_name}] این بخش‌ها عوض شده: {', '.join(changed_parts)}")
 
         # ۲. اگر با نام پیدا نشد، از نگاشت ذخیره‌شده استفاده کن
         if not attr_id and norm_key and norm_key in saved_id_map:
@@ -725,7 +728,7 @@ def sync_attributes_dynamic(wcapi, attributes_data_dejavu, config=None):
                 if not attr_created:
                     stats["attrs_already_ok"] += 1
                 if norm_key:
-                    hash_cache[norm_key] = row_hash
+                    hash_cache[norm_key] = cache_entry
                 continue
             log.info(
                 f"{_LOG} ➕ {attr_name} — {len(missing_terms)} term کم است: "
@@ -740,7 +743,7 @@ def sync_attributes_dynamic(wcapi, attributes_data_dejavu, config=None):
             # فقط وقتی بدونِ خطا موفق شد کش می‌شه — وگرنه termهای ناموفق
             # دفعه‌ی بعد دوباره امتحان نمی‌شن.
             if norm_key and not term_errors:
-                hash_cache[norm_key] = row_hash
+                hash_cache[norm_key] = cache_entry
         except Exception as exc:
             msg = f"terms '{attr_name}': {exc}"
             stats["errors"].append(msg)

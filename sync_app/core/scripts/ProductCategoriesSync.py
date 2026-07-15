@@ -267,14 +267,16 @@ def _sync_category_name_updates(config, categories_to_sync, code_to_wc_id: dict)
             continue
         payload = _category_put_payload(category, active_map, config)
         hash_payload = {"payload": payload, "settings": settings_fingerprint}
-        skip, row_hash = should_skip_unchanged(code_key, hash_payload, hash_cache, wc_id)
+        skip, cache_entry, changed_parts = should_skip_unchanged(code_key, hash_payload, hash_cache, wc_id)
         if skip:
             skipped += 1
             active_map[code_key] = wc_id
             continue
+        if changed_parts and code_key in hash_cache:
+            log.info(f"🔍 [{category.get('name')}] این بخش‌ها عوض شده: {', '.join(changed_parts)}")
         ok = _put_category_update(config, wc_id, payload, category.get("name"), update_failed)
         if ok:
-            hash_cache[code_key] = row_hash
+            hash_cache[code_key] = cache_entry
         active_map[code_key] = wc_id
     if skipped:
         log.info(f"⏭️ {skipped} دسته بدون تغییر بودن — رد شدن (هیچ درخواستی ارسال نشد).")

@@ -847,7 +847,9 @@ def main():
         if has_variants:
             hash_payload["variants"] = erp_variations
             hash_payload["attr_map"] = attr_map
-        skip, row_hash = should_skip_unchanged(sku, hash_payload, sync_hash_cache, local_map.get(sku))
+        skip, cache_entry, changed_parts = should_skip_unchanged(
+            sku, hash_payload, sync_hash_cache, local_map.get(sku)
+        )
         if skip:
             with progress_lock:
                 skipped_unchanged["count"] += 1
@@ -856,6 +858,9 @@ def main():
             if local_conn is not None:
                 local_conn.close()
             return
+
+        if local_map.get(sku) and changed_parts:
+            log.info(f"🔍 [{sku}] این بخش‌ها عوض شده — دوباره سینک می‌شه: {', '.join(changed_parts)}")
 
         log.info(f"⏳ محصول {current_num}/{_total_to_process}: {sku}")
 
@@ -995,9 +1000,8 @@ def main():
                 product_map.update(local_map)
             with stats_lock:
                 stats["ok"] += 1
-            if row_hash is not None:
-                with hash_lock:
-                    sync_hash_cache[sku] = row_hash
+            with hash_lock:
+                sync_hash_cache[sku] = cache_entry
 
         except Exception as e:
             with stats_lock:
