@@ -275,6 +275,48 @@ def _unwrap_dict(data, key: str) -> dict:
 # transport پایه
 # ---------------------------------------------------------------------------
 
+_ps_shop_id_cache: dict[str, int | None] = {}
+_PS_SHOP_SCOPED_RESOURCES = ("products", "categories", "combinations", "stock_availables")
+
+
+def ps_default_shop_id(config, *, timeout=None) -> int | None:
+    """id شاپِ فعالِ فروشگاه.
+
+    پرستاشاپ (حتی توی حالت تک‌فروشگاهیِ ظاهری) جدول‌هایی مثل
+    stock_availables/product_shop/product_lang رو per-shop نگه می‌داره —
+    این همون چیزیه که باعث باگ واقعیِ «out_of_stock نوشته می‌شه ولی پنل
+    رکورد دیگه‌ای نشون می‌ده» شد (رکورد id_shop=0 در برابر id_shop=1). اگه
+    درخواست وب‌سرویس صریحاً id_shop رو مشخص نکنه، پرستاشاپ ممکنه رو یه
+    رکورد/شاپِ عمومی عمل کنه که پنل ادمین نشونش نمی‌ده. برای پیشگیریِ همین
+    مشکل برای بقیه‌ی داده‌های shop-scoped (مثل نام/توضیحاتِ محصول)، این id
+    رو به‌صورت خودکار به درخواست‌های مرتبط اضافه می‌کنیم.
+    """
+    cfg = config or {}
+    cache_key = str(cfg.get("PS_URL") or "").strip()
+    if cache_key and cache_key in _ps_shop_id_cache:
+        return _ps_shop_id_cache[cache_key]
+
+    shop_id = None
+    try:
+        resp = ps_rest_request(
+            cfg, "GET", "shops", params={"display": "full", "limit": "0,20"}, timeout=timeout,
+        )
+        data = _response_json(resp, "دریافت شاپ‌های فروشگاه")
+        rows = _unwrap_list(data, "shops")
+        active_ids = sorted(
+            int(r.get("id")) for r in rows
+            if isinstance(r, dict) and r.get("id") and str(r.get("active", "1")) in ("1", "true")
+        )
+        if active_ids:
+            shop_id = active_ids[0]
+    except Exception:
+        pass
+
+    if cache_key:
+        _ps_shop_id_cache[cache_key] = shop_id
+    return shop_id
+
+
 def ps_rest_request(
     config,
     method: str,
@@ -302,6 +344,12 @@ def ps_rest_request(
     if xml_body is not None:
         headers["Content-Type"] = "text/xml; charset=utf-8"
         data = xml_body
+
+    resource_key = resource.strip("/").split("/")[0]
+    if resource_key in _PS_SHOP_SCOPED_RESOURCES and "id_shop" not in query:
+        shop_id = ps_default_shop_id(cfg, timeout=timeout)
+        if shop_id:
+            query["id_shop"] = shop_id
 
     return requests.request(
         method.upper(),
