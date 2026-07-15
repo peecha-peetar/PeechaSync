@@ -724,9 +724,9 @@ def main():
     _processed_count = 0
     progress_lock = threading.Lock()
 
-    # تشخیصِ تغییر: فقط محصولاتِ ساده (بدون واریانت) که از آخرین سینکِ
-    # موفق چیزی توشون عوض نشده رو رد می‌کنیم — محصولات متغیر همچنان هر بار
-    # کامل بررسی می‌شن، چون تغییرِ واریانت‌ها تو این هش دیده نمی‌شه (فعلاً).
+    # تشخیصِ تغییر: هر SKU (ساده یا متغیر) که از آخرین سینکِ موفق دقیقاً
+    # هیچی توش عوض نشده (نه فیلدهای محصول، نه دسته/تصاویر، نه ردیف‌های
+    # واریانت) رد می‌شه — بدون هیچ فراخوانیِ API.
     from sync_app.core.sync_change_cache import load_hash_cache, save_hash_cache, should_skip_unchanged
     from sync_app.core.field_sync_config import all_field_keys
 
@@ -811,33 +811,53 @@ def main():
         with map_lock:
             local_map = dict(product_map)
 
-        # تشخیصِ تغییر (فقط محصولِ ساده): اگه همون داده‌ای که الان می‌خوایم
-        # بفرستیم، دقیقاً با آخرین باری که این SKU با موفقیت سینک شده یکی
-        # باشه (و از قبل روی فروشگاه ساخته شده)، نیازی به فراخوانیِ API
-        # نیست — رد می‌شیم و می‌ریم سراغ محصول بعدی.
-        row_hash = None
-        if not has_variants:
-            image_ids = sorted(hlo_id for hlo_id, _, _ in erp_images_by_sku.get(sku, []))
-            hash_payload = {
-                "p_data": p_data, "categories": categories,
-                "image_ids": image_ids, "settings": settings_fingerprint,
-            }
-            skip, row_hash = should_skip_unchanged(sku, hash_payload, sync_hash_cache, local_map.get(sku))
-            if skip:
-                with progress_lock:
-                    skipped_unchanged["count"] += 1
-                with stats_lock:
-                    stats["ok"] += 1
-                return
-
-        log.info(f"⏳ محصول {current_num}/{_total_to_process}: {sku}")
-
         # برای محصول متغیر، به یه Connection SQL جدا نیاز داریم — چون
         # Connection اصلی (conn) بین Threadها مشترکه و pyodbc معمولاً برای
-        # استفاده‌ی هم‌زمان از چند Thread امن نیست.
+        # استفاده‌ی هم‌زمان از چند Thread امن نیست. زودتر از قبل باز می‌شه
+        # (نه فقط بعد از تصمیمِ سینک) چون برای تشخیصِ تغییرِ واریانت‌ها هم
+        # لازمه ردیف‌های واریانت رو زودتر بخونیم.
         local_conn = None
+        erp_variations = None
+        attr_map = None
+        dim_labels = None
         if has_variants:
             local_conn, _, _ = open_sql_connection(raw_config, timeout=10)
+            from sync_app.core.scripts.update_variations import fetch_variations_from_db
+
+            dim_labels = _attribute_labels()
+            erp_variations, attr_map = fetch_variations_from_db(
+                local_conn,
+                sku,
+                raw_price,
+                dim_labels[0] if dim_labels else "سایز",
+                dim_labels[1] if len(dim_labels) > 1 else "",
+                dim_labels[2] if len(dim_labels) > 2 else "",
+                config=raw_config,
+            )
+
+        # تشخیصِ تغییر: اگه همون داده‌ای که الان می‌خوایم بفرستیم (شاملِ
+        # ردیف‌های واریانت، برای محصولِ متغیر) دقیقاً با آخرین باری که این
+        # SKU با موفقیت سینک شده یکی باشه (و از قبل روی فروشگاه ساخته شده)،
+        # نیازی به فراخوانیِ API نیست — رد می‌شیم و می‌ریم سراغ محصول بعدی.
+        image_ids = sorted(hlo_id for hlo_id, _, _ in erp_images_by_sku.get(sku, []))
+        hash_payload = {
+            "p_data": p_data, "categories": categories,
+            "image_ids": image_ids, "settings": settings_fingerprint,
+        }
+        if has_variants:
+            hash_payload["variants"] = erp_variations
+            hash_payload["attr_map"] = attr_map
+        skip, row_hash = should_skip_unchanged(sku, hash_payload, sync_hash_cache, local_map.get(sku))
+        if skip:
+            with progress_lock:
+                skipped_unchanged["count"] += 1
+            with stats_lock:
+                stats["ok"] += 1
+            if local_conn is not None:
+                local_conn.close()
+            return
+
+        log.info(f"⏳ محصول {current_num}/{_total_to_process}: {sku}")
 
         try:
             def _sync_one(pmap=local_map):
@@ -897,19 +917,8 @@ def main():
                     f"✅ محصول {kind} {sku} → Woo #{saved_pid}. "
                     f"قیمت پایه={price} (نمایش سایت از واریانت‌ها) | {cat_note}"
                 )
-                from sync_app.core.scripts.update_variations import fetch_variations_from_db
-
-                dim_labels = _attribute_labels()
-                erp_variations, attr_map = fetch_variations_from_db(
-                    local_conn,
-                    sku,
-                    raw_price,
-                    dim_labels[0] if dim_labels else "سایز",
-                    dim_labels[1] if len(dim_labels) > 1 else "",
-                    dim_labels[2] if len(dim_labels) > 2 else "",
-                    config=raw_config,
-                )
-
+                # erp_variations/attr_map/dim_labels از قبل (قبل از تصمیمِ
+                # سینک/رد، برای تشخیصِ تغییر) واکشی شدن — دوباره واکشی نمی‌شن.
                 if ps_mode:
                     from sync_app.core.ps_variation_helper import ps_sync_product_variations
 
@@ -1029,7 +1038,7 @@ def main():
     fail_count = stats["failed"]
     if skipped_unchanged["count"]:
         log.info(
-            f"⏭️ {skipped_unchanged['count']} محصولِ ساده بدون تغییر بودن — رد شدن "
+            f"⏭️ {skipped_unchanged['count']} محصول بدون تغییر بودن — رد شدن "
             "(هیچ درخواستی به فروشگاه ارسال نشد)."
         )
     log.info(f"📊 پایان همگام‌سازی محصولات: {ok_count} موفق، {fail_count} ناموفق")
