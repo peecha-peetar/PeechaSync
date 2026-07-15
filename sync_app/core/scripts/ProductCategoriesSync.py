@@ -246,10 +246,17 @@ def _put_category_update(config, wc_id, payload, name, update_failed) -> bool:
 
 
 def _sync_category_name_updates(config, categories_to_sync, code_to_wc_id: dict):
-    """نام/slug/parent دسته‌های موجود را روی Woo به‌روز می‌کند."""
+    """نام/slug/parent دسته‌های موجود را روی Woo به‌روز می‌کند — دسته‌ای که
+    از آخرین سینکِ موفق چیزی توش عوض نشده رد می‌شود (بدون هیچ PUT)."""
+    from sync_app.core.sync_change_cache import load_hash_cache, save_hash_cache, should_skip_unchanged
+    from sync_app.core.field_sync_config import all_field_keys
+
     update_failed: list = []
     ordered = sort_categories_for_sync(categories_to_sync)
     active_map = dict(code_to_wc_id or {})
+    hash_cache = load_hash_cache("categories")
+    settings_fingerprint = {k: is_field_enabled(config or {}, k) for k in all_field_keys()}
+    skipped = 0
     for category in ordered:
         check_cancelled()
         code_key = str(category.get("dejavu_id") or "").strip()
@@ -259,8 +266,19 @@ def _sync_category_name_updates(config, categories_to_sync, code_to_wc_id: dict)
         if not wc_id:
             continue
         payload = _category_put_payload(category, active_map, config)
-        _put_category_update(config, wc_id, payload, category.get("name"), update_failed)
+        hash_payload = {"payload": payload, "settings": settings_fingerprint}
+        skip, row_hash = should_skip_unchanged(code_key, hash_payload, hash_cache, wc_id)
+        if skip:
+            skipped += 1
+            active_map[code_key] = wc_id
+            continue
+        ok = _put_category_update(config, wc_id, payload, category.get("name"), update_failed)
+        if ok:
+            hash_cache[code_key] = row_hash
         active_map[code_key] = wc_id
+    if skipped:
+        log.info(f"⏭️ {skipped} دسته بدون تغییر بودن — رد شدن (هیچ درخواستی ارسال نشد).")
+    save_hash_cache("categories", hash_cache)
     return update_failed, active_map
 
 
