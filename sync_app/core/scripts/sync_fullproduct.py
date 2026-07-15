@@ -724,6 +724,17 @@ def main():
     _processed_count = 0
     progress_lock = threading.Lock()
 
+    # تشخیصِ تغییر: فقط محصولاتِ ساده (بدون واریانت) که از آخرین سینکِ
+    # موفق چیزی توشون عوض نشده رو رد می‌کنیم — محصولات متغیر همچنان هر بار
+    # کامل بررسی می‌شن، چون تغییرِ واریانت‌ها تو این هش دیده نمی‌شه (فعلاً).
+    from sync_app.core.sync_change_cache import load_hash_cache, save_hash_cache, should_skip_unchanged
+    from sync_app.core.field_sync_config import all_field_keys
+
+    sync_hash_cache = load_hash_cache("products")
+    hash_lock = threading.Lock()
+    settings_fingerprint = {k: is_field_enabled(raw_config, k) for k in all_field_keys()}
+    skipped_unchanged = {"count": 0}
+
     def _sync_one_row(row):
         nonlocal _processed_count
         sku = str(row[0]).strip()
@@ -731,7 +742,6 @@ def main():
         with progress_lock:
             _processed_count += 1
             current_num = _processed_count
-        log.info(f"⏳ محصول {current_num}/{_total_to_process}: {sku}")
 
         raw_price = _resolve_article_price(row, PRICE_COL)
         raw_price = apply_price_markup(raw_price, raw_config, is_sale=False)
@@ -800,6 +810,27 @@ def main():
         # نتیجه‌ی نهایی بعد از اتمام همه‌ی Threadها با هم merge می‌شه.
         with map_lock:
             local_map = dict(product_map)
+
+        # تشخیصِ تغییر (فقط محصولِ ساده): اگه همون داده‌ای که الان می‌خوایم
+        # بفرستیم، دقیقاً با آخرین باری که این SKU با موفقیت سینک شده یکی
+        # باشه (و از قبل روی فروشگاه ساخته شده)، نیازی به فراخوانیِ API
+        # نیست — رد می‌شیم و می‌ریم سراغ محصول بعدی.
+        row_hash = None
+        if not has_variants:
+            image_ids = sorted(hlo_id for hlo_id, _, _ in erp_images_by_sku.get(sku, []))
+            hash_payload = {
+                "p_data": p_data, "categories": categories,
+                "image_ids": image_ids, "settings": settings_fingerprint,
+            }
+            skip, row_hash = should_skip_unchanged(sku, hash_payload, sync_hash_cache, local_map.get(sku))
+            if skip:
+                with progress_lock:
+                    skipped_unchanged["count"] += 1
+                with stats_lock:
+                    stats["ok"] += 1
+                return
+
+        log.info(f"⏳ محصول {current_num}/{_total_to_process}: {sku}")
 
         # برای محصول متغیر، به یه Connection SQL جدا نیاز داریم — چون
         # Connection اصلی (conn) بین Threadها مشترکه و pyodbc معمولاً برای
@@ -955,6 +986,9 @@ def main():
                 product_map.update(local_map)
             with stats_lock:
                 stats["ok"] += 1
+            if row_hash is not None:
+                with hash_lock:
+                    sync_hash_cache[sku] = row_hash
 
         except Exception as e:
             with stats_lock:
@@ -989,9 +1023,15 @@ def main():
 
     if map_dirty:
         _save_product_woo_map(product_map)
+    save_hash_cache("products", sync_hash_cache)
 
     ok_count = stats["ok"]
     fail_count = stats["failed"]
+    if skipped_unchanged["count"]:
+        log.info(
+            f"⏭️ {skipped_unchanged['count']} محصولِ ساده بدون تغییر بودن — رد شدن "
+            "(هیچ درخواستی به فروشگاه ارسال نشد)."
+        )
     log.info(f"📊 پایان همگام‌سازی محصولات: {ok_count} موفق، {fail_count} ناموفق")
 
     if fail_count > 0:
