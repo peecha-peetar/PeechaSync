@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 import re
 import time
+from html import escape as _html_escape
 import xml.etree.ElementTree as ET
 from urllib.parse import unquote
 
@@ -88,6 +89,23 @@ def _int_or_default(value, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _plain_text_to_html(text: str) -> str:
+    """توضیحات ERP متن خامه (خط خالی = پاراگراف، خط تک = شکستنِ خط) نه HTML.
+    ووکامرس مشکلی نداشت چون وردپرس موقع نمایش خودش wpautop رو روی محتوا اجرا
+    می‌کنه و \\n\\n رو به <p> تبدیل می‌کنه؛ پرستاشاپ این‌کارو نمی‌کنه و دقیقاً
+    همون بایت‌های خام رو تو HTML خروجی می‌ذاره، پس مرورگر تمام فاصله‌ها/خط‌های
+    جدید رو به یک فاصله جمع می‌کنه و کل توضیحات یک بلوکِ بی‌فاصله دیده می‌شه.
+    اگه متن از قبل HTML باشه (تگ داره)، دست‌نخورده برمی‌گرده."""
+    if not text or "<" in text:
+        return text
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", normalized) if p.strip()]
+    if not paragraphs:
+        return text
+    parts = [f"<p>{_html_escape(p).replace(chr(10), '<br />')}</p>" for p in paragraphs]
+    return "".join(parts)
 
 
 def _set_lang_text(parent, tag, value, lang_id):
@@ -677,7 +695,7 @@ def ps_create_product(
         _set_lang_text(node, "name", name, all_lang_ids)
         _set_lang_text(node, "link_rewrite", _slugify_reference(sku), all_lang_ids)
         if description:
-            _set_lang_text(node, "description", description, all_lang_ids)
+            _set_lang_text(node, "description", _plain_text_to_html(description), all_lang_ids)
         _set_text(node, "price", f"{float(price or 0):.6f}")
         _set_text(node, "active", 1 if active else 0)
         _set_text(node, "state", 1)
@@ -756,7 +774,7 @@ def ps_update_product(
             description if description is not None
             else _lang_value(current.get("description"), lang_id)
         )
-        _set_lang_text(node, "description", final_description, all_lang_ids)
+        _set_lang_text(node, "description", _plain_text_to_html(final_description), all_lang_ids)
         _set_text(node, "price", f"{float(final_price or 0):.6f}")
         _set_text(node, "active", final_active)
         _set_text(node, "state", 1)
@@ -913,9 +931,9 @@ def ps_update_product_seo(
         # حفظ product_type فعلی — وگرنه محصولِ ترکیبی به «standard» ریست می‌شه.
         _set_text(node, "product_type", str(current.get("product_type") or "standard"))
         final_description = description if description is not None else _lang_value(current.get("description"), lang_id)
-        _set_lang_text(node, "description", final_description, all_lang_ids)
+        _set_lang_text(node, "description", _plain_text_to_html(final_description), all_lang_ids)
         final_short = short_description if short_description is not None else _lang_value(current.get("description_short"), lang_id)
-        _set_lang_text(node, "description_short", final_short, all_lang_ids)
+        _set_lang_text(node, "description_short", _plain_text_to_html(final_short), all_lang_ids)
         final_meta_title = meta_title if meta_title is not None else _lang_value(current.get("meta_title"), lang_id)
         _set_lang_text(node, "meta_title", final_meta_title, all_lang_ids)
         final_meta_desc = meta_description if meta_description is not None else _lang_value(current.get("meta_description"), lang_id)
