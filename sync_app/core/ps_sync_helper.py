@@ -791,26 +791,6 @@ def ps_update_product(
     )
     _raise_for_status(resp2, f"به‌روزرسانی محصول #{product_id}")
 
-    if description:
-        # تأیید تشخیصی موقت: چک می‌کنه واقعاً همون تعداد کاراکتری که
-        # فرستادیم روی فروشگاه نشسته — چون گزارش شده که با اینکه لاگِ ارسال
-        # موفقیت نشون می‌ده، پنل پرستاشاپ توضیحات رو خالی نشون می‌ده.
-        try:
-            from sync_app.core.sync_utils import log
-
-            verify_resp = ps_rest_request(cfg, "GET", f"products/{int(product_id)}", timeout=timeout)
-            verify_current = _response_json(verify_resp, f"تأیید محصول #{product_id}").get("product") or {}
-            actual_desc = _lang_value(verify_current.get("description"), lang_id)
-            if len(actual_desc) < len(description) * 0.5:
-                log.warning(
-                    f"⚠️ [تأیید] محصول #{product_id}: {len(description)} کاراکتر توضیحات فرستادیم ولی "
-                    f"فروشگاه فقط {len(actual_desc)} کاراکتر برمی‌گردونه — احتمالاً بریده/رد شده."
-                )
-            else:
-                log.info(f"✔️ [تأیید] محصول #{product_id}: توضیحات با {len(actual_desc)} کاراکتر ذخیره شد.")
-        except Exception as verify_exc:
-            log.warning(f"⚠️ [تأیید] محصول #{product_id}: خواندنِ دوباره‌ی توضیحات ناموفق بود: {verify_exc}")
-
     return {"id": int(product_id), "sku": final_sku, "name": final_name, "type": "simple"}
 
 
@@ -859,6 +839,21 @@ def ps_try_set_price_visibility(config, product_id: int, *, timeout=None) -> boo
             # «standard» ریست می‌شه و پنل ادمین دیگه ترکیب‌های ساخته‌شده رو
             # به رسمیت نمی‌شناسه.
             _set_text(node, "product_type", str(current.get("product_type") or "standard"))
+            # علتِ ریشه‌ایِ باگِ «توضیحات محصول نمایش داده نمی‌شه»: این PUT قبلاً
+            # description/description_short/meta_* رو کلاً از XML جا می‌نداخت.
+            # چون ps_update_product همیشه *قبل* از این تابع صدا زده می‌شه، توضیحاتِ
+            # به‌درستی‌نوشته‌شده بلافاصله توسط همین PUT (که فیلدهای نیومده رو خالی
+            # می‌کنه) بی‌صدا پاک می‌شد — با اینکه تأییدِ read-after-write خودِ
+            # ps_update_product هم درست بود، چون *قبل* از این پاک‌شدن اجرا می‌شد.
+            _set_lang_text(node, "description", _lang_value(current.get("description"), lang_id), all_lang_ids)
+            _set_lang_text(
+                node, "description_short", _lang_value(current.get("description_short"), lang_id), all_lang_ids,
+            )
+            _set_lang_text(node, "meta_title", _lang_value(current.get("meta_title"), lang_id), all_lang_ids)
+            _set_lang_text(
+                node, "meta_description", _lang_value(current.get("meta_description"), lang_id), all_lang_ids,
+            )
+            _set_lang_text(node, "meta_keywords", _lang_value(current.get("meta_keywords"), lang_id), all_lang_ids)
 
         body = _build_xml("product", _build)
         resp2 = ps_call(
