@@ -795,6 +795,17 @@ def ps_update_product(
             else _int_or_default(current.get("out_of_stock"), 2)
         )
         _set_text(node, "out_of_stock", final_out_of_stock)
+        # این تابع اصلاً پارامتری برای description_short/meta_* نمی‌گیره — این
+        # فیلدها فقط از طریق دستیار هوشمندِ سئو (ps_update_product_seo) نوشته
+        # می‌شن، نه از ERP. قبلاً چون این‌جا کلاً جا نمی‌افتادن، هر سینکِ عادیِ
+        # محصول (که هیچ ربطی به سئو نداره) بی‌صدا محتوایی که کاربر با دستیار
+        # هوشمند ساخته بود رو پاک می‌کرد.
+        _set_lang_text(node, "description_short", _lang_value(current.get("description_short"), lang_id), all_lang_ids)
+        _set_lang_text(node, "meta_title", _lang_value(current.get("meta_title"), lang_id), all_lang_ids)
+        _set_lang_text(
+            node, "meta_description", _lang_value(current.get("meta_description"), lang_id), all_lang_ids,
+        )
+        _set_lang_text(node, "meta_keywords", _lang_value(current.get("meta_keywords"), lang_id), all_lang_ids)
         if cat_ids:
             assoc = ET.SubElement(node, "associations")
             cats_node = ET.SubElement(assoc, "categories")
