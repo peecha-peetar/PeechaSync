@@ -614,7 +614,7 @@ def sync_attributes_dynamic(wcapi, attributes_data_dejavu, config=None):
     updated_id_map: dict[str, int] = dict(saved_id_map)
     claimed_attr_ids: set[int] = set()
 
-    hash_cache = load_hash_cache("attributes")
+    hash_cache = load_hash_cache("attributes", config)
     settings_fingerprint = {k: is_field_enabled(config or {}, k) for k in all_field_keys()}
     skipped = 0
 
@@ -748,7 +748,7 @@ def sync_attributes_dynamic(wcapi, attributes_data_dejavu, config=None):
 
     if skipped:
         log.info(f"{_LOG} ⏭️ {skipped} ویژگی بدون تغییر بودن — رد شدن (بدون GET/PUT اضافه).")
-    save_hash_cache("attributes", hash_cache)
+    save_hash_cache("attributes", hash_cache, config)
 
     # ذخیره نگاشت به‌روز شده
     if updated_id_map:

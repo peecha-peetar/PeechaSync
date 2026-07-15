@@ -254,7 +254,7 @@ def _sync_category_name_updates(config, categories_to_sync, code_to_wc_id: dict)
     update_failed: list = []
     ordered = sort_categories_for_sync(categories_to_sync)
     active_map = dict(code_to_wc_id or {})
-    hash_cache = load_hash_cache("categories")
+    hash_cache = load_hash_cache("categories", config)
     settings_fingerprint = {k: is_field_enabled(config or {}, k) for k in all_field_keys()}
     skipped = 0
     for category in ordered:
@@ -278,7 +278,7 @@ def _sync_category_name_updates(config, categories_to_sync, code_to_wc_id: dict)
         active_map[code_key] = wc_id
     if skipped:
         log.info(f"⏭️ {skipped} دسته بدون تغییر بودن — رد شدن (هیچ درخواستی ارسال نشد).")
-    save_hash_cache("categories", hash_cache)
+    save_hash_cache("categories", hash_cache, config)
     return update_failed, active_map
 
 

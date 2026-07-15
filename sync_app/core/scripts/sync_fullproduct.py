@@ -730,7 +730,7 @@ def main():
     from sync_app.core.sync_change_cache import load_hash_cache, save_hash_cache, should_skip_unchanged
     from sync_app.core.field_sync_config import all_field_keys
 
-    sync_hash_cache = load_hash_cache("products")
+    sync_hash_cache = load_hash_cache("products", raw_config)
     hash_lock = threading.Lock()
     settings_fingerprint = {k: is_field_enabled(raw_config, k) for k in all_field_keys()}
     skipped_unchanged = {"count": 0}
@@ -1032,7 +1032,7 @@ def main():
 
     if map_dirty:
         _save_product_woo_map(product_map)
-    save_hash_cache("products", sync_hash_cache)
+    save_hash_cache("products", sync_hash_cache, raw_config)
 
     ok_count = stats["ok"]
     fail_count = stats["failed"]
