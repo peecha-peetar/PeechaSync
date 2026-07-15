@@ -1922,12 +1922,21 @@ def _main_prestashop(config, selected_groups, price_col):
     from sync_app.core.integrations.commerce_provider import build_store_api, warm_store_connection
     from sync_app.core.ps_variation_helper import ps_sync_product_variations
     from sync_app.core.article_price import apply_price_markup
+    from sync_app.core.sync_change_cache import load_hash_cache, save_hash_cache, should_skip_unchanged
+    from sync_app.core.field_sync_config import all_field_keys
+    from sync_app.core.field_sync_config import is_field_enabled as _is_field_enabled
 
     _log_step("پرستاشاپ: ساخت اتصال...")
     api = build_store_api(config)
     warm_store_connection(api, config)
     conn = None
     stats = {"ok": 0, "failed": 0, "skipped": 0, "failed_skus": [], "network_error": False}
+    # این تب یه مسیرِ کاملاً جدا از سینکِ اصلیِ محصولات (sync_fullproduct.py)
+    # بود — تشخیصِ تغییرِ اونجا این‌جا رو پوشش نمی‌داد، پس این تب همیشه
+    # همه‌ی واریانت‌های همه‌ی محصولات رو از اول دوباره می‌فرستاد.
+    hash_cache = load_hash_cache("variants", config)
+    settings_fingerprint = {k: _is_field_enabled(config or {}, k) for k in all_field_keys()}
+    skipped_unchanged = 0
 
     try:
         conn, _, _ = open_sql_connection(config, timeout=10)
@@ -1972,6 +1981,15 @@ def _main_prestashop(config, selected_groups, price_col):
                 stats["failed_skus"].append(a_code)
                 continue
 
+            hash_payload = {"variants": erp_variations, "attr_map": attr_map, "settings": settings_fingerprint}
+            skip, cache_entry, changed_parts = should_skip_unchanged(a_code, hash_payload, hash_cache, product_id)
+            if skip:
+                skipped_unchanged += 1
+                stats["ok"] += 1
+                continue
+            if changed_parts and a_code in hash_cache:
+                log.info(f"🔍 [{a_code}] این بخش‌ها عوض شده: {', '.join(changed_parts)}")
+
             log.info(f"▸ [{a_code}] {len(erp_variations)} واریانت — در حال ارسال به پرستاشاپ...")
 
             base_price = _apply_price(apply_price_markup(raw_price, config, is_sale=False), config)
@@ -1980,6 +1998,7 @@ def _main_prestashop(config, selected_groups, price_col):
             )
             if ok:
                 stats["ok"] += 1
+                hash_cache[a_code] = cache_entry
             else:
                 stats["failed"] += 1
                 stats["failed_skus"].append(a_code)
@@ -1996,11 +2015,14 @@ def _main_prestashop(config, selected_groups, price_col):
                 conn.close()
             except Exception:
                 pass
+        save_hash_cache("variants", hash_cache, config)
 
     ok_count = stats["ok"]
     fail_count = stats["failed"]
     skip_count = stats["skipped"]
     summary = f"📊 پایان همگام‌سازی متغیرها: {ok_count} موفق"
+    if skipped_unchanged:
+        summary += f" ({skipped_unchanged} بدون تغییر رد شد)"
     if skip_count:
         summary += f"، {skip_count} بدون واریانت"
     if fail_count:
