@@ -728,12 +728,15 @@ def main():
     # هیچی توش عوض نشده (نه فیلدهای محصول، نه دسته/تصاویر، نه ردیف‌های
     # واریانت) رد می‌شه — بدون هیچ فراخوانیِ API.
     from sync_app.core.sync_change_cache import load_hash_cache, save_hash_cache, should_skip_unchanged
-    from sync_app.core.field_sync_config import all_field_keys
+    from sync_app.core.field_sync_config import all_field_keys, is_force_full_sync
 
     sync_hash_cache = load_hash_cache("products", raw_config)
     hash_lock = threading.Lock()
     settings_fingerprint = {k: is_field_enabled(raw_config, k) for k in all_field_keys()}
     skipped_unchanged = {"count": 0}
+    force_full_sync = is_force_full_sync(raw_config, "FORCE_FULL_SYNC_PRODUCTS")
+    if force_full_sync:
+        log.info("⚡ «همیشه همه‌ی محصولات دوباره ارسال شود» فعاله — تشخیصِ تغییر این دور نادیده گرفته می‌شه.")
 
     def _sync_one_row(row):
         nonlocal _processed_count
@@ -850,6 +853,8 @@ def main():
         skip, cache_entry, changed_parts = should_skip_unchanged(
             sku, hash_payload, sync_hash_cache, local_map.get(sku)
         )
+        if force_full_sync:
+            skip = False
         if skip:
             with progress_lock:
                 skipped_unchanged["count"] += 1

@@ -595,7 +595,7 @@ def _create_attribute(wcapi, attr_name, attrs_map, all_attrs):
 
 def sync_attributes_dynamic(wcapi, attributes_data_dejavu, config=None):
     from sync_app.core.sync_change_cache import load_hash_cache, save_hash_cache, should_skip_unchanged
-    from sync_app.core.field_sync_config import all_field_keys
+    from sync_app.core.field_sync_config import all_field_keys, is_force_full_sync
 
     stats = {
         "attrs_synced": 0,
@@ -617,6 +617,9 @@ def sync_attributes_dynamic(wcapi, attributes_data_dejavu, config=None):
     hash_cache = load_hash_cache("attributes", config)
     settings_fingerprint = {k: is_field_enabled(config or {}, k) for k in all_field_keys()}
     skipped = 0
+    force_full_sync = is_force_full_sync(config, "FORCE_FULL_SYNC_ATTRIBUTES")
+    if force_full_sync:
+        log.info(f"{_LOG} ⚡ «همیشه همه‌ی ویژگی‌ها دوباره بررسی شود» فعاله — تشخیصِ تغییر این دور نادیده گرفته می‌شه.")
 
     for attr_name, terms in attributes_data_dejavu.items():
         attr_name = normalize_text(attr_name)
@@ -636,6 +639,8 @@ def sync_attributes_dynamic(wcapi, attributes_data_dejavu, config=None):
         # مجموعه‌ی termهای ERP هم دقیقاً با آخرین سینکِ موفق یکی باشه، نیازی
         # به GETِ جداگانه‌ی verify/terms و بررسیِ دوباره نیست.
         skip, cache_entry, changed_parts = should_skip_unchanged(norm_key, hash_payload, hash_cache, attr_id)
+        if force_full_sync:
+            skip = False
         if skip:
             claimed_attr_ids.add(int(attr_id))
             if norm_key:

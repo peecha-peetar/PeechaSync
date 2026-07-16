@@ -249,7 +249,7 @@ def _sync_category_name_updates(config, categories_to_sync, code_to_wc_id: dict)
     """نام/slug/parent دسته‌های موجود را روی Woo به‌روز می‌کند — دسته‌ای که
     از آخرین سینکِ موفق چیزی توش عوض نشده رد می‌شود (بدون هیچ PUT)."""
     from sync_app.core.sync_change_cache import load_hash_cache, save_hash_cache, should_skip_unchanged
-    from sync_app.core.field_sync_config import all_field_keys
+    from sync_app.core.field_sync_config import all_field_keys, is_force_full_sync
 
     update_failed: list = []
     ordered = sort_categories_for_sync(categories_to_sync)
@@ -257,6 +257,9 @@ def _sync_category_name_updates(config, categories_to_sync, code_to_wc_id: dict)
     hash_cache = load_hash_cache("categories", config)
     settings_fingerprint = {k: is_field_enabled(config or {}, k) for k in all_field_keys()}
     skipped = 0
+    force_full_sync = is_force_full_sync(config, "FORCE_FULL_SYNC_CATEGORIES")
+    if force_full_sync:
+        log.info("⚡ «همیشه همه‌ی دسته‌بندی‌ها دوباره ارسال شود» فعاله — تشخیصِ تغییر این دور نادیده گرفته می‌شه.")
     for category in ordered:
         check_cancelled()
         code_key = str(category.get("dejavu_id") or "").strip()
@@ -268,6 +271,8 @@ def _sync_category_name_updates(config, categories_to_sync, code_to_wc_id: dict)
         payload = _category_put_payload(category, active_map, config)
         hash_payload = {"payload": payload, "settings": settings_fingerprint}
         skip, cache_entry, changed_parts = should_skip_unchanged(code_key, hash_payload, hash_cache, wc_id)
+        if force_full_sync:
+            skip = False
         if skip:
             skipped += 1
             active_map[code_key] = wc_id

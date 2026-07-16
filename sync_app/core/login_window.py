@@ -1,5 +1,4 @@
 import os
-import sys
 from PyQt5.QtCore import Qt, QObject, QThread, pyqtSignal, QTimer, QPoint
 from PyQt5.QtWidgets import (
     QDialog,
@@ -88,11 +87,14 @@ class LoginWindow(QDialog):
         apply_brand_window_icon(self)
         self.setLayoutDirection(Qt.RightToLeft)
         self.setFixedSize(460, 610)
-        if sys.platform == "win32":
-            self.setWindowFlags(Qt.Window | Qt.WindowCloseButtonHint)
-        else:
-            self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
-            self.setAttribute(Qt.WA_TranslucentBackground)
+        # نوارِ عنوانِ نیتیوِ ویندوز همیشه چپ‌به‌راسته (کنترلِ برنامه روش
+        # نیست) و با راست‌چینیِ داخلِ فرم هم‌خوانی نداشت — چون این کلاس از
+        # قبل دکمه‌ی بستنِ اختصاصی (×) و درگ با ماوس (mousePressEvent/
+        # mouseMoveEvent) رو داره، دیگه نیازی به نوارِ عنوانِ نیتیو نیست؛
+        # حالا رو همه‌ی پلتفرم‌ها (شاملِ ویندوز) بدون‌فریمه، تا کل فرم
+        # (شاملِ ناحیه‌ی بالا) واقعاً راست‌چین باشه.
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
+        self.setAttribute(Qt.WA_TranslucentBackground)
 
         self._init_ui()
         QTimer.singleShot(1500, self.refresh_connectivity_status)

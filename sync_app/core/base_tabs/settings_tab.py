@@ -15,7 +15,7 @@ from sync_app.core.secure_config_loader import load_secure_config, save_secure_c
 from sync_app.core.password_line_edit import PasswordLineEdit
 from sync_app.core.event_notifier import append_system_log
 from sync_app.core.integrations.erp_provider import get_provider
-from sync_app.core.field_sync_config import ALL_FIELD_GROUPS
+from sync_app.core.field_sync_config import ALL_FIELD_GROUPS, FORCE_FULL_SYNC_FIELDS
 
 HAS_WCAPI = None
 _pyodbc = None
@@ -1101,6 +1101,21 @@ class SettingsTab(QWidget):
                 cb.setMinimumHeight(30)
                 self._field_sync_checkboxes[cfg_key] = cb
 
+        # ── چک‌باکس‌های «همیشه دوباره ارسال کن، حتی بدون تغییر» — جدا برای
+        # دسته‌بندی/ویژگی/محصول/متغیر (پیش‌فرض خاموش: تشخیصِ تغییر فعاله) ──
+        self._force_full_sync_checkboxes = {}
+        for cfg_key, label, default in FORCE_FULL_SYNC_FIELDS:
+            cb = QCheckBox(label)
+            cb.setLayoutDirection(Qt.RightToLeft)
+            cb.setChecked(bool(self.config.get(cfg_key, default)))
+            cb.setMinimumHeight(30)
+            cb.setToolTip(
+                "پیش‌فرض: فقط چیزهایی که واقعاً در دیتابیس عوض شده‌اند دوباره ارسال می‌شوند "
+                "(سریع‌تر). اگر این گزینه را بزنید، هر بار همه‌چیز از اول دوباره بررسی/ارسال "
+                "می‌شود — برای عیب‌یابی یا اطمینان از هم‌گام‌بودنِ کامل با فروشگاه مفید است."
+            )
+            self._force_full_sync_checkboxes[cfg_key] = cb
+
         self.license_server_url_input = QLineEdit(
             (self.config.get("LICENSE_SERVER_URL") or "").strip()
         )
@@ -1573,6 +1588,21 @@ class SettingsTab(QWidget):
             fields_layout.addWidget(sub_label)
             for cfg_key, _label, _default in fields:
                 fields_layout.addWidget(self._field_sync_checkboxes[cfg_key])
+
+        force_sync_label = QLabel("سینکِ کامل (نادیده گرفتنِ تشخیصِ تغییر)")
+        force_sync_label.setStyleSheet("font-weight:700; margin-top:12px;")
+        fields_layout.addWidget(force_sync_label)
+        force_sync_hint = QLabel(
+            "پیش‌فرض فقط چیزهایی که واقعاً در دیتابیس عوض شده‌اند دوباره ارسال می‌شوند. "
+            "اگر لازم شد یک بخش را کامل و از اول دوباره بفرستید (مثلاً برای عیب‌یابی)، "
+            "همان بخش را این‌جا فعال کنید."
+        )
+        force_sync_hint.setWordWrap(True)
+        force_sync_hint.setStyleSheet("color:#64748b; font-size:10px;")
+        fields_layout.addWidget(force_sync_hint)
+        for cfg_key, _label, _default in FORCE_FULL_SYNC_FIELDS:
+            fields_layout.addWidget(self._force_full_sync_checkboxes[cfg_key])
+
         fields_group.setLayout(fields_layout)
         self.fields_group = fields_group
 
@@ -1682,7 +1712,7 @@ class SettingsTab(QWidget):
             self.font_size_combo, self.erp_provider_combo, self.currency_combo,
             self.default_customer_mode_combo, self.login_screen_enabled_checkbox,
             self.auto_update_enabled_checkbox,
-        ] + list(self._field_sync_checkboxes.values())
+        ] + list(self._field_sync_checkboxes.values()) + list(self._force_full_sync_checkboxes.values())
 
         _text_inputs = [
             self.server_input, self.database_input, self.username_input,
@@ -1706,6 +1736,8 @@ class SettingsTab(QWidget):
         for w in (self.login_screen_enabled_checkbox, self.auto_update_enabled_checkbox, self.sale_price_enabled_cb):
             w.stateChanged.connect(self._on_settings_field_changed)
         for w in self._field_sync_checkboxes.values():
+            w.stateChanged.connect(self._on_settings_field_changed)
+        for w in self._force_full_sync_checkboxes.values():
             w.stateChanged.connect(self._on_settings_field_changed)
 
         self.erp_picture_root_input.textChanged.connect(self._on_settings_field_changed)
@@ -4028,6 +4060,8 @@ class SettingsTab(QWidget):
                 "PS_API_KEY": self.ps_api_key_input.text().strip(),
             })
             for _cfg_key, _cb in self._field_sync_checkboxes.items():
+                config_to_save[_cfg_key] = _cb.isChecked()
+            for _cfg_key, _cb in self._force_full_sync_checkboxes.items():
                 config_to_save[_cfg_key] = _cb.isChecked()
 
             from sync_app.core.wc_site_edit_guard import ACTION_CANCEL

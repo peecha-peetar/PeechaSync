@@ -1923,7 +1923,7 @@ def _main_prestashop(config, selected_groups, price_col):
     from sync_app.core.ps_variation_helper import ps_sync_product_variations
     from sync_app.core.article_price import apply_price_markup
     from sync_app.core.sync_change_cache import load_hash_cache, save_hash_cache, should_skip_unchanged
-    from sync_app.core.field_sync_config import all_field_keys
+    from sync_app.core.field_sync_config import all_field_keys, is_force_full_sync
     from sync_app.core.field_sync_config import is_field_enabled as _is_field_enabled
 
     _log_step("پرستاشاپ: ساخت اتصال...")
@@ -1937,6 +1937,9 @@ def _main_prestashop(config, selected_groups, price_col):
     hash_cache = load_hash_cache("variants", config)
     settings_fingerprint = {k: _is_field_enabled(config or {}, k) for k in all_field_keys()}
     skipped_unchanged = 0
+    force_full_sync = is_force_full_sync(config, "FORCE_FULL_SYNC_VARIANTS")
+    if force_full_sync:
+        log.info("⚡ «همیشه همه‌ی واریانت‌ها دوباره ارسال شود» فعاله — تشخیصِ تغییر این دور نادیده گرفته می‌شه.")
 
     try:
         conn, _, _ = open_sql_connection(config, timeout=10)
@@ -1983,6 +1986,8 @@ def _main_prestashop(config, selected_groups, price_col):
 
             hash_payload = {"variants": erp_variations, "attr_map": attr_map, "settings": settings_fingerprint}
             skip, cache_entry, changed_parts = should_skip_unchanged(a_code, hash_payload, hash_cache, product_id)
+            if force_full_sync:
+                skip = False
             if skip:
                 skipped_unchanged += 1
                 stats["ok"] += 1
