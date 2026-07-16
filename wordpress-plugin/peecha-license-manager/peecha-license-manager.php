@@ -13,7 +13,7 @@ if (!defined('ABSPATH')) {
 }
 
 define('PEECHA_LM_VERSION', '1.0.40');
-define('PEECHA_LM_DEFAULT_GITHUB_REPO', 'shehnm/PeechaSync');
+define('PEECHA_LM_DEFAULT_GITHUB_REPO', 'peecha-peetar/PeechaSync');
 define('PEECHA_LM_PLUGIN_FILE', __FILE__);
 define('PEECHA_LM_PLUGIN_DIR', plugin_dir_path(__FILE__));
 

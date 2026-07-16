@@ -25,10 +25,44 @@ class Peecha_LM_License
         return '';
     }
 
+    /**
+     * دیگر استفاده نشود — کلید HMAC مشترک (V2) چون داخل سورس عمومی PeechaSync
+     * هاردکد بود، لو رفت (هر کسی که کد را می‌دید می‌توانست خودش لایسنس بسازد).
+     * جایگزین شد با امضای نامتقارن Ed25519 (V3) — ببینید ed25519_private_seed()
+     * و generate_key(). این متد فقط برای مستندسازیِ تاریخچه نگه داشته شده.
+     */
     public static function hmac_secret()
     {
-        $secret = get_option('peecha_lm_hmac_secret', 'Peecha::License::V2::HMAC::2026');
-        return is_string($secret) ? $secret : 'Peecha::License::V2::HMAC::2026';
+        $secret = get_option('peecha_lm_hmac_secret', '');
+        return is_string($secret) ? $secret : '';
+    }
+
+    /**
+     * seed خصوصیِ ۳۲بایتیِ Ed25519 (base64) — فقط سمتِ سرور، هرگز در سورسِ
+     * توزیع‌شده یا مخزنِ گیت قرار نمی‌گیرد. باید یک‌بار در تنظیمات پلاگین
+     * ست شود (Peecha License → Ed25519 Private Key).
+     */
+    public static function ed25519_private_seed()
+    {
+        $b64 = get_option('peecha_lm_ed25519_private_key', '');
+        if (!is_string($b64) || $b64 === '') {
+            return '';
+        }
+        $seed = base64_decode(trim($b64), true);
+        if ($seed === false || strlen($seed) !== SODIUM_CRYPTO_SIGN_SEEDBYTES) {
+            return '';
+        }
+        return $seed;
+    }
+
+    public static function ed25519_public_key_b64()
+    {
+        $seed = self::ed25519_private_seed();
+        if ($seed === '' || !function_exists('sodium_crypto_sign_seed_keypair')) {
+            return '';
+        }
+        $kp = sodium_crypto_sign_seed_keypair($seed);
+        return base64_encode(sodium_crypto_sign_publickey($kp));
     }
 
     public static function generate_key($hwid, $license_expires, $updates_until = null)
@@ -39,11 +73,22 @@ class Peecha_LM_License
             return new WP_Error('invalid_date', 'license_expires is required');
         }
 
+        if (!function_exists('sodium_crypto_sign_detached')) {
+            return new WP_Error('sodium_missing', 'PHP sodium extension is required to sign licenses (PHP 7.2+).');
+        }
+        $seed = self::ed25519_private_seed();
+        if ($seed === '') {
+            return new WP_Error(
+                'signing_key_missing',
+                'Ed25519 private key not configured — Peecha License settings → Ed25519 Private Key.'
+            );
+        }
+
         $updates_until = self::normalize_date($updates_until ?: $license_expires);
         $issued = gmdate('Y-m-d');
 
         $payload = array(
-            'v' => 2,
+            'v' => 3,
             'h' => $hwid,
             'e' => $license_expires,
             'u' => $updates_until,
@@ -52,13 +97,26 @@ class Peecha_LM_License
 
         $payload_json = wp_json_encode($payload, JSON_UNESCAPED_UNICODE);
         $payload_b64 = rtrim(strtr(base64_encode($payload_json), '+/', '-_'), '=');
-        $signature = hash_hmac('sha256', $payload_b64, self::hmac_secret());
-        return $payload_b64 . '.' . $signature;
+
+        $kp = sodium_crypto_sign_seed_keypair($seed);
+        $secret_key = sodium_crypto_sign_secretkey($kp);
+        $signature = sodium_crypto_sign_detached($payload_b64, $secret_key);
+        $signature_b64 = rtrim(strtr(base64_encode($signature), '+/', '-_'), '=');
+
+        return $payload_b64 . '.' . $signature_b64;
     }
 
+    /**
+     * فقط لایسنسِ V3 (امضای نامتقارنِ Ed25519) قبول می‌شود. V2 (HMAC مشترک)
+     * عمداً دیگر پذیرفته نمی‌شود — چون کلیدِ آن قبلاً در مخزنِ عمومی لو رفت
+     * و پذیرفتنش یعنی همان حفره‌ی امنیتی هنوز باز است.
+     */
     public static function verify_v2_signed_key($license_key, $hwid = '')
     {
         if (!is_string($license_key) || strpos($license_key, '.') === false) {
+            return null;
+        }
+        if (!function_exists('sodium_crypto_sign_verify_detached')) {
             return null;
         }
 
@@ -67,23 +125,37 @@ class Peecha_LM_License
             return null;
         }
 
-        list($payload_b64, $given_sig) = $parts;
-        $expected = hash_hmac('sha256', $payload_b64, self::hmac_secret());
-        if (!hash_equals($expected, $given_sig)) {
-            return null;
-        }
+        list($payload_b64, $given_sig_b64) = $parts;
 
         $pad = strlen($payload_b64) % 4;
-        if ($pad) {
-            $payload_b64 .= str_repeat('=', 4 - $pad);
-        }
-        $payload_json = base64_decode(strtr($payload_b64, '-_', '+/'), true);
+        $padded_payload_b64 = $pad ? $payload_b64 . str_repeat('=', 4 - $pad) : $payload_b64;
+        $payload_json = base64_decode(strtr($padded_payload_b64, '-_', '+/'), true);
         if ($payload_json === false) {
             return null;
         }
 
         $payload = json_decode($payload_json, true);
-        if (!is_array($payload) || (int) ($payload['v'] ?? 0) !== 2) {
+        if (!is_array($payload) || (int) ($payload['v'] ?? 0) !== 3) {
+            return null;
+        }
+
+        $sig_pad = strlen($given_sig_b64) % 4;
+        $padded_sig_b64 = $sig_pad ? $given_sig_b64 . str_repeat('=', 4 - $sig_pad) : $given_sig_b64;
+        $signature = base64_decode(strtr($padded_sig_b64, '-_', '+/'), true);
+        if ($signature === false) {
+            return null;
+        }
+
+        $public_key_b64 = self::ed25519_public_key_b64();
+        if ($public_key_b64 === '') {
+            return null;
+        }
+        $public_key = base64_decode($public_key_b64, true);
+        if ($public_key === false) {
+            return null;
+        }
+
+        if (!sodium_crypto_sign_verify_detached($signature, $payload_b64, $public_key)) {
             return null;
         }
 
