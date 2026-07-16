@@ -118,17 +118,47 @@ function Test-GitIdentityReady([string]$Root) {
     }
 }
 
+function Set-GitRemoteToExpectedRepo([string]$Repo) {
+    # آدرسِ origin رو خودکار با ریپوی موردِ انتظار (githubRepo تو کانفیگ، یا
+    # پیش‌فرضِ peecha-peetar/PeechaSync) تطبیق می‌ده — تا لازم نباشه کاربر
+    # هر بار دستی git remote set-url بزنه. اگه از قبل درست باشه، کاری
+    # نمی‌کنه؛ فقط وقتی واقعاً به ریپوی دیگه‌ای اشاره کنه اصلاحش می‌کنه.
+    if (-not $Repo) { return }
+    $expectedUrl = "https://github.com/$Repo.git"
+    $current = (git remote get-url origin 2>$null)
+    if ($LASTEXITCODE -ne 0 -or -not $current) {
+        git remote add origin $expectedUrl 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "Git: origin remote added -> $expectedUrl" -ForegroundColor Green
+        }
+        return
+    }
+    $current = $current.Trim()
+    $normalized = ($current -replace '\.git$', '') -replace '^git@github\.com:', 'https://github.com/'
+    $normalizedExpected = $expectedUrl -replace '\.git$', ''
+    if ($normalized -ne $normalizedExpected) {
+        Write-Host "Git: origin remote اشتباهه ($current) - در حالِ اصلاح به $expectedUrl ..." -ForegroundColor Yellow
+        git remote set-url origin $expectedUrl
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "Git: origin remote اصلاح شد -> $expectedUrl" -ForegroundColor Green
+        }
+    }
+}
+
 function Invoke-GitPublish {
     param(
         [string]$Root,
         [string]$Version,
-        [string]$Message
+        [string]$Message,
+        [string]$Repo = ''
     )
     Push-Location $Root
     try {
         if (-not (Test-Path -LiteralPath (Join-Path $Root '.git'))) {
             throw "پوشه‌ی .git اینجا نیست ($Root) - یعنی این پوشه یه ریپوی گیت واقعی نیست. اگه پروژه رو جابه‌جا کردید، پوشه‌ی .git رو هم از مسیر قبلی کپی کنید، یا git init/remote رو دستی بزنید."
         }
+
+        Set-GitRemoteToExpectedRepo $Repo
 
         $dirty = git status --porcelain 2>&1
         if ($LASTEXITCODE -ne 0) {
@@ -320,11 +350,17 @@ try {
     $gitOk = $SkipGit  # اگه از اول Skip شده، جزو "مشکل" حساب نشه
     $mirrorOk = $SkipMirror
 
+    $cfg = $null
+    if (Test-Path -LiteralPath $ConfigPath) {
+        $cfg = Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    }
+    $repo = Get-GitHubRepo $cfg
+
     if (-not $SkipGit) {
         Write-Step "3/6 Git commit + push"
         Wait-VpnHint -Target 'GitHub: git commit + push + release' -Vpn on
         try {
-            Invoke-GitPublish -Root $ProjectRoot -Version $version -Message $CommitMessage
+            Invoke-GitPublish -Root $ProjectRoot -Version $version -Message $CommitMessage -Repo $repo
             $gitOk = $true
         } catch {
             Write-Host "GIT PUBLISH FAILED: $($_.Exception.Message)" -ForegroundColor Red
@@ -336,11 +372,6 @@ try {
 
     if (-not $SkipGitHubRelease -and -not $SkipGit -and $gitOk) {
         Write-Step "4/6 GitHub release asset"
-        $cfg = $null
-        if (Test-Path -LiteralPath $ConfigPath) {
-            $cfg = Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
-        }
-        $repo = Get-GitHubRepo $cfg
         Publish-GitHubReleaseAsset -Repo $repo -Version $version -ZipPath $pkg.ZipPath -Force:$ForceGitHubRelease
     } else {
         Write-Host "Skip GitHub release" -ForegroundColor DarkGray
