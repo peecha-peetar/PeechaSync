@@ -3,7 +3,6 @@ import io
 import logging
 import logging.handlers
 import pyodbc
-from woocommerce import API
 import requests
 import os
 import sys
@@ -208,6 +207,8 @@ def check_woocommerce_connection(config=None, update_config_status=True):
         return (False, "تنظیمات API ووکامرس کامل نیستند.", currency_code)
 
     try:
+        from woocommerce import API
+
         wcapi = API(
             url=WC_URL,
             consumer_key=WC_CONSUMER_KEY,

@@ -374,7 +374,7 @@ class CategoryTab(QWidget):
         self._live_log_hint = ""
 
         self.log_timer = QTimer(self)
-        self.log_timer.timeout.connect(self.refresh_logs)
+        self.log_timer.timeout.connect(lambda: self.refresh_logs() if self.isVisible() else None)
         self.log_timer.start(2000)
 
         self._sync_live_timer = QTimer(self)
