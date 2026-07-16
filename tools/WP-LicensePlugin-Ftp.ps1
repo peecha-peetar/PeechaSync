@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 
 function Test-IsFtpAuthFailure([string]$Text) {
     # رمز/یوزرِ اشتباه (530/531 یا «Login authentication failed») — این‌جور
