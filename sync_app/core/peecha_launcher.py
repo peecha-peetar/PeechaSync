@@ -3329,22 +3329,39 @@ def _present_startup_window(window, label: str) -> None:
         window.move(frame.topLeft())
 
     window.setWindowModality(Qt.NonModal)
-    was_on_top = bool(window.windowFlags() & Qt.WindowStaysOnTopHint)
-    if not was_on_top:
-        window.setWindowFlag(Qt.WindowStaysOnTopHint, True)
 
-    window.show()
-    window.raise_()
-    window.activateWindow()
+    # پنجره‌های بی‌فریم+نیمه‌شفاف (مثل فرم ورود) رو نباید با تغییرِ
+    # windowFlag بعد از نمایش، دوباره‌ساخت کرد — روی ویندوز این کار باعث
+    # می‌شد handleِ نیتیوِ پنجره در وسطِ رندر دوباره ساخته بشه و فرم «نصفه
+    # باز» بمونه (گزارشِ کاربر). برای این پنجره‌ها فقط یک بار show/raise/
+    # activate کافیه، بدون بازی با WindowStaysOnTopHint.
+    is_frameless_translucent = bool(
+        window.windowFlags() & Qt.FramelessWindowHint
+    ) and window.testAttribute(Qt.WA_TranslucentBackground)
 
-    if app is not None:
-        app.processEvents()
-
-    if not was_on_top:
-        window.setWindowFlag(Qt.WindowStaysOnTopHint, False)
+    if is_frameless_translucent:
         window.show()
+        window.raise_()
+        window.activateWindow()
         if app is not None:
             app.processEvents()
+    else:
+        was_on_top = bool(window.windowFlags() & Qt.WindowStaysOnTopHint)
+        if not was_on_top:
+            window.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+
+        window.show()
+        window.raise_()
+        window.activateWindow()
+
+        if app is not None:
+            app.processEvents()
+
+        if not was_on_top:
+            window.setWindowFlag(Qt.WindowStaysOnTopHint, False)
+            window.show()
+            if app is not None:
+                app.processEvents()
 
     _startup_log.info("%s opened", label)
     if os.environ.get("PEECHA_DEBUG_CONSOLE", "").strip().lower() in ("1", "true", "yes"):
