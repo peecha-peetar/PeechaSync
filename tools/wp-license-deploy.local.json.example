@@ -7,7 +7,7 @@
   "remotePluginDir": "public_html/wp-content/plugins/peecha-license-manager",
   "remoteClientMirrorDir": "public_html/wp-content/uploads/peecha-sync-updates",
   "siteUrl": "https://peecha.ir",
-  "githubRepo": "shehnm/PeechaSync",
+  "githubRepo": "peecha-peetar/PeechaSync",
   "usePassive": true,
   "useFtps": false,
   "openBrowserAfterDeploy": false

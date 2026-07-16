@@ -93,7 +93,7 @@ Fill ftpUser and ftpPassword, Save, then run tools\Run_Release_All.bat again.
 }
 
 function Get-GitHubRepo([object]$cfg) {
-    $repo = if ($cfg.githubRepo) { [string]$cfg.githubRepo } else { 'shehnm/PeechaSync' }
+    $repo = if ($cfg.githubRepo) { [string]$cfg.githubRepo } else { 'peecha-peetar/PeechaSync' }
     return $repo.Trim()
 }
 
@@ -377,7 +377,7 @@ try {
         Write-Host "  Delivery folder:     tools\client-release-deploy\DELIVERY-PeechaSync-$version" -ForegroundColor White
     }
     if ($gitOk -and -not $SkipGit) {
-        Write-Host "  GitHub: shehnm/PeechaSync tag v$version" -ForegroundColor White
+        Write-Host "  GitHub: peecha-peetar/PeechaSync tag v$version" -ForegroundColor White
     }
     if ($mirrorOk -and -not $SkipMirror) {
         Write-Host "  Mirror: wp-content/uploads/peecha-sync-updates/$($pkg.ZipName)" -ForegroundColor White
