@@ -148,11 +148,21 @@ function Invoke-GitPublish {
             Write-Host "Git: working tree clean (skip commit)" -ForegroundColor DarkGray
         }
 
-        git push origin main
-        if ($LASTEXITCODE -ne 0) {
-            throw "git push failed (exit $LASTEXITCODE) - بررسی کنید VPN روشنه و به origin/main دسترسی دارید."
+        # به‌جای هاردکدکردنِ «main»، همیشه شاخه‌ی فعلیِ محلی رو push می‌کنیم —
+        # چون این ریپو ممکنه (مثلاً بعد از یک git init تازه) روی «master»
+        # باشه، نه «main»، و push کردنِ نامِ ثابتِ «main» وقتی چنین شاخه‌ای
+        # اصلاً محلی وجود نداره با «src refspec main does not match any»
+        # شکست می‌خوره.
+        $branch = (git rev-parse --abbrev-ref HEAD 2>&1).Trim()
+        if ($LASTEXITCODE -ne 0 -or -not $branch -or $branch -eq 'HEAD') {
+            throw "تشخیصِ شاخه‌ی فعلیِ git ناموفق بود: $branch"
         }
-        Write-Host "Git: pushed origin/main" -ForegroundColor Green
+
+        git push origin $branch
+        if ($LASTEXITCODE -ne 0) {
+            throw "git push failed (exit $LASTEXITCODE) - بررسی کنید VPN روشنه، origin به ریپوی درست اشاره می‌کنه (git remote -v)، و به origin/$branch دسترسی دارید."
+        }
+        Write-Host "Git: pushed origin/$branch" -ForegroundColor Green
     } finally {
         Pop-Location
     }
