@@ -51,9 +51,12 @@ class OrderTab(SitePreviewLoaderMixin, SyncTab):
             ("failed", "ناموفق"),
         ):
             self.order_status_filter.addItem(label, value)
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+        from sync_app.core.secure_config_loader import load_secure_config
+
         self.order_status_filter.setToolTip(
             "این فیلتر فقط روی نمایش لیست همین‌جاست — منطق انتقال سفارش به "
-            "ERP (که فقط سفارش‌های «در حال انجام» رو می‌بره) تغییری نمی‌کنه."
+            f"{erp_provider_label(load_secure_config(None))} (که فقط سفارش‌های «در حال انجام» رو می‌بره) تغییری نمی‌کنه."
         )
         self.order_status_filter.currentIndexChanged.connect(
             lambda: self.load_site_orders(silent=False, show_error_dialog=False)

@@ -333,12 +333,15 @@ def _ps_product_update_from_payload(config, product_id, body, timeout):
 
     if "description" in body:
         from sync_app.core.sync_utils import log
+        from sync_app.core.integrations.erp_provider import erp_provider_label
 
         desc_len = len(str(body.get("description") or ""))
         if desc_len:
             log.info(f"📝 [#{product_id}] توضیحات محصول ({desc_len} کاراکتر) ارسال می‌شود.")
         else:
-            log.info(f"ℹ️ [#{product_id}] توضیحات محصول در ERP خالی است — چیزی برای ارسال نیست.")
+            log.info(
+                f"ℹ️ [#{product_id}] توضیحات محصول در {erp_provider_label(config)} خالی است — چیزی برای ارسال نیست."
+            )
 
     ps_update_product(
         config,

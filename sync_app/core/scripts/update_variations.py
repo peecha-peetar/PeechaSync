@@ -881,7 +881,9 @@ def sync_variation_prices_quick(
             config=config,
         )
     if not variations:
-        log.info(f"ℹ️ [{a_code}] واریانتی در SQL نیست.")
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+
+        log.info(f"ℹ️ [{a_code}] واریانتی در {erp_provider_label(config)} نیست.")
         return 0
 
     by_sku, by_id, by_trait = _fetch_existing_variations_index(wcapi, product_id)
@@ -943,7 +945,7 @@ def sync_variation_prices_quick(
     result = _batch_variations(wcapi, product_id, body, "قیمت سریع", a_code)
     saved = _count_batch_ok(result, "update")
     log.info(f"✅ [{a_code}] قیمت {saved}/{len(updates)} واریانت → Woo #{product_id}")
-    _prune_orphan_variations(wcapi, product_id, a_code, variations)
+    _prune_orphan_variations(wcapi, product_id, a_code, variations, config=config)
     return saved
 
 
@@ -1134,6 +1136,7 @@ def should_skip_full_variation_sync(
     attr_map,
     *,
     a_code="",
+    config=None,
 ):
     """
     مسیر سریع قیمت فقط وقتی مجاز است که ساختار ویژگی‌ها هم درست باشد.
@@ -1155,9 +1158,11 @@ def should_skip_full_variation_sync(
 
     parent_count = _parent_variation_attr_count(wcapi, product_id)
     if parent_count < expected_dims:
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+
         log.info(
             f"ℹ️ [{a_code}] والد {parent_count} ویژگی variation دارد، "
-            f"ERP {expected_dims} — مسیر کامل..."
+            f"{erp_provider_label(config)} {expected_dims} — مسیر کامل..."
         )
         return False
 
@@ -1202,7 +1207,7 @@ def _variation_coverage(wcapi, product_id, variations):
     return missing, woo_total, erp_total
 
 
-def _prune_orphan_variations(wcapi, product_id, a_code, variations):
+def _prune_orphan_variations(wcapi, product_id, a_code, variations, config=None):
     """حذف واریانت‌های اضافی Woo که در ERP نیستند (باقی‌مانده sync قبلی)."""
     if not product_id or not variations:
         return 0
@@ -1210,9 +1215,11 @@ def _prune_orphan_variations(wcapi, product_id, a_code, variations):
     orphan_ids = _collect_orphan_variation_ids(by_id, variations)
     if not orphan_ids:
         return 0
+    from sync_app.core.integrations.erp_provider import erp_provider_label
+
     _log_step(
         f"[{a_code}] حذف {len(orphan_ids)} واریانت اضافی Woo "
-        f"(ERP={len(variations)}، Woo={len(by_id)})"
+        f"({erp_provider_label(config)}={len(variations)}، Woo={len(by_id)})"
     )
     _delete_variations(wcapi, product_id, a_code, orphan_ids)
     return len(orphan_ids)
@@ -1623,9 +1630,11 @@ def _upsert_variations_fast(
             new_count += 1
     extra_ids = _collect_orphan_variation_ids(existing_by_id, variations)
 
+    from sync_app.core.integrations.erp_provider import erp_provider_label
+
     _log_step(
         f"[{a_code}] upsert → جدید:{new_count} | "
-        f"آپدیت:{update_count} | حذف:{len(extra_ids)} | ERP:{total}"
+        f"آپدیت:{update_count} | حذف:{len(extra_ids)} | {erp_provider_label(config)}:{total}"
     )
 
     if extra_ids:
@@ -1781,12 +1790,16 @@ def sync_product_variations(
             log.warning(f"⚠️ [{a_code}] {hint}")
             return False
         if len(woo_dim_labels) < len(erp_dim_labels):
+            from sync_app.core.integrations.erp_provider import erp_provider_label
+
             log.info(
                 f"ℹ️ [{a_code}] {len(woo_dim_labels)} ویژگی از {len(erp_dim_labels)} "
-                f"سطح ERP روی Woo هست."
+                f"سطح {erp_provider_label(config)} روی Woo هست."
             )
 
-        _log_step(f"[{a_code}] خواندن {product_name} از SQL...")
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+
+        _log_step(f"[{a_code}] خواندن {product_name} از {erp_provider_label(config)}...")
         variations, attr_map = fetch_variations_from_db(
             conn,
             a_code,
@@ -1799,7 +1812,9 @@ def sync_product_variations(
         attr_map = _remap_attr_names_to_woo(attr_map, erp_dim_labels, woo_dim_labels)
         _remap_variation_attr_names(variations, erp_dim_labels, woo_dim_labels)
         if not variations:
-            log.info(f"ℹ️ {a_code} ({product_name}) واریانت در SQL ندارد — رد شد.")
+            from sync_app.core.integrations.erp_provider import erp_provider_label
+
+            log.info(f"ℹ️ {a_code} ({product_name}) واریانت در {erp_provider_label(config)} ندارد — رد شد.")
             return None
 
         sample = variations[0]
@@ -1862,8 +1877,10 @@ def sync_product_variations(
             )
             _LAST_VARIATION_FAIL_HINTS.pop(a_code, None)
             return True
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+
         hint = (
-            f"واریانت‌ها در Woo ساخته/به‌روز نشدند ({len(variations)} مورد در ERP) — "
+            f"واریانت‌ها در Woo ساخته/به‌روز نشدند ({len(variations)} مورد در {erp_provider_label(config)}) — "
             "لاگ bind را ببینید؛ معمولاً ویژگی global یا term سایز/رنگ مشکل دارد."
         )
         _LAST_VARIATION_FAIL_HINTS[a_code] = hint
@@ -1973,7 +1990,9 @@ def _main_prestashop(config, selected_groups, price_col):
                 config=config,
             )
             if not erp_variations:
-                log.info(f"ℹ️ {a_code} ({name}) واریانت در SQL ندارد — رد شد.")
+                from sync_app.core.integrations.erp_provider import erp_provider_label
+
+                log.info(f"ℹ️ {a_code} ({name}) واریانت در {erp_provider_label(config)} ندارد — رد شد.")
                 stats["skipped"] += 1
                 continue
 
@@ -2142,6 +2161,7 @@ def main():
                     erp_variations,
                     attr_map,
                     a_code=a_code,
+                    config=config,
                 )
             else:
                 skip_full = False

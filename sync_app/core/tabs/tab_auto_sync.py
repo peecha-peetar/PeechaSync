@@ -621,7 +621,9 @@ class AutoSyncTab(QWidget):
         title.setWordWrap(True)
         title.setMinimumHeight(22)
         text_col.addWidget(title)
-        hint = QLabel(job.hint)
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+
+        hint = QLabel(job.hint.replace("ERP", erp_provider_label(self.config)))
         hint.setObjectName("autoSyncJobHint")
         hint.setWordWrap(True)
         hint.setAlignment(Qt.AlignRight | Qt.AlignVCenter)

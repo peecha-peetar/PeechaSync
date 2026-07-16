@@ -61,6 +61,7 @@ from sync_app.core.reconciliation_service import (
 )
 from sync_app.core.rtl_item_delegate import RightAlignedItemDelegate
 from sync_app.core.secure_config_loader import load_secure_config, save_secure_config
+from sync_app.core.integrations.erp_provider import erp_provider_label
 from sync_app.core.sync_utils import app_path, clear_filtered_logs, log
 from sync_app.core.threading_helper import run_in_thread
 from sync_app.core.user_guide_snippets import recon_hero_html_for_entity
@@ -150,6 +151,11 @@ class ReconciliationTab(QWidget):
         self.log_timer.timeout.connect(self._refresh_logs_if_visible)
         self.log_timer.start(2000)
         self.refresh_logs()
+
+    def _erp_label(self) -> str:
+        """نامِ Providerِ ERP انتخاب‌شده تو تنظیمات (مثلاً «دژاوو»/«هلو») —
+        به‌جای کلمه‌ی ژنریکِ «ERP» تو کلِ این تب استفاده می‌شه."""
+        return erp_provider_label(self.config)
 
     def _build_ui(self):
         root = QHBoxLayout(self)
@@ -275,7 +281,7 @@ class ReconciliationTab(QWidget):
         search_row.setSpacing(6)
         self.search_input = QLineEdit()
         self.search_input.setObjectName("reconStatusSearchInput")
-        self.search_input.setPlaceholderText("جستجو در ERP و فروشگاه...")
+        self.search_input.setPlaceholderText(f"جستجو در {self._erp_label()} و فروشگاه...")
         self.search_input.setLayoutDirection(Qt.RightToLeft)
         self.search_input.textChanged.connect(self._refresh_lists)
         self.search_close_btn = QPushButton("×")
@@ -328,7 +334,7 @@ class ReconciliationTab(QWidget):
         content_layout.setContentsMargins(18, 4, 18, 16)
         content_layout.setSpacing(0)
 
-        self.hero_body = QLabel(recon_hero_html_for_entity(ENTITY_PRODUCTS))
+        self.hero_body = QLabel(recon_hero_html_for_entity(ENTITY_PRODUCTS, self.config))
         self.hero_body.setObjectName("reconHeroBody")
         self.hero_body.setWordWrap(True)
         self.hero_body.setTextFormat(Qt.RichText)
@@ -382,7 +388,7 @@ class ReconciliationTab(QWidget):
         erp_box = QVBoxLayout(erp_card)
         erp_box.setContentsMargins(8, 8, 8, 8)
         erp_box.setSpacing(6)
-        erp_title = QLabel("🗄️ نرم‌افزار (ERP)")
+        erp_title = QLabel(f"🗄️ نرم‌افزار ({self._erp_label()})")
         erp_title.setProperty("role", "section-title")
         erp_title.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         erp_box.addWidget(erp_title)
@@ -414,7 +420,7 @@ class ReconciliationTab(QWidget):
         middle_col.setContentsMargins(6, 8, 6, 8)
         middle_col.setSpacing(6)
 
-        flow_hint = QLabel("ERP  ←  عملیات  →  Woo")
+        flow_hint = QLabel(f"{self._erp_label()}  ←  عملیات  →  Woo")
         flow_hint.setObjectName("reconMiddleFlowHint")
         flow_hint.setAlignment(Qt.AlignCenter)
         middle_col.addWidget(flow_hint)
@@ -484,7 +490,7 @@ class ReconciliationTab(QWidget):
             icon="✋",
         )
         self.pair_btn = self._make_middle_button(
-            "🔗  اتصال\nERP ↔ Woo",
+            f"🔗  اتصال\n{self._erp_label()} ↔ Woo",
             self.pair_selected_rows,
             "دو ردیف انتخاب‌شده را به هم وصل کن → آماده ثبت",
             role="primary",
@@ -569,7 +575,7 @@ class ReconciliationTab(QWidget):
         self.refresh_btn.setObjectName("reconRefreshBtn")
         self.refresh_btn.setProperty("reconLoadMode", "load")
         self.refresh_btn.setToolTip(
-            "اولین بار: دریافت لیست از ERP و فروشگاه\n"
+            f"اولین بار: دریافت لیست از {self._erp_label()} و فروشگاه\n"
             "بارگذاری مجدد: فقط در صورت نیاز — قبل از آن تأیید می‌گیرد"
         )
         self.refresh_btn.clicked.connect(self._on_load_btn_clicked)
@@ -1245,7 +1251,7 @@ class ReconciliationTab(QWidget):
 
     def _update_entity_guide(self):
         if hasattr(self, "hero_body"):
-            self.hero_body.setText(recon_hero_html_for_entity(self._current_entity()))
+            self.hero_body.setText(recon_hero_html_for_entity(self._current_entity(), self.config))
 
     def _update_category_filter_visibility(self):
         show = self._current_entity() in (ENTITY_PRODUCTS, ENTITY_VARIATIONS)
@@ -1972,7 +1978,7 @@ class ReconciliationTab(QWidget):
                 f"── 🤖 پیشنهاد سیستم — نیاز بررسی ({auto_count}) ──",
             )
             for index, (erp, wc, reason) in enumerate(self._auto_suggested_pairs, start=1):
-                suggestion_tip = format_suggestion_tooltip(reason, erp, wc)
+                suggestion_tip = format_suggestion_tooltip(reason, erp, wc, self.config)
                 self._add_row_item(
                     self.erp_list,
                     erp,
@@ -1988,7 +1994,7 @@ class ReconciliationTab(QWidget):
                     tooltip=suggestion_tip,
                 )
 
-        self._add_section_header(self.erp_list, "── ⏳ منتظر جفت (ERP) ──")
+        self._add_section_header(self.erp_list, f"── ⏳ منتظر جفت ({self._erp_label()}) ──")
         self._add_section_header(self.wc_list, "── ⏳ منتظر جفت (فروشگاه) ──")
 
         if erp_unpaired:
@@ -2035,7 +2041,7 @@ class ReconciliationTab(QWidget):
         elif rows and self._filter_text():
             text = "نتیجه‌ای با این جستجو یافت نشد."
         elif side == "erp" and self._pending_pairs and not self._filter_text():
-            text = "همه موارد ERP جفت شده‌اند."
+            text = f"همه موارد {self._erp_label()} جفت شده‌اند."
         elif side == "wc" and self._pending_pairs and not self._filter_text():
             text = "همه موارد فروشگاه جفت شده‌اند."
         else:
@@ -2124,7 +2130,7 @@ class ReconciliationTab(QWidget):
             self.auto_suggest_btn.setToolTip(attr_tip)
         else:
             self.pair_btn.setToolTip(
-                "یک ردیف ERP و یک ردیف فروشگاه (زرد) انتخاب کنید — "
+                f"یک ردیف {self._erp_label()} و یک ردیف فروشگاه (زرد) انتخاب کنید — "
                 "آبی = آماده جفت دستی | سبز = جفت موجود"
             )
             self.unpair_btn.setToolTip(
@@ -2358,7 +2364,7 @@ class ReconciliationTab(QWidget):
             QMessageBox.information(
                 self,
                 "انتخاب ناقص",
-                "از ستون ERP و ستون فروشگاه هر کدام یک مورد انتخاب کنید.",
+                f"از ستون {self._erp_label()} و ستون فروشگاه هر کدام یک مورد انتخاب کنید.",
             )
             return
         if erp_section != SECTION_UNPAIRED or wc_section != SECTION_UNPAIRED:
@@ -2395,9 +2401,9 @@ class ReconciliationTab(QWidget):
         wc_short = wc_row.label if len(wc_row.label) <= 45 else wc_row.label[:45] + "…"
         self._set_status(
             "info",
-            f"🔗 جفت {len(self._pending_pairs)} آماده — ERP: {erp_short} ↔ Woo: {wc_short}",
+            f"🔗 جفت {len(self._pending_pairs)} آماده — {self._erp_label()}: {erp_short} ↔ Woo: {wc_short}",
         )
-        log.info(f"🔗 جفت آماده: ERP={erp_row.erp_key or erp_row.key} ↔ Woo={wc_row.wc_id}")
+        log.info(f"🔗 جفت آماده: {self._erp_label()}={erp_row.erp_key or erp_row.key} ↔ Woo={wc_row.wc_id}")
 
     def unpair_selected_row(self):
         if self._current_entity() == ENTITY_ATTRIBUTES:
@@ -2465,7 +2471,7 @@ class ReconciliationTab(QWidget):
             self,
             "لغو تطبیق ذخیره‌شده",
             f"تطبیق زیر از فایل تطبیق حذف شود؟\n\n"
-            f"ERP: {erp_short}\n"
+            f"{self._erp_label()}: {erp_short}\n"
             f"Woo: {wc_short}\n\n"
             "بعد از حذف، این موارد دوباره در بخش زرد «منتظر جفت» قرار می‌گیرند.",
             icon=QMessageBox.Warning,
@@ -2542,7 +2548,7 @@ class ReconciliationTab(QWidget):
         s = self._comparison.stats
         entity = ENTITY_LABELS.get(self._comparison.entity, self._comparison.entity)
         self.stats_label.setText(
-            f"{entity} — ERP: {s['erp_total']} (سینک {s['erp_synced']} / "
+            f"{entity} — {self._erp_label()}: {s['erp_total']} (سینک {s['erp_synced']} / "
             f"غیرسینک {s['erp_unsynced']}) | "
             f"Woo: {s['wc_total']} (سینک {s['wc_synced']} / غیرسینک {s['wc_unsynced']})"
         )
@@ -2599,7 +2605,7 @@ class ReconciliationTab(QWidget):
         else:
             self.refresh_btn.setText(self._load_btn_idle_text())
             self.refresh_btn.setToolTip(
-                "اولین بار: دریافت لیست از ERP و فروشگاه\n"
+                f"اولین بار: دریافت لیست از {self._erp_label()} و فروشگاه\n"
                 "بارگذاری مجدد: فقط در صورت نیاز — قبل از آن تأیید می‌گیرد"
             )
             self.refresh_btn.setEnabled(not self._loading)
@@ -2627,7 +2633,7 @@ class ReconciliationTab(QWidget):
         self.reject_auto_btn.setEnabled(False)
         self._set_status(
             "loading",
-            f"⏳ در حال دریافت {ENTITY_LABELS.get(entity, entity)} از ERP و فروشگاه...",
+            f"⏳ در حال دریافت {ENTITY_LABELS.get(entity, entity)} از {self._erp_label()} و فروشگاه...",
         )
 
     def _end_load_comparison_ui(self):
@@ -2670,7 +2676,7 @@ class ReconciliationTab(QWidget):
                 confirm_text = (
                     f"شما {pending_count} جفت آماده ثبت"
                     f" و {auto_count} پیشنهاد خودکار دارید.\n\n"
-                    "بارگذاری مجدد لیست را از ERP و فروشگاه می‌خواند.\n"
+                    f"بارگذاری مجدد لیست را از {self._erp_label()} و فروشگاه می‌خواند.\n"
                     "جفت‌ها و پیشنهادها تا حد ممکن حفظ می‌شوند، اما بهتر است ابتدا "
                     "«ثبت نهایی تطبیق» را بزنید.\n\n"
                     "ادامه می‌دهید؟"
@@ -2678,7 +2684,7 @@ class ReconciliationTab(QWidget):
             else:
                 confirm_text = (
                     f"لیست «{entity_label}» قبلاً بارگذاری شده است.\n\n"
-                    "بارگذاری مجدد دوباره از ERP و فروشگاه می‌خواند "
+                    f"بارگذاری مجدد دوباره از {self._erp_label()} و فروشگاه می‌خواند "
                     "و ممکن است چند لحظه طول بکشد.\n\n"
                     "آیا واقعاً می‌خواهید دوباره بارگذاری کنید؟"
                 )
@@ -2718,7 +2724,7 @@ class ReconciliationTab(QWidget):
             self._end_load_comparison_ui()
             status = (
                 f"✅ مقایسه {ENTITY_LABELS.get(entity, entity)} آماده — "
-                f"{result.stats['erp_unsynced']} مورد ERP و "
+                f"{result.stats['erp_unsynced']} مورد {self._erp_label()} و "
                 f"{result.stats['wc_unsynced']} مورد Woo هنوز سینک نشده‌اند."
             )
             if lost_total:
@@ -2734,7 +2740,7 @@ class ReconciliationTab(QWidget):
             self._set_status("success" if not lost_total else "warning", status)
             self._set_load_btn_mode("load")
             log.info(
-                f"📊 مقایسه {entity}: ERP={result.stats['erp_total']} "
+                f"📊 مقایسه {entity}: {self._erp_label()}={result.stats['erp_total']} "
                 f"Woo={result.stats['wc_total']}"
             )
             self.refresh_logs()

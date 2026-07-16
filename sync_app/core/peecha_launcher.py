@@ -1130,11 +1130,13 @@ class PeechaLauncher(QWidget):
             tab_factory("sync_app.core.tabs.tab_smart_assistant_hub", "SmartAssistantHubTab"),
             tooltip="مرکز رسانه، سئو و سلامت سایت، مدیریت بازاریابی و مشاور پیچا",
         )
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+
         self._register_lazy_tab(
             "⚖️ تطبیق",
             "reconciliation_tab",
             tab_factory("sync_app.core.tabs.tab_reconciliation", "ReconciliationTab"),
-            tooltip="مقایسه و تطبیق ERP با فروشگاه — برای فروشگاه‌های از قبل فعال",
+            tooltip=f"مقایسه و تطبیق {erp_provider_label(load_secure_config(None))} با فروشگاه — برای فروشگاه‌های از قبل فعال",
         )
         self._register_lazy_tab(
             "📄 لاگ‌ها",

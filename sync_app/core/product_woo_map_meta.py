@@ -79,7 +79,10 @@ def register_product_link(
     }
     save_product_woo_map_meta(meta)
     kind = "دستی" if manual else "خودکار"
-    log.info(f"📌 تطبیق {kind} ثبت شد: ERP {sku} → Woo #{wc_id}")
+    from sync_app.core.integrations.erp_provider import erp_provider_label
+    from sync_app.core.secure_config_loader import load_secure_config
+
+    log.info(f"📌 تطبیق {kind} ثبت شد: {erp_provider_label(load_secure_config(None))} {sku} → Woo #{wc_id}")
 
 
 def clear_product_link_meta(erp_sku: str) -> None:

@@ -603,8 +603,14 @@ class DashboardTab(QWidget):
         self._initial_load_started = False
         self._runtime_font_base = None
         self._theme_signature = None
+        self._static_config = load_secure_config(None) or {}
         self._init_ui()
         self._apply_dashboard_theme()
+
+    def _erp_label(self) -> str:
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+
+        return erp_provider_label(self._static_config)
 
     def apply_runtime_font(self, effective_font_size: int, is_bold: bool = False):
         """همگام با تغییر فونت/سایز در تنظیمات."""
@@ -649,20 +655,20 @@ class DashboardTab(QWidget):
         hero_title = QLabel("📊 مرکز فرمان پیچا")
         hero_title.setObjectName("dashHeroTitle")
         hero_top.addWidget(hero_title)
-        hero_title.setToolTip("نمای کلی وضعیت اتصال‌ها، داده‌های ERP و آمار فروشگاه در یک صفحه")
+        hero_title.setToolTip(f"نمای کلی وضعیت اتصال‌ها، داده‌های {self._erp_label()} و آمار فروشگاه در یک صفحه")
         hero_top.addStretch()
 
         self.refresh_btn = QPushButton("↻ بازخوانی")
         self.refresh_btn.setObjectName("dashRefreshBtn")
         self.refresh_btn.setCursor(Qt.PointingHandCursor)
         self.refresh_btn.setMinimumHeight(36)
-        self.refresh_btn.setToolTip("بارگذاری دوباره وضعیت SQL، API فروشگاه، KPIها و جداول")
+        self.refresh_btn.setToolTip(f"بارگذاری دوباره وضعیت {self._erp_label()}، API فروشگاه، KPIها و جداول")
         self.refresh_btn.clicked.connect(self.load_data)
         hero_top.addWidget(self.refresh_btn)
         hero_layout.addLayout(hero_top)
 
         hero_sub = QLabel(
-            "نمای یکپارچه دیتابیس ERP (SQL Server)، فروشگاه آنلاین و وضعیت همگام‌سازی"
+            f"نمای یکپارچه دیتابیس {self._erp_label()} (SQL Server)، فروشگاه آنلاین و وضعیت همگام‌سازی"
         )
         hero_sub.setWordWrap(True)
         hero_sub.setObjectName("dashHeroSub")
@@ -696,7 +702,7 @@ class DashboardTab(QWidget):
 
         health_row = QHBoxLayout()
         health_row.setSpacing(12)
-        self._health_sql = HealthCard("SQL Server — ERP", "🗄️")
+        self._health_sql = HealthCard(f"SQL Server — {self._erp_label()}", "🗄️")
         self._health_wc = HealthCard("API فروشگاه", "🛒")
         self._health_wp = HealthCard("فروشگاه آنلاین", "🌐")
         for card in (self._health_sql, self._health_wc, self._health_wp):
@@ -719,13 +725,13 @@ class DashboardTab(QWidget):
 
         self._kpi_grid = QGridLayout()
         self._kpi_grid.setSpacing(12)
-        self._card_sql_products = StatCard("کالاهای ERP", "—", "کل رکوردهای Article", "📦", "#1a2785")
+        self._card_sql_products = StatCard(f"کالاهای {self._erp_label()}", "—", "کل رکوردهای Article", "📦", "#1a2785")
         self._card_sync_scope = StatCard("دامنه همگام‌سازی", "—", "گروه‌های انتخاب‌شده", "🎯", "#7c3aed")
         self._card_wc_products = StatCard("محصولات فروشگاه", "—", "منتشرشده در سایت", "🏷️", "#2563eb")
         self._card_customers = StatCard("مشتریان سایت", "—", "حساب‌های فروشگاه", "👥", "#0891b2")
         self._card_orders = StatCard("سفارشات ماه", "—", "گزارش فروش ماه جاری", "🧾", "#d97706")
         self._card_revenue = StatCard("درآمد ماه", "—", "خالص فروش ماه جاری", "💰", "#16a34a")
-        self._card_sql_products.setToolTip("تعداد کل کالاهای موجود در ERP (جدول Article)")
+        self._card_sql_products.setToolTip(f"تعداد کل کالاهای موجود در {self._erp_label()} (جدول Article)")
         self._card_sync_scope.setToolTip("تعداد زیرگروه‌های انتخابی و کالاهای داخل دامنه همگام‌سازی")
         self._card_wc_products.setToolTip("تعداد محصولات ثبت‌شده در فروشگاه")
         self._card_customers.setToolTip("تعداد حساب‌های مشتری در سایت فروشگاه")
@@ -763,9 +769,9 @@ class DashboardTab(QWidget):
         quick_grid.setSpacing(8)
         actions = [
             ("⚙️ تنظیمات اتصال", "تنظیمات"),
-            ("⚖️ تطبیق ERP ↔ سایت", "تطبیق"),
+            (f"⚖️ تطبیق {self._erp_label()} ↔ سایت", "تطبیق"),
             ("📊 تب شروع", "شروع"),
-            ("📂 دسته‌بندی ERP", "دسته"),
+            (f"📂 دسته‌بندی {self._erp_label()}", "دسته"),
             ("📦 محصولات", "محصول"),
             ("🎨 متغیرها", "متغیر"),
             ("👥 مشتریان", "مشتری"),
@@ -820,11 +826,11 @@ class DashboardTab(QWidget):
             lbl.setObjectName("dashInsightLine")
             insight_layout.addWidget(lbl)
 
-        self._insight_erp = QLabel("ERP: —")
+        self._insight_erp = QLabel(f"{self._erp_label()}: —")
         self._insight_wc = QLabel("فروشگاه: —")
         self._insight_recon = QLabel("تطبیق: —")
         self._insight_sync = QLabel("همگام‌سازی: —")
-        self._insight_erp.setToolTip("اطلاعات سرور/دیتابیس ERP، تعداد گروه‌ها و لیست قیمت فعال")
+        self._insight_erp.setToolTip(f"اطلاعات سرور/دیتابیس {self._erp_label()}، تعداد گروه‌ها و لیست قیمت فعال")
         self._insight_wc.setToolTip("نسخه/ارز و آمار فروشگاه آنلاین")
         self._insight_recon.setToolTip("تعداد جفت‌های ثبت‌شده در product_woo_map")
         self._insight_sync.setToolTip("بررسی آمادگی عملیات همگام‌سازی بر اساس اتصال‌ها و گروه‌های انتخابی")
@@ -893,7 +899,7 @@ class DashboardTab(QWidget):
             min_h=170,
         )
         self._top_table["frame"].setToolTip("کالاهای پرفروش ماه جاری برای تصمیم‌گیری روی موجودی و قیمت")
-        self._pending_table["frame"].setToolTip("سفارشاتی که هنوز پرداخت/تکمیل نشده‌اند و معمولاً در صف انتقال به ERP هستند")
+        self._pending_table["frame"].setToolTip(f"سفارشاتی که هنوز پرداخت/تکمیل نشده‌اند و معمولاً در صف انتقال به {self._erp_label()} هستند")
         bottom.addWidget(self._top_table["frame"], 1)
         bottom.addWidget(self._pending_table["frame"], 1)
         self._root.addLayout(bottom)
@@ -904,7 +910,9 @@ class DashboardTab(QWidget):
         self.footer_status.setProperty("state", "info")
         footer_row = QHBoxLayout(self.footer_status)
         footer_row.setContentsMargins(10, 6, 10, 6)
-        self.footer_message = QLabel("💡 برای داده کامل، تنظیمات SQL و فروشگاه را کامل کنید سپس «بازخوانی» بزنید.")
+        self.footer_message = QLabel(
+            f"💡 برای داده کامل، تنظیمات {self._erp_label()} و فروشگاه را کامل کنید سپس «بازخوانی» بزنید."
+        )
         self.footer_message.setObjectName("reconStatusMessage")
         self.footer_message.setWordWrap(True)
         footer_row.addWidget(self.footer_message, 1)
@@ -1088,19 +1096,22 @@ class DashboardTab(QWidget):
 
         from sync_app.core.integrations.commerce_provider import is_prestashop, store_platform_label
 
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+
         store_url_configured = bool(config.get("PS_URL")) if is_prestashop(config) else bool(config.get("WC_URL"))
         needs_setup = (not config.get("SQL_CONN_STRING")) or (not store_url_configured)
         platform_label = store_platform_label(config)
+        erp_label = erp_provider_label(config)
 
         self.refresh_btn.setEnabled(False)
         self.load_progress.setVisible(True)
         if needs_setup:
-            msg = f"راهنما: برای داده کامل داشبورد، ابتدا تنظیمات SQL و {platform_label} را کامل کنید."
+            msg = f"راهنما: برای داده کامل داشبورد، ابتدا تنظیمات {erp_label} و {platform_label} را کامل کنید."
             self.status_label.setText(f"{msg} | در حال جمع‌آوری...")
             self._set_footer_status("warning", f"⚠ {msg}")
         else:
-            self.status_label.setText(f"در حال جمع‌آوری داده از SQL و {platform_label}...")
-            self._set_footer_status("loading", f"⏳ در حال بارگذاری آمار ERP و {platform_label}...")
+            self.status_label.setText(f"در حال جمع‌آوری داده از {erp_label} و {platform_label}...")
+            self._set_footer_status("loading", f"⏳ در حال بارگذاری آمار {erp_label} و {platform_label}...")
 
         self._worker = DashboardWorker(config)
         self._thread = QThread(self)
@@ -1224,8 +1235,10 @@ class DashboardTab(QWidget):
 
         # ── Insight panel ────────────────────────────
         self._refresh_settings_summary(cfg, woo)
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+
         self._insight_erp.setText(
-            f"<b>ERP ({cfg.get('erp_provider', 'dejavu')})</b><br>"
+            f"<b>{erp_provider_label(cfg)}</b><br>"
             f"گروه اصلی: {_fmt_num(sql.get('main_groups', '—'))} | "
             f"زیرگروه: {_fmt_num(sql.get('sub_groups', '—'))}<br>"
             f"لیست قیمت فعال: #{cfg.get('price_list', 1)}"
@@ -1242,7 +1255,7 @@ class DashboardTab(QWidget):
         )
         sync_ready = sql.get("ok") and wc_ok and sel > 0 and map_count > 0
         if sync_ready:
-            sync_msg = "آماده همگام‌سازی — ERP و فروشگاه متصل، گروه‌ها انتخاب و تطبیق ثبت شده است."
+            sync_msg = f"آماده همگام‌سازی — {erp_provider_label(cfg)} و فروشگاه متصل، گروه‌ها انتخاب و تطبیق ثبت شده است."
             footer_state = "success"
             footer_msg = "✓ داشبورد به‌روز شد — سیستم برای همگام‌سازی آماده به نظر می‌رسد."
         elif sql.get("ok") and wc_ok and sel > 0 and map_count == 0:

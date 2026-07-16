@@ -92,7 +92,9 @@ def build_products_sync_preview(config: dict | None = None) -> list[ProductSyncP
         if not wc_id:
             notes.append("هنوز در تب تطبیق ثبت نشده — ممکن است با SKU در سایت پیدا شود یا محصول جدید ساخته شود")
         if manual:
-            notes.append("تطبیق دستی — داده ERP فقط روی محصول ثبت‌شده در تب تطبیق اعمال می‌شود")
+            from sync_app.core.integrations.erp_provider import erp_provider_label
+
+            notes.append(f"تطبیق دستی — داده {erp_provider_label(config)} فقط روی محصول ثبت‌شده در تب تطبیق اعمال می‌شود")
         conflict_id = meta.get("sku_conflict_wc_id")
         if conflict_id:
             notes.append(f"تضاد SKU: محصول دیگر سایت #{conflict_id} همین SKU را دارد")
@@ -114,16 +116,18 @@ def build_products_sync_preview(config: dict | None = None) -> list[ProductSyncP
 
 
 class ProductSyncPreviewDialog(QDialog):
-    def __init__(self, parent, previews: list[ProductSyncPreviewRow], site_host: str):
+    def __init__(self, parent, previews: list[ProductSyncPreviewRow], site_host: str, config: dict | None = None):
         super().__init__(parent)
         self.setLayoutDirection(Qt.RightToLeft)
         self.setWindowTitle("پیش‌نمایش ارسال محصولات")
         self.setModal(True)
         self.setMinimumWidth(620)
         self._confirmed = False
-        self._build_ui(previews, site_host)
+        self._build_ui(previews, site_host, config)
 
-    def _build_ui(self, previews: list[ProductSyncPreviewRow], site_host: str):
+    def _build_ui(self, previews: list[ProductSyncPreviewRow], site_host: str, config: dict | None = None):
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
 
@@ -135,7 +139,7 @@ class ProductSyncPreviewDialog(QDialog):
         title.setStyleSheet("color: #fff; font-size: 16px; font-weight: 800; background: transparent;")
         bl.addWidget(title)
         sub = QLabel(
-            f"سایت: {site_host or '—'} | {len(previews)} محصول از ERP ارسال می‌شود.\n"
+            f"سایت: {site_host or '—'} | {len(previews)} محصول از {erp_provider_label(config)} ارسال می‌شود.\n"
             "ملاک مقصد = تب «تطبیق» (product_woo_map.json)."
         )
         sub.setWordWrap(True)
@@ -212,7 +216,7 @@ class ProductSyncPreviewDialog(QDialog):
 
         url_key = "PS_URL" if is_prestashop(config) else "WC_URL"
         host = urlparse(str(config.get(url_key) or "")).netloc or "فروشگاه"
-        dialog = ProductSyncPreviewDialog(parent, previews, host)
+        dialog = ProductSyncPreviewDialog(parent, previews, host, config)
         dialog.exec_()
         return dialog._confirmed
 

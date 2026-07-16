@@ -1056,10 +1056,13 @@ class SettingsTab(QWidget):
         self.font_size_combo.setCurrentIndex(fs_idx if fs_idx >= 0 else 1)
         self.font_size_combo.currentIndexChanged.connect(self.preview_font_size_change)
 
+        from sync_app.core.integrations.erp_provider import ERP_PROVIDER_CHOICES, normalize_erp_provider_key
+
         self.erp_provider_combo = QComboBox()
-        self.erp_provider_combo.addItem("Dejavu (فعلی)", "dejavu")
-        self.erp_provider_combo.addItem("سپیدار (پیش‌نمایش آینده)", "sepidar_preview")
-        current_provider = self.config.get("ERP_PROVIDER", "dejavu")
+        for _key, _label in ERP_PROVIDER_CHOICES:
+            suffix = " (فعلی)" if _key == "dejavu" else " (پیش‌نمایش آینده)"
+            self.erp_provider_combo.addItem(f"{_label}{suffix}", _key)
+        current_provider = normalize_erp_provider_key(self.config.get("ERP_PROVIDER"))
         provider_idx = self.erp_provider_combo.findData(current_provider)
         self.erp_provider_combo.setCurrentIndex(provider_idx if provider_idx >= 0 else 0)
         self.erp_provider_combo.currentIndexChanged.connect(self.update_provider_hint)
@@ -1196,8 +1199,10 @@ class SettingsTab(QWidget):
             field.setAlignment(Qt.AlignLeft)
             field.setMinimumHeight(38)
 
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+
         self.currency_combo = QComboBox()
-        self.currency_combo.addItem("تومان (فروشگاه → ERP ×۱۰)", True)
+        self.currency_combo.addItem(f"تومان (فروشگاه → {erp_provider_label(self.config)} ×۱۰)", True)
         self.currency_combo.addItem("ریال (بدون تبدیل)", False)
         is_toman_saved = self.config.get("WC_CURRENCY_IS_TOMAN", True)
         self.currency_combo.setCurrentIndex(0 if is_toman_saved else 1)
@@ -1376,7 +1381,7 @@ class SettingsTab(QWidget):
         wc_form_layout.addRow(QLabel(""), self.wp_app_password_button)
         wc_form_layout.addRow(QLabel(""), self.wp_test_button)
         wc_form_layout.addRow(english_caption("Timeout:"), self.timeout_input)
-        wc_form_layout.addRow(QLabel("تبدیل قیمت ERP:"), self.currency_combo)
+        wc_form_layout.addRow(QLabel(f"تبدیل قیمت {erp_provider_label(self.config)}:"), self.currency_combo)
 
         self.product_mode_combo = QComboBox()
         from sync_app.core.product_mode import get_product_mode, MODE_SIMPLE_ONLY, MODE_WITH_VARIANTS
@@ -1393,7 +1398,7 @@ class SettingsTab(QWidget):
         )
         self.product_mode_detect_btn = QPushButton("🔍 تشخیص خودکار از دیتابیس")
         self.product_mode_detect_btn.setToolTip(
-            "به دیتابیس ERP وصل می‌شه و واقعاً چک می‌کنه تو گروه‌های انتخابی‌تون "
+            f"به دیتابیس {erp_provider_label(self.config)} وصل می‌شه و واقعاً چک می‌کنه تو گروه‌های انتخابی‌تون "
             "محصول متغیر (چند سایز/رنگ) هست یا نه — و بر همون اساس پیشنهاد می‌ده."
         )
         self.product_mode_detect_btn.clicked.connect(self._detect_product_mode)
@@ -2173,13 +2178,16 @@ class SettingsTab(QWidget):
         if not self._monitor_open:
             self._animate_monitor_panel(True)
 
-        self._begin_sql_op_log("تست اتصال SQL", clear=False)
-        self._sql_op_log_line("شروع تست اتصال SQL...")
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+
+        erp_label = erp_provider_label(self.config)
+        self._begin_sql_op_log(f"تست اتصال {erp_label}", clear=False)
+        self._sql_op_log_line(f"شروع تست اتصال {erp_label}...")
         self._sql_op_log_line("UI در این حالت قفل نمی‌شود.")
 
         self.sql_test_button.setEnabled(False)
-        self.sql_test_button.setText("در حال تست SQL...")
-        self.status_label.setText("در حال تست اتصال SQL...")
+        self.sql_test_button.setText(f"در حال تست {erp_label}...")
+        self.status_label.setText(f"در حال تست اتصال {erp_label}...")
         self.status_label.setStyleSheet("color: #d97706; font-weight: bold;")
 
         payload = {
@@ -2214,6 +2222,9 @@ class SettingsTab(QWidget):
         self._sql_test_thread.start()
 
     def _on_sql_test_success(self, result):
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+
+        erp_label = erp_provider_label(self.config)
         drv = result.get("driver") or ""
         server_name = result.get("server") or ""
         auth_mode = result.get("auth_mode") or "sql"
@@ -2222,7 +2233,7 @@ class SettingsTab(QWidget):
         db_server = result.get("db_server") or server_name
 
         self._append_monitor(
-            f"اتصال SQL موفق: {drv} | {server_name} | {auth_mode} | DB: {db_name} | User: {db_user}"
+            f"اتصال {erp_label} موفق: {drv} | {server_name} | {auth_mode} | DB: {db_name} | User: {db_user}"
         )
 
         idx = self.driver_input.findText(f"{{{drv}}}")
@@ -2235,10 +2246,10 @@ class SettingsTab(QWidget):
         self.server_input.setText(server_name)
         self._last_success_sql_auth_mode = auth_mode
         self.set_button_status(self.sql_test_button, True)
-        self.status_label.setText("✅ اتصال SQL برقرار است")
+        self.status_label.setText(f"✅ اتصال {erp_label} برقرار است")
         self.status_label.setStyleSheet("color: #166534; font-weight: bold;")
         if self._sql_op_log is not None:
-            self._sql_op_log.set_finished(True, "تست SQL موفق")
+            self._sql_op_log.set_finished(True, f"تست {erp_label} موفق")
         QTimer.singleShot(100, self._load_databases_to_picker)
         QMessageBox.information(
             self,
@@ -2248,6 +2259,9 @@ class SettingsTab(QWidget):
         )
 
     def _on_sql_test_error(self, last_error):
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+
+        erp_label = erp_provider_label(self.config)
         hint = ""
         lowered = (last_error or "").lower()
         if (
@@ -2278,10 +2292,10 @@ class SettingsTab(QWidget):
         diagnosis = self._offer_sql_service_action(last_error)
 
         self.set_button_status(self.sql_test_button, False)
-        self.status_label.setText("❌ تست SQL ناموفق")
+        self.status_label.setText(f"❌ تست {erp_label} ناموفق")
         self.status_label.setStyleSheet("color: #b91c1c; font-weight: bold;")
         if self._sql_op_log is not None:
-            self._sql_op_log.set_finished(False, "تست SQL ناموفق")
+            self._sql_op_log.set_finished(False, f"تست {erp_label} ناموفق")
 
         msg_box = QMessageBox(self)
         msg_box.setIcon(QMessageBox.Critical)
@@ -2300,12 +2314,15 @@ class SettingsTab(QWidget):
             self._start_sqlexpress_service_clicked(action_id, retry_sql_test=True)
 
     def _on_sql_test_finished(self):
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+
+        erp_label = erp_provider_label(self.config)
         self.sql_test_button.setEnabled(True)
         if self.sql_test_button.text() not in ("✅ اتصال موفق", "❌ قطع اتصال"):
-            self.sql_test_button.setText("تست اتصال SQL")
+            self.sql_test_button.setText(f"تست اتصال {erp_label}")
         self._sql_test_thread = None
         self._sql_test_worker = None
-        self._append_monitor("پایان تست اتصال SQL.")
+        self._append_monitor(f"پایان تست اتصال {erp_label}.")
 
     def _open_wp_users_page(self):
         self._open_external_url(self._wp_admin_url("wp-admin/users.php"))

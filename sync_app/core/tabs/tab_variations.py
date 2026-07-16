@@ -43,7 +43,7 @@ from sync_app.core.compact_icon_action_bar import (
 from sync_app.core.wc_admin_links import make_wc_admin_open_button
 from sync_app.core.selection_toggle_bar import attach_selection_toggle
 from sync_app.core.user_guide_snippets import (
-    VARIATIONS_SYNC_BUTTON_TOOLTIP,
+    variations_sync_button_tooltip,
     VARIATIONS_TAB_GUIDE_TEXT,
 )
 from sync_app.core.message_boxes_fa import ask_yes_no
@@ -377,7 +377,7 @@ class VariationsTab(QWidget):
         self.refresh_button.clicked.connect(self._on_refresh_clicked)
 
         self.sync_button = CompactCaptionButton(self._sync_button_idle_text)
-        self.sync_button.setToolTip(VARIATIONS_SYNC_BUTTON_TOOLTIP)
+        self.sync_button.setToolTip(variations_sync_button_tooltip(self.config))
         self.sync_button.clicked.connect(self._on_sync_clicked)
 
         self.var_pick_image_btn = CompactCaptionButton("📷 انتخاب تصویر واریانت")
@@ -711,10 +711,12 @@ class VariationsTab(QWidget):
                         "برای گروه‌های انتخاب‌شده واریانتی در دیتابیس یافت نشد.",
                     )
                 else:
+                    from sync_app.core.integrations.erp_provider import erp_provider_label
+
                     QMessageBox.information(
                         self,
                         "بروزرسانی موفق",
-                        f"{row_count} واریانت از SQL بارگذاری شد.",
+                        f"{row_count} واریانت از {erp_provider_label(self.config)} بارگذاری شد.",
                     )
 
         def _fail(error_msg):
@@ -1868,11 +1870,14 @@ class VariationsTab(QWidget):
             targets = [(s, self._variation_image_paths(s)) for s in skus]
             targets = [(s, p) for s, p in targets if p]
         if not targets:
+            from sync_app.core.integrations.erp_provider import erp_provider_label
+
             QMessageBox.information(
                 self,
                 "توجه",
                 "تصویری برای واریانت‌های تیک‌خورده نیست.\n"
-                "اول «انتخاب تصویر واریانت» را بزنید یا تصویر محصول مادر را در ERP بگذارید.",
+                f"اول «انتخاب تصویر واریانت» را بزنید یا تصویر محصول مادر را در "
+                f"{erp_provider_label(self.config)} بگذارید.",
             )
             return
 

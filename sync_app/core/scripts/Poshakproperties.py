@@ -98,7 +98,9 @@ def fetch_poshak_properties_rows(config):
     try:
         conn, _, _ = open_sql_connection(config, timeout=10)
     except Exception as exc:
-        log.error(f"{_LOG} ❌ خطا در اتصال به SQL: {exc}")
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+
+        log.error(f"{_LOG} ❌ خطا در اتصال به {erp_provider_label(config)}: {exc}")
         raise RuntimeError(format_db_error(exc)) from exc
 
     try:
@@ -717,7 +719,9 @@ def sync_attributes_dynamic(wcapi, attributes_data_dejavu, config=None):
             _purge_id_map_keys_for_attr(updated_id_map, int(attr_id), keep_key=norm_key)
             updated_id_map[norm_key] = int(attr_id)
 
-        log.info(f"{_LOG} 🔄 {attr_name} — {len(terms)} مقدار ERP")
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+
+        log.info(f"{_LOG} 🔄 {attr_name} — {len(terms)} مقدار {erp_provider_label(config)}")
         try:
             existing_terms = _fetch_attribute_terms(wcapi, attr_id)
             wc_term_keys = _term_keys_from_wc(existing_terms)
@@ -766,9 +770,12 @@ def sync_attributes_dynamic(wcapi, attributes_data_dejavu, config=None):
 
 
 def main():
+    from sync_app.core.integrations.erp_provider import erp_provider_label
+
     log.info(f"{_LOG} 🚀 شروع همگام‌سازی داینامیک ویژگی‌ها...")
-    log.info(f"{_LOG} Poshakproperties — اتصال SQL و فروشگاه...")
     config = load_secure_config(None) or {}
+    erp_label = erp_provider_label(config)
+    log.info(f"{_LOG} Poshakproperties — اتصال {erp_label} و فروشگاه...")
 
     from sync_app.core.integrations.commerce_provider import is_prestashop, store_platform_label
 
@@ -784,20 +791,20 @@ def main():
         config.get("SQL_CONN_STRING")
         or (config.get("SQL_SERVER") and config.get("SQL_DATABASE"))
     ):
-        raise RuntimeError("تنظیمات SQL ناقص است.")
+        raise RuntimeError(f"تنظیمات {erp_label} ناقص است.")
 
     raw_data, cnxn = fetch_poshak_properties_rows(config)
     if not raw_data:
         cnxn.close()
         raise RuntimeError(
             "داده‌ای از SQL برای ویژگی‌ها یافت نشد.\n"
-            "جدول PoshakProperties در دیتابیس ERP خالی است یا دسترسی ندارید."
+            f"جدول PoshakProperties در دیتابیس {erp_label} خالی است یا دسترسی ندارید."
         )
 
     attributes_data_dejavu = process_data_for_woocommerce(raw_data)
     if not attributes_data_dejavu:
         cnxn.close()
-        log.warning(f"{_LOG} ℹ️ هیچ ویژگی‌ای در ERP برای همگام‌سازی نیست.")
+        log.warning(f"{_LOG} ℹ️ هیچ ویژگی‌ای در {erp_label} برای همگام‌سازی نیست.")
         return {"attrs_synced": 0, "terms_created": 0, "errors": []}
 
     from sync_app.core.integrations.commerce_provider import warm_store_connection

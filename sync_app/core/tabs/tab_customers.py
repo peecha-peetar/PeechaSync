@@ -149,9 +149,11 @@ class CustomerTab(SitePreviewLoaderMixin, SyncTab):
             platform_label = store_platform_label(cfg)
             mode = get_customer_mode(cfg)
             if mode == "fixed":
+                from sync_app.core.integrations.erp_provider import erp_provider_label
+
                 code = (cfg.get("DEFAULT_CUSTOMER_CODE") or "00005").strip()
                 return {
-                    "items": [f"حالت مشتری ثابت فعال است — کد ERP: {code}"],
+                    "items": [f"حالت مشتری ثابت فعال است — کد {erp_provider_label(cfg)}: {code}"],
                     "ids": [],
                 }
 

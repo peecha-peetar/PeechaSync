@@ -113,7 +113,9 @@ class LicenseWelcomeWindow(QWidget):
         title_block.setSpacing(4)
         self.brand_title = QLabel("پیچا")
         self.brand_title.setObjectName("licenseWelcomeBrand")
-        self.brand_subtitle = QLabel("همگام‌سازی ERP و ووکامرس")
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+
+        self.brand_subtitle = QLabel(f"همگام‌سازی {erp_provider_label(self._cfg)} و ووکامرس")
         self.brand_subtitle.setObjectName("licenseWelcomeTagline")
         title_block.addWidget(self.brand_title)
         title_block.addWidget(self.brand_subtitle)

@@ -52,9 +52,12 @@ class ReconciliationStartupDialog(QDialog):
         title.setObjectName("lastTabRestoreInfoTitle")
         info_layout.addWidget(title)
 
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+        from sync_app.core.secure_config_loader import load_secure_config
+
         message = QLabel(
             "اگر در فروشگاه ووکامرس شما <b>کالاهایی از قبل</b> وجود دارد که "
-            "هنوز با ERP تطبیق داده نشده‌اند، ابتدا باید آن‌ها را در تب "
+            f"هنوز با {erp_provider_label(load_secure_config(None))} تطبیق داده نشده‌اند، ابتدا باید آن‌ها را در تب "
             "«<b>تطبیق</b>» جفت و ثبت کنید.\n\n"
             "در غیر این صورت همگام‌سازی محصولات و متغیرها ممکن است "
             "به محصول اشتباه برود یا داده‌ها overwrite شوند."

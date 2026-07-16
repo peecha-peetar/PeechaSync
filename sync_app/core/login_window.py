@@ -323,7 +323,7 @@ class LoginWindow(QDialog):
         status_row = QHBoxLayout()
         status_row.setContentsMargins(0, 0, 0, 0)
         status_row.setSpacing(8)
-        self.sql_status = QLabel("\U0001f535 SQL")
+        self.sql_status = QLabel(f"\U0001f535 {self._erp_label()}")
         self.sql_status.setObjectName("statusLabel")
         self.sql_status.setAlignment(Qt.AlignCenter)
         self.sql_status.setStyleSheet("background: transparent; color: #6b7280; font-size: 10px;")
@@ -378,6 +378,14 @@ class LoginWindow(QDialog):
         painter.end()
         return pixmap
 
+    def _erp_label(self, config=None) -> str:
+        try:
+            from sync_app.core.integrations.erp_provider import erp_provider_label
+
+            return erp_provider_label(config if config is not None else self.config)
+        except Exception:
+            return "دژاوو"
+
     def _platform_label(self, config=None) -> str:
         try:
             from sync_app.core.integrations.commerce_provider import store_platform_label
@@ -419,11 +427,12 @@ class LoginWindow(QDialog):
         self._check_thread.start()
 
     def _on_connectivity_finished(self, sql_ok, sql_msg, wc_ok, wc_msg):
+        erp_label = self._erp_label(getattr(self, "_active_config", None))
         if sql_ok:
-            self.sql_status.setText("🟢 SQL")
+            self.sql_status.setText(f"🟢 {erp_label}")
             self.sql_status.setStyleSheet("color: #4ade80; font-size: 10px; font-weight: 600;")
         else:
-            self.sql_status.setText("🔴 SQL")
+            self.sql_status.setText(f"🔴 {erp_label}")
             self.sql_status.setStyleSheet("color: #f87171; font-size: 10px; font-weight: 600;")
 
         platform_name = self._platform_label(getattr(self, "_active_config", None))

@@ -318,6 +318,11 @@ class ProductTab(QWidget):
         self._sync_live_timer.setInterval(400)
         self._sync_live_timer.timeout.connect(self._tick_products_sync_ui)
 
+    def _erp_label(self) -> str:
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+
+        return erp_provider_label(self.config)
+
     def _tick_products_sync_ui(self):
         """آپدیت زنده‌ی درصد پیشرفت — با خواندن همون خط لاگ «محصول X/Y» که خودِ اسکریپت سینک می‌نویسه."""
         import re
@@ -456,7 +461,7 @@ class ProductTab(QWidget):
         self.image_presence_filter.addItem("بدون تصویر در هیچ‌کدام", "none")
         self.image_presence_filter.setMinimumHeight(36)
         self.image_presence_filter.setToolTip(
-            "فیلتر بر اساس اینکه محصول تو دیتابیس ERP و/یا سایت تصویر داره یا نه.\n"
+            f"فیلتر بر اساس اینکه محصول تو دیتابیس {self._erp_label()} و/یا سایت تصویر داره یا نه.\n"
             "برای تصویر «سایت»، اول یه‌بار دکمه‌ی «بررسی تعداد تصویر فروشگاه» رو بزنید."
         )
         self.image_presence_filter.currentIndexChanged.connect(
@@ -489,7 +494,7 @@ class ProductTab(QWidget):
         self.image_preview.setVisible(False)
 
         self.refresh_button = CompactCaptionButton(self._refresh_button_default_text)
-        self.refresh_button.setToolTip("بروزرسانی لیست محصولات از SQL")
+        self.refresh_button.setToolTip(f"بروزرسانی لیست محصولات از {self._erp_label()}")
         self.refresh_button.clicked.connect(self._on_refresh_clicked)
 
         self.sync_button = CompactCaptionButton(self._sync_button_idle_text)
@@ -508,7 +513,7 @@ class ProductTab(QWidget):
         self.check_wc_images_button = CompactCaptionButton("🖼️ بررسی تعداد تصویر فروشگاه")
         self.check_wc_images_button.setToolTip(
             "با یه درخواست کارآمد (نه یکی‌یکی)، تعداد واقعی تصویر هر محصول رو "
-            "از فروشگاه می‌گیره و کنار تعداد تصویر ERP نشون می‌ده."
+            f"از فروشگاه می‌گیره و کنار تعداد تصویر {self._erp_label()} نشون می‌ده."
         )
         self.check_wc_images_button.clicked.connect(self._check_wc_image_counts)
 
@@ -880,7 +885,7 @@ class ProductTab(QWidget):
                     QMessageBox.information(
                         self,
                         "بروزرسانی موفق",
-                        f"{row_count} محصول از SQL بارگذاری شد.",
+                        f"{row_count} محصول از {self._erp_label()} بارگذاری شد.",
                     )
         except Exception:
             self._end_products_load()
@@ -1099,7 +1104,7 @@ class ProductTab(QWidget):
             self,
             "حذف تصاویر",
             f"تصاویر دستی محصول {sku} حذف شوند؟\n"
-            "(تصاویر ERP و گالری فروشگاه تغییری نمی‌کند.)",
+            f"(تصاویر {self._erp_label()} و گالری فروشگاه تغییری نمی‌کند.)",
             QMessageBox.Yes | QMessageBox.No,
         )
         if confirm != QMessageBox.Yes:
@@ -2027,7 +2032,7 @@ class ProductTab(QWidget):
         if not to_process:
             parts = [
                 "هیچ محصول تیک‌خورده‌ای با تصویر آماده برای ارسال یافت نشد.",
-                "تصویر دستی بگذارید یا Picture/PicturePath در ERP را بررسی کنید.",
+                f"تصویر دستی بگذارید یا Picture/PicturePath در {self._erp_label()} را بررسی کنید.",
             ]
             if skipped:
                 parts.append(f"\n{len(skipped)} محصول تیک‌خورده بدون فایل تصویر بود.")

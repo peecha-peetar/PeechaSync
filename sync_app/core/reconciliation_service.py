@@ -137,33 +137,36 @@ def normalize_suggestion_reason(reason: str) -> str:
     return _LEGACY_SUGGEST_REASONS.get(text, text)
 
 
-def format_suggestion_tooltip(reason: str, erp: ReconRow, wc: ReconRow) -> str:
+def format_suggestion_tooltip(reason: str, erp: ReconRow, wc: ReconRow, config: dict | None = None) -> str:
     """متن راهنمای فارسی برای hover روی پیشنهاد سیستم — بدون اصطلاح فنی در لیست."""
+    from sync_app.core.integrations.erp_provider import erp_provider_label
+
+    erp_label = erp_provider_label(config)
     code = normalize_suggestion_reason(reason)
     match_code = str(erp.match_key or wc.match_key or "").strip()
     if code == SUGGEST_REASON_MATCH_KEY:
-        code_line = f"کد محصول «{match_code}» در ERP و فروشگاه یکسان است."
+        code_line = f"کد محصول «{match_code}» در {erp_label} و فروشگاه یکسان است."
         if not match_code:
-            code_line = "کد محصول در ERP و فروشگاه یکسان است."
+            code_line = f"کد محصول در {erp_label} و فروشگاه یکسان است."
         return (
             f"پیشنهاد سیستم: {code_line}\n"
             "برای ثبت «پذیرش» بزنید؛ اگر اشتباه است «رد پیشنهاد»."
         )
     if code == SUGGEST_REASON_NAME_EXACT:
         return (
-            "پیشنهاد سیستم: نام محصول در ERP و فروشگاه دقیقاً یکی است.\n"
+            f"پیشنهاد سیستم: نام محصول در {erp_label} و فروشگاه دقیقاً یکی است.\n"
             "قبل از پذیرش، کد و جزئیات را هم مقایسه کنید."
         )
     if code == SUGGEST_REASON_NAME_SIMILAR:
         return (
-            "پیشنهاد سیستم: نام محصول در ERP و فروشگاه شبیه هم است.\n"
+            f"پیشنهاد سیستم: نام محصول در {erp_label} و فروشگاه شبیه هم است.\n"
             "احتمال اشتباه وجود دارد — حتماً بررسی کنید."
         )
     if code == SUGGEST_REASON_PARENT_PLACEHOLDER:
         parent_sku = str((erp.extra or {}).get("parent_sku") or wc.match_key or "").strip()
         return (
             f"پیشنهاد سیستم: محصول والد «{parent_sku}» در سایت هنوز واریانت ندارد؛\n"
-            "با یک متغیر ERP همان کالا جفت می‌شود تا بعداً همگام‌سازی متغیرها اجرا شود.\n"
+            f"با یک متغیر {erp_label} همان کالا جفت می‌شود تا بعداً همگام‌سازی متغیرها اجرا شود.\n"
             "قبل از پذیرش، کد والد و نام را بررسی کنید."
         )
     return "پیشنهاد سیستم — قبل از پذیرش جزئیات را بررسی کنید."
@@ -249,7 +252,9 @@ def _names_match_well(left: str, right: str) -> bool:
     return bool(set(left_n.split()) & set(right_n.split()))
 
 
-def assess_link_pair_risks(entity: str, erp: ReconRow, wc: ReconRow) -> LinkPairRisk:
+def assess_link_pair_risks(entity: str, erp: ReconRow, wc: ReconRow, config: dict | None = None) -> LinkPairRisk:
+    from sync_app.core.integrations.erp_provider import erp_provider_label
+
     erp_name = row_display_name(erp, entity)
     wc_name = row_display_name(wc, entity)
     erp_sku = row_match_key(erp, entity)
@@ -262,7 +267,7 @@ def assess_link_pair_risks(entity: str, erp: ReconRow, wc: ReconRow) -> LinkPair
         )
 
     if erp_sku and wc_sku and erp_sku.casefold() != wc_sku.casefold():
-        warnings.append(f"SKU/کلید یکسان نیست: ERP «{erp_sku}» ↔ Woo «{wc_sku}»")
+        warnings.append(f"SKU/کلید یکسان نیست: {erp_provider_label(config)} «{erp_sku}» ↔ Woo «{wc_sku}»")
 
     return LinkPairRisk(
         erp_label=erp.label,
@@ -299,11 +304,12 @@ def assess_commit_link_risks(
     entity: str,
     pairs: list[tuple[ReconRow, ReconRow]],
     wc_rows: list[ReconRow] | None = None,
+    config: dict | None = None,
 ) -> list[LinkPairRisk]:
     """ریسک‌های ثبت نهایی، شامل تضاد SKU در سایت."""
     risks: list[LinkPairRisk] = []
     for erp, wc in pairs:
-        risk = assess_link_pair_risks(entity, erp, wc)
+        risk = assess_link_pair_risks(entity, erp, wc, config)
         if entity == ENTITY_PRODUCTS and wc_rows:
             erp_sku = row_match_key(erp, entity)
             conflict = find_wc_sku_collision(erp_sku, int(wc.wc_id or 0), wc_rows)
@@ -1890,12 +1896,15 @@ def resolve_manual_pairs(
     entity: str,
     erp_rows: list[ReconRow],
     wc_rows: list[ReconRow],
+    config: dict | None = None,
 ) -> tuple[list[tuple[ReconRow, ReconRow]], str]:
     if entity == ENTITY_ATTRIBUTES:
         return [], "ویژگی با نام یکسان خودکار تطبیق می‌شود — همگام‌سازی: تب «ویژگی‌ها»."
 
     if not erp_rows or not wc_rows:
-        return [], "حداقل یک مورد از ERP و یک مورد از ووکامرس را تیک بزنید."
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+
+        return [], f"حداقل یک مورد از {erp_provider_label(config)} و یک مورد از ووکامرس را تیک بزنید."
 
     if len(erp_rows) == 1 and len(wc_rows) == 1:
         pairs = [(erp_rows[0], wc_rows[0])]
@@ -2079,8 +2088,7 @@ def link_manual_pairs(
     erp_rows: list[ReconRow],
     wc_rows: list[ReconRow],
 ) -> tuple[int, str]:
-    del config  # reserved for future validation hooks
-    pairs, error = resolve_manual_pairs(entity, erp_rows, wc_rows)
+    pairs, error = resolve_manual_pairs(entity, erp_rows, wc_rows, config)
     if error:
         return 0, error
     if entity not in (ENTITY_CATEGORIES, ENTITY_PRODUCTS, ENTITY_VARIATIONS):

@@ -293,7 +293,12 @@ def _sync_product_images_if_needed(wcapi, sku, saved_pid, upsert_data, erp_image
             # فقط تصاویری که واقعاً آپلود موفق بودن رو ثبت می‌کنیم — اگه
             # یکی fail بشه، دفعه‌ی بعد دوباره امتحان می‌شه (نه گم می‌شه).
             mark_images_transferred(sku, transferred_hlo_ids)
-            log.info(f"🖼️ [{sku}] {len(uploaded_ids)} تصویر جدید از ERP اضافه شد (مجموع: {len(payload['images'])}).")
+            from sync_app.core.integrations.erp_provider import erp_provider_label
+
+            log.info(
+                f"🖼️ [{sku}] {len(uploaded_ids)} تصویر جدید از {erp_provider_label(raw_config)} "
+                f"اضافه شد (مجموع: {len(payload['images'])})."
+            )
     except Exception as exc:
         log.warning(f"⚠️ انتقال تصویر محصول {sku} با خطا مواجه شد: {exc}")
 
@@ -309,7 +314,9 @@ def _sync_product_images_if_needed_ps(config, sku, product_id, erp_images):
     from sync_app.core.ps_sync_helper import ps_upload_product_image
 
     if not erp_images:
-        log.info(f"ℹ️ [{sku}] هیچ تصویری در HLOpictures (ERP) برای این کد کالا پیدا نشد.")
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+
+        log.info(f"ℹ️ [{sku}] هیچ تصویری در HLOpictures ({erp_provider_label(config)}) برای این کد کالا پیدا نشد.")
         return
 
     already_transferred = set(load_transferred_image_ids("prestashop").get(str(sku).strip(), []))
@@ -385,7 +392,12 @@ def _sync_product_images_if_needed_ps(config, sku, product_id, erp_images):
 
         if uploaded_count:
             mark_images_transferred(sku, transferred_hlo_ids, "prestashop")
-            log.info(f"🖼️ [{sku}] {uploaded_count} تصویر جدید از ERP به گالری پرستاشاپ اضافه شد.")
+            from sync_app.core.integrations.erp_provider import erp_provider_label
+
+            log.info(
+                f"🖼️ [{sku}] {uploaded_count} تصویر جدید از {erp_provider_label(config)} "
+                "به گالری پرستاشاپ اضافه شد."
+            )
     except Exception as exc:
         log.warning(f"⚠️ انتقال تصویر محصول {sku} با خطا مواجه شد: {exc}")
 
@@ -645,14 +657,17 @@ def main():
                 erp_images_by_sku.setdefault(code, []).append((hlo_id, blob, path))
     except Exception as exc:
         log.warning(f"⚠️ واکشی تصاویر HLOpictures ناموفق بود — تصاویر این دور منتقل نمی‌شن: {exc}")
+    from sync_app.core.integrations.erp_provider import erp_provider_label
+
+    erp_label = erp_provider_label(raw_config)
     total_erp_images = sum(len(v) for v in erp_images_by_sku.values())
     if total_erp_images:
         log.info(
-            f"🖼️ پیش‌واکشی تصاویر ERP: {total_erp_images} تصویر برای {len(erp_images_by_sku)} کد کالا در HLOpictures پیدا شد."
+            f"🖼️ پیش‌واکشی تصاویر {erp_label}: {total_erp_images} تصویر برای {len(erp_images_by_sku)} کد کالا در HLOpictures پیدا شد."
         )
     else:
         log.info(
-            "ℹ️ پیش‌واکشی تصاویر ERP: هیچ تصویری در HLOpictures برای زیرگروه‌های انتخاب‌شده پیدا نشد "
+            f"ℹ️ پیش‌واکشی تصاویر {erp_label}: هیچ تصویری در HLOpictures برای زیرگروه‌های انتخاب‌شده پیدا نشد "
             f"(Code LIKE {[f'{g}%' for g in GROUPS]}, Type=1)."
         )
 

@@ -84,7 +84,11 @@ class PropertiesTab(SyncTab):
         self.properties_list.setItemDelegate(RightAlignedItemDelegate(self.properties_list))
 
         self.properties_refresh_btn = CompactCaptionButton("🔄 بازخوانی تعاریف ویژگی‌ها")
-        self.properties_refresh_btn.setToolTip("بازخوانی تعاریف ویژگی‌ها از SQL")
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+
+        self.properties_refresh_btn.setToolTip(
+            f"بازخوانی تعاریف ویژگی‌ها از {erp_provider_label(load_secure_config(None))}"
+        )
         self.wc_admin_button = make_wc_admin_open_button(
             self, "attributes", button_factory=CompactCaptionButton
         )
@@ -158,16 +162,18 @@ class PropertiesTab(SyncTab):
             self._action_ops.begin(op_id, lock_tabs=False)
         self.properties_list.clear()
         cfg = load_secure_config(None) or {}
+        from sync_app.core.integrations.erp_provider import erp_provider_label
 
+        erp_label = erp_provider_label(cfg)
         if not (cfg.get("SQL_SERVER") and cfg.get("SQL_DATABASE")) and not cfg.get("SQL_CONN_STRING"):
-            self.properties_list.addItem(make_rtl_item("⚠️ تنظیمات SQL ناقص است."))
+            self.properties_list.addItem(make_rtl_item(f"⚠️ تنظیمات {erp_label} ناقص است."))
             self._end_properties_load()
             if manual:
-                QMessageBox.warning(self, "خطا", "تنظیمات SQL ناقص است.")
+                QMessageBox.warning(self, "خطا", f"تنظیمات {erp_label} ناقص است.")
             return
 
         self.properties_list.addItem(make_rtl_item("⏳ در حال بارگذاری ویژگی‌ها..."))
-        self.set_status("loading", "⏳ در حال دریافت تعاریف ویژگی‌ها از SQL...")
+        self.set_status("loading", f"⏳ در حال دریافت تعاریف ویژگی‌ها از {erp_label}...")
 
         def _worker():
             return self._fetch_properties_from_sql(cfg)
@@ -204,13 +210,16 @@ class PropertiesTab(SyncTab):
             QMessageBox.critical(self, "خطای دیتابیس", f"بارگذاری ویژگی‌ها ناموفق بود:\n{err}")
 
     def _apply_properties_grouped(self, grouped, manual=False):
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+
+        erp_label = erp_provider_label(load_secure_config(None))
         self._end_properties_load()
         self.properties_list.clear()
         grouped = grouped or {}
 
         if not grouped:
             self.properties_list.addItem(make_rtl_item("ℹ️ تعریف سطح بالایی یافت نشد."))
-            self.set_status("info", "ℹ️ تعریف ویژگی‌ای در SQL یافت نشد.")
+            self.set_status("info", f"ℹ️ تعریف ویژگی‌ای در {erp_label} یافت نشد.")
             if manual:
                 QMessageBox.information(self, "نتیجه", "تعریف ویژگی‌ای در دیتابیس یافت نشد.")
             return
@@ -226,12 +235,12 @@ class PropertiesTab(SyncTab):
             self.properties_list.addItem(make_rtl_item(line))
 
         count = len(grouped)
-        self.set_status("success", f"✅ {count} تعریف ویژگی از SQL بارگذاری شد.")
+        self.set_status("success", f"✅ {count} تعریف ویژگی از {erp_label} بارگذاری شد.")
         if manual:
             QMessageBox.information(
                 self,
                 "بروزرسانی موفق",
-                f"{count} تعریف ویژگی از SQL بارگذاری شد.",
+                f"{count} تعریف ویژگی از {erp_label} بارگذاری شد.",
             )
 
     def run_script(self):

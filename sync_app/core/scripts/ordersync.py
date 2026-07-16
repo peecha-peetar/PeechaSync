@@ -273,7 +273,9 @@ def insert_order(order):
 
         cursor.execute("SELECT TOP 1 RqIndex FROM RqTitle WHERE RqIndex2 = ?", (order_id,))
         if cursor.fetchone():
-            log.info(f"ℹ️ سفارش {order_id} قبلاً در ERP ثبت شده — رد شد.")
+            from sync_app.core.integrations.erp_provider import erp_provider_label
+
+            log.info(f"ℹ️ سفارش {order_id} قبلاً در {erp_provider_label(config)} ثبت شده — رد شد.")
             mark_order_completed(order_id)
             return
 

@@ -38,7 +38,13 @@ class MarketingTab(QWidget):
         title.setAlignment(Qt.AlignCenter)
         outer.addWidget(title)
 
-        subtitle = QLabel("تحلیل فروش واقعی سایت + موجودی ERP — پیشنهادهای قالب‌محور (بدون هوش مصنوعی)")
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+        from sync_app.core.secure_config_loader import load_secure_config
+
+        subtitle = QLabel(
+            f"تحلیل فروش واقعی سایت + موجودی {erp_provider_label(load_secure_config(None))} — "
+            "پیشنهادهای قالب‌محور (بدون هوش مصنوعی)"
+        )
         subtitle.setProperty("role", "caption")
         subtitle.setAlignment(Qt.AlignCenter)
         outer.addWidget(subtitle)

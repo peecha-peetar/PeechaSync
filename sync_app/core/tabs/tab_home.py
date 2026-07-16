@@ -50,6 +50,12 @@ class HomeTab(QWidget):
         self._quick_buttons: list[QPushButton] = []
         self._build_ui()
 
+    def _erp_label(self) -> str:
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+        from sync_app.core.secure_config_loader import load_secure_config
+
+        return erp_provider_label(load_secure_config(None) or {})
+
     def _build_ui(self):
         root_layout = QVBoxLayout(self)
         root_layout.setContentsMargins(12, 12, 12, 12)
@@ -82,14 +88,14 @@ class HomeTab(QWidget):
         hero_badge.setObjectName("homeHeroBadge")
         hero_header_layout.addWidget(hero_badge)
 
-        hero_title = QLabel("خوش آمدید — همگام‌سازی ERP ↔ فروشگاه آنلاین")
+        hero_title = QLabel(f"خوش آمدید — همگام‌سازی {self._erp_label()} ↔ فروشگاه آنلاین")
         hero_title.setObjectName("homeHeroTitle")
         hero_title.setWordWrap(True)
         hero_header_layout.addWidget(hero_title)
 
         hero_subtitle = QLabel(
             "پیچا پنل یکپارچه برای همگام‌سازی دسته‌ها، محصولات، متغیرها، "
-            "مشتریان و سفارشات بین ERP و فروشگاه آنلاین است."
+            f"مشتریان و سفارشات بین {self._erp_label()} و فروشگاه آنلاین است."
         )
         hero_subtitle.setWordWrap(True)
         hero_subtitle.setObjectName("homeHeroSubtitle")
@@ -113,7 +119,7 @@ class HomeTab(QWidget):
         hero_actions = QHBoxLayout()
         hero_actions.setSpacing(8)
         btn_start = self._make_quick_button("⚙️ شروع از تنظیمات", "تنظیمات")
-        btn_recon = self._make_quick_button("⚖️ تطبیق ERP و سایت", "تطبیق")
+        btn_recon = self._make_quick_button(f"⚖️ تطبیق {self._erp_label()} و سایت", "تطبیق")
         btn_dash = self._make_quick_button("📊 داشبورد گزارشات", "داشبورد")
         hero_actions.addWidget(btn_start)
         hero_actions.addWidget(btn_recon)
@@ -137,15 +143,16 @@ class HomeTab(QWidget):
         flow_hint.setWordWrap(True)
         flow_layout.addWidget(flow_hint)
 
+        erp_label = self._erp_label()
         for number, title, desc, keyword in HOME_FLOW_STEPS:
-            flow_layout.addWidget(self._build_flow_step(number, title, desc, keyword))
+            flow_layout.addWidget(self._build_flow_step(number, title, desc.replace("ERP", erp_label), keyword))
         content_layout.addWidget(flow_card)
 
         self.info_grid = QGridLayout()
         self.info_grid.setHorizontalSpacing(10)
         self.info_grid.setVerticalSpacing(10)
         for title, text in HOME_INFO_CARDS:
-            self._info_cards.append(self._build_info_card(title, text))
+            self._info_cards.append(self._build_info_card(title, text.replace("ERP", erp_label)))
         self._arrange_info_cards(columns=2)
         content_layout.addLayout(self.info_grid)
 

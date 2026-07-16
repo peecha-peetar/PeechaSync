@@ -93,12 +93,16 @@ def check_sql_connection(config: dict) -> HealthCheckResult:
     """آیا اتصال به SQL Server (ERP) برقرار می‌شود؟"""
     from sync_app.core.sql_connection_helper import open_sql_connection
 
+    from sync_app.core.integrations.erp_provider import erp_provider_label
+
+    erp_label = erp_provider_label(config)
     try:
         conn, _, _ = open_sql_connection(config, timeout=8)
         conn.close()
-        return HealthCheckResult("اتصال SQL", True, "اتصال به دیتابیس ERP برقرار است.")
+
+        return HealthCheckResult(f"اتصال {erp_label}", True, f"اتصال به دیتابیس {erp_label} برقرار است.")
     except Exception as exc:
-        return HealthCheckResult("اتصال SQL", False, f"اتصال ناموفق بود: {exc}", "critical")
+        return HealthCheckResult(f"اتصال {erp_label}", False, f"اتصال ناموفق بود: {exc}", "critical")
 
 
 def check_key_pages(url: str) -> list[HealthCheckResult]:

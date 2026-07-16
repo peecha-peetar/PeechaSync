@@ -770,10 +770,12 @@ class CategoryTab(QWidget):
                 )
                 self._end_groups_load()
                 if manual:
+                    from sync_app.core.integrations.erp_provider import erp_provider_label
+
                     QMessageBox.information(
                         self,
                         "بروزرسانی موفق",
-                        f"{main_count} گروه اصلی و {sub_count} زیرگروه از SQL بارگذاری شد.\n"
+                        f"{main_count} گروه اصلی و {sub_count} زیرگروه از {erp_provider_label(self.config)} بارگذاری شد.\n"
                         f"تعداد انتخاب‌شده: {selected_count}",
                     )
             except Exception as e:
@@ -1215,6 +1217,9 @@ class CategoryTab(QWidget):
         return rows
 
     def _show_mismatch_dialog(self, mismatches):
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+
+        erp_label = erp_provider_label(self.config)
         dialog = QDialog(self)
         dialog.setWindowTitle("نامک موجود — نام مغایر")
         dialog.setLayoutDirection(Qt.RightToLeft)
@@ -1222,15 +1227,15 @@ class CategoryTab(QWidget):
         layout = QVBoxLayout(dialog)
 
         layout.addWidget(QLabel(
-            f"{len(mismatches)} دسته در فروشگاه نامک درست دارند ولی نام با ERP فرق دارد.\n"
-            "می‌توانید نام و نامک را طبق ERP در فروشگاه به‌روزرسانی کنید."
+            f"{len(mismatches)} دسته در فروشگاه نامک درست دارند ولی نام با {erp_label} فرق دارد.\n"
+            f"می‌توانید نام و نامک را طبق {erp_label} در فروشگاه به‌روزرسانی کنید."
         ))
 
         lst = QListWidget()
         lst.setLayoutDirection(Qt.RightToLeft)
         for row in mismatches:
             item = QListWidgetItem(
-                f"ERP: {row['erp_name']}  ←  WC: {row['wc_name']}  |  slug: {row['slug']}"
+                f"{erp_label}: {row['erp_name']}  ←  WC: {row['wc_name']}  |  slug: {row['slug']}"
             )
             item.setData(Qt.UserRole, row)
             item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -1238,7 +1243,7 @@ class CategoryTab(QWidget):
         layout.addWidget(lst)
 
         row_btns = QHBoxLayout()
-        fix_btn = QPushButton("به‌روزرسانی همه در فروشگاه (طبق ERP)")
+        fix_btn = QPushButton(f"به‌روزرسانی همه در فروشگاه (طبق {erp_label})")
         fix_btn.clicked.connect(lambda: self._repair_wc_mismatches(mismatches, dialog))
         close_btn = QPushButton("بستن")
         close_btn.clicked.connect(dialog.reject)
@@ -1390,9 +1395,12 @@ class CategoryTab(QWidget):
         if mismatches:
             status_text += f" | {len(mismatches)} نام مغایر"
             log.warning(f"⚠️ {len(mismatches)} دسته با نامک موجود ولی نام متفاوت:")
+            from sync_app.core.integrations.erp_provider import erp_provider_label
+
+            erp_label = erp_provider_label(self.config)
             for row in mismatches:
                 log.warning(
-                    f"  - ERP: {row['erp_name']} | WC: {row['wc_name']} | slug: {row['slug']}"
+                    f"  - {erp_label}: {row['erp_name']} | WC: {row['wc_name']} | slug: {row['slug']}"
                 )
             self._show_mismatch_dialog(mismatches)
 
@@ -1482,9 +1490,12 @@ class CategoryTab(QWidget):
         dialog.setMinimumWidth(560)
         dialog_layout = QVBoxLayout(dialog)
 
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+
+        erp_label = erp_provider_label(self.config)
         label = QLabel(
-            f"این دسته‌ها در فروشگاه هستند ولی در ERP نیستند ({len(orphan_cats)} مورد).\n"
-            "ملاک تطابق: نامک (slug). برای همگام‌سازی از تب دسته‌بندی، گروه ERP را تیک بزنید."
+            f"این دسته‌ها در فروشگاه هستند ولی در {erp_label} نیستند ({len(orphan_cats)} مورد).\n"
+            f"ملاک تطابق: نامک (slug). برای همگام‌سازی از تب دسته‌بندی، گروه {erp_label} را تیک بزنید."
         )
         label.setWordWrap(True)
         dialog_layout.addWidget(label)

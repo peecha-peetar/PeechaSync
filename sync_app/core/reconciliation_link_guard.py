@@ -42,6 +42,9 @@ class ReconciliationLinkWarningDialog(QDialog):
         self._build_ui(entity, risks)
 
     def _build_ui(self, entity: str, risks: list[LinkPairRisk]):
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+
+        erp_label = erp_provider_label(getattr(self.parent(), "config", None))
         root = QVBoxLayout(self)
         root.setContentsMargins(18, 18, 18, 16)
         root.setSpacing(12)
@@ -111,7 +114,7 @@ class ReconciliationLinkWarningDialog(QDialog):
 
             if risk.erp_sku or risk.wc_sku:
                 sku_line = QLabel(
-                    f"<b>SKU/کلید:</b> ERP «{risk.erp_sku or '—'}» ↔ Woo «{risk.wc_sku or '—'}»"
+                    f"<b>SKU/کلید:</b> {erp_label} «{risk.erp_sku or '—'}» ↔ Woo «{risk.wc_sku or '—'}»"
                 )
                 sku_line.setWordWrap(True)
                 sku_line.setTextFormat(Qt.RichText)
@@ -169,13 +172,14 @@ def confirm_reconciliation_link_risks(
     اگر جفت‌های پرخطر وجود داشته باشد از کاربر تأیید می‌گیرد.
     True = ادامه ثبت، False = انصراف.
     """
+    config = getattr(parent, "config", None)
     if wc_rows is not None:
-        risks = assess_commit_link_risks(entity, pairs, wc_rows)
+        risks = assess_commit_link_risks(entity, pairs, wc_rows, config)
     else:
         risks = [
             risk
             for erp, wc in pairs
-            if (risk := assess_link_pair_risks(entity, erp, wc)).warnings
+            if (risk := assess_link_pair_risks(entity, erp, wc, config)).warnings
         ]
     if not risks:
         return True

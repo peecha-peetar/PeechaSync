@@ -100,10 +100,13 @@ class LiveSiteBackupDialog(QDialog):
         checklist_layout.setContentsMargins(12, 10, 12, 10)
         checklist_layout.setSpacing(6)
 
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+        from sync_app.core.secure_config_loader import load_secure_config
+
         for line in (
             "۱) دیتابیس وردپرس / ووکامرس",
             "۲) فایل‌های سایت (wp-content)",
-            "۳) در صورت نیاز: دیتابیس ERP (SQL Server)",
+            f"۳) در صورت نیاز: دیتابیس {erp_provider_label(load_secure_config(None))} (SQL Server)",
         ):
             item = QLabel(f"• {line}")
             item.setObjectName("liveSiteBackupCheckItem")

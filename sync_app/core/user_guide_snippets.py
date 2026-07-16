@@ -90,19 +90,24 @@ RECON_HERO_GUIDE_HTML = (
 ).strip()
 
 
-def recon_hero_html_for_entity(entity: str) -> str:
+def recon_hero_html_for_entity(entity: str, config: dict | None = None) -> str:
     """راهنمای تب تطبیق با نکتهٔ مخصوص نوع انتخاب‌شده."""
+    import re
+
+    from sync_app.core.integrations.erp_provider import erp_provider_label
+
     hint = RECON_ENTITY_HINTS.get(
         str(entity or ENTITY_PRODUCTS).strip(),
         RECON_ENTITY_HINTS[ENTITY_PRODUCTS],
     )
-    return (
+    html = (
         _GUIDE_RECON_VS_SYNC
         + _GUIDE_RECON_STEPS
         + hint
         + _GUIDE_RECON_COLORS
         + "<p><b>⚠️ ایمنی</b><br>قبل از ثبت نهایی بکاپ سایت بگیرید.</p>"
     ).strip()
+    return re.sub(r"\bERP\b", erp_provider_label(config), html)
 
 
 VARIATIONS_TAB_GUIDE_TEXT = (
@@ -120,3 +125,11 @@ VARIATIONS_SYNC_BUTTON_TOOLTIP = (
     "پیش‌نیاز: تطبیق محصول + همگام ویژگی‌ها.\n"
     "اگر در تطبیق «بدون واریانت در سایت» دیدید، اول این دکمه را بزنید."
 )
+
+
+def variations_sync_button_tooltip(config: dict | None = None) -> str:
+    import re
+
+    from sync_app.core.integrations.erp_provider import erp_provider_label
+
+    return re.sub(r"\bERP\b", erp_provider_label(config), VARIATIONS_SYNC_BUTTON_TOOLTIP)

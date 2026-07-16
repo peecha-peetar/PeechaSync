@@ -528,11 +528,14 @@ class MediaCenterTab(QWidget):
             lookup = build_product_code_lookup(code_rows)
             product_map = load_product_woo_map()
 
+            from sync_app.core.integrations.erp_provider import erp_provider_label
+
+            erp_label = erp_provider_label(config)
             results = []
             for file_code, items in groups.items():
                 a_code = lookup.resolve(file_code)
                 if not a_code:
-                    results.append((file_code, "—", "—", "—", len(items), "❌ کد ناشناس (در ERP نیست)", None))
+                    results.append((file_code, "—", "—", "—", len(items), f"❌ کد ناشناس (در {erp_label} نیست)", None))
                     continue
                 name = name_by_code.get(a_code, "—")
                 manual_code = manual_by_code.get(a_code, "") or "—"

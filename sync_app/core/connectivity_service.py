@@ -389,12 +389,15 @@ def describe_offline_reason(raw_msg: str, *, target: str = "WooCommerce", host: 
 
 
 def probe_sql(config: dict | None) -> tuple[bool, str, float]:
+    from sync_app.core.integrations.erp_provider import erp_provider_label
+
     config = config or {}
+    erp_label = erp_provider_label(config)
     t0 = time.perf_counter()
     server = (config.get("SQL_SERVER") or "").strip()
     database = (config.get("SQL_DATABASE") or "").strip()
     if not server or not database:
-        return False, "تنظیمات SQL ناقص است", 0.0
+        return False, f"تنظیمات {erp_label} ناقص است", 0.0
 
     conn = None
     try:
@@ -409,12 +412,12 @@ def probe_sql(config: dict | None) -> tuple[bool, str, float]:
         ms = (time.perf_counter() - t0) * 1000
         return (
             True,
-            f"SQL آنلاین ({ms:.0f}ms) | DB={db_name} | Server={db_server} | Auth={auth_mode}",
+            f"{erp_label} آنلاین ({ms:.0f}ms) | DB={db_name} | Server={db_server} | Auth={auth_mode}",
             ms,
         )
     except Exception as exc:
         ms = (time.perf_counter() - t0) * 1000
-        return False, f"SQL آفلاین: {format_db_error(exc)[:160]}", ms
+        return False, f"{erp_label} آفلاین: {format_db_error(exc)[:160]}", ms
     finally:
         try:
             if conn is not None:
