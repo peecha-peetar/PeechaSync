@@ -214,38 +214,52 @@ class LoginWindow(QDialog):
         self.close_btn.clicked.connect(self.reject)
         top_row.addWidget(self.close_btn)
         card_layout.addLayout(top_row)
+        card_layout.addSpacing(4)
 
-        # لوگو
+        # بلوکِ برند: لوگو و «پیچا» کنارِ هم، هم‌راستا با هدرِ برنامه‌ی اصلی
+        # (که همیشه لوگو+عنوان رو تو یه ردیفِ افقی نشون می‌ده) — قبلاً این‌جا
+        # لوگو و متن جدا-جدا و وسط‌چین روی هم چیده می‌شدن که با ظاهرِ بقیه‌ی
+        # برنامه هم‌خوانی نداشت.
+        brand_row = QHBoxLayout()
+        brand_row.setContentsMargins(0, 0, 0, 0)
+        brand_row.setSpacing(12)
+        brand_row.setAlignment(Qt.AlignCenter)
+
         logo_container = QLabel()
         logo_container.setAlignment(Qt.AlignCenter)
-        logo_container.setFixedHeight(80)
+        logo_container.setFixedSize(56, 56)
         logo_container.setContentsMargins(0, 0, 0, 0)
         logo_container.setStyleSheet("background: transparent;")
         from sync_app.core.brand_assets import brand_logo_pixmap
 
-        pixmap = brand_logo_pixmap(72, light_background=True)
+        pixmap = brand_logo_pixmap(56, light_background=True)
         if not pixmap.isNull():
             logo_container.setPixmap(pixmap)
         else:
             logo_container.setPixmap(self._generate_gradient_logo())
-        card_layout.addWidget(logo_container)
-        card_layout.addSpacing(6)
+        brand_row.addWidget(logo_container, 0, Qt.AlignVCenter)
+
+        brand_text_col = QVBoxLayout()
+        brand_text_col.setContentsMargins(0, 0, 0, 0)
+        brand_text_col.setSpacing(2)
 
         # عنوان
         title = QLabel("\u067e\u06cc\u0686\u0627")
         title.setObjectName("title")
-        title.setAlignment(Qt.AlignCenter)
+        title.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         title.setStyleSheet("background: transparent; margin: 0; padding: 0;")
-        card_layout.addWidget(title)
-        card_layout.addSpacing(4)
+        brand_text_col.addWidget(title)
 
         # زیرعنوان
         subtitle = QLabel("\u0647\u0645\u06af\u0627\u0645\u200c\u0633\u0627\u0632\u06cc \u0647\u0648\u0634\u0645\u0646\u062f \u0641\u0631\u0648\u0634\u06af\u0627\u0647")
         subtitle.setObjectName("subtitle")
-        subtitle.setAlignment(Qt.AlignCenter)
+        subtitle.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         subtitle.setStyleSheet("background: transparent; margin: 0; padding: 0;")
-        card_layout.addWidget(subtitle)
-        card_layout.addSpacing(14)
+        brand_text_col.addWidget(subtitle)
+
+        brand_row.addLayout(brand_text_col)
+        card_layout.addLayout(brand_row)
+        card_layout.addSpacing(16)
 
         # خط جداکننده
         divider = QFrame()
@@ -311,7 +325,7 @@ class LoginWindow(QDialog):
         self.sql_status.setObjectName("statusLabel")
         self.sql_status.setAlignment(Qt.AlignCenter)
         self.sql_status.setStyleSheet("background: transparent; color: #6b7280; font-size: 10px;")
-        self.wc_status = QLabel("\U0001f535 WooCommerce")
+        self.wc_status = QLabel(f"\U0001f535 {self._platform_label()}")
         self.wc_status.setObjectName("statusLabel")
         self.wc_status.setAlignment(Qt.AlignCenter)
         self.wc_status.setStyleSheet("background: transparent; color: #6b7280; font-size: 10px;")
@@ -362,6 +376,14 @@ class LoginWindow(QDialog):
         painter.end()
         return pixmap
 
+    def _platform_label(self, config=None) -> str:
+        try:
+            from sync_app.core.integrations.commerce_provider import store_platform_label
+
+            return store_platform_label(config if config is not None else self.config)
+        except Exception:
+            return "ووکامرس"
+
     def refresh_connectivity_status(self):
         if self._check_thread is not None:
             return
@@ -375,6 +397,13 @@ class LoginWindow(QDialog):
         username = (self.username_input.text() or "").strip() or "admin"
         activate_profile(username)
         probe_config = load_secure_config_after_profile() or self.config
+        self._active_config = probe_config
+        # چون فروشگاهِ فعال ممکنه بین پروفایل‌ها فرق کنه (یکی ووکامرس، یکی
+        # پرستاشاپ)، لیبل قبل از رسیدنِ نتیجه هم به‌روز می‌شه — نه صرفاً
+        # همیشه «ووکامرس» (رفعِ گزارشِ کاربر که پرستاشاپ هم اشتباهی
+        # «WooCommerce» نشون می‌داد).
+        self.wc_status.setText(f"🔵 {self._platform_label(probe_config)}")
+        self.wc_status.setStyleSheet("background: transparent; color: #6b7280; font-size: 10px;")
 
         self._check_thread = QThread(self)
         self._check_worker = ConnectivityWorker(probe_config)
@@ -395,11 +424,12 @@ class LoginWindow(QDialog):
             self.sql_status.setText("🔴 SQL")
             self.sql_status.setStyleSheet("color: #f87171; font-size: 10px; font-weight: 600;")
 
+        platform_name = self._platform_label(getattr(self, "_active_config", None))
         if wc_ok:
-            self.wc_status.setText("🟢 WooCommerce")
+            self.wc_status.setText(f"🟢 {platform_name}")
             self.wc_status.setStyleSheet("color: #4ade80; font-size: 10px; font-weight: 600;")
         else:
-            self.wc_status.setText("🔴 WooCommerce")
+            self.wc_status.setText(f"🔴 {platform_name}")
             self.wc_status.setStyleSheet("color: #f87171; font-size: 10px; font-weight: 600;")
 
         if not sql_ok or not wc_ok:
