@@ -1,0 +1,13 @@
+========================================
+PeechaSync diagnostic report
+========================================
+Time: Mon 06/29/2026 11:47:24.58
+PC: DESKTOP-4D3UKPL
+User: shehnehm
+Report folder: C:\ponisha\PeechaSync-Source\release\installer\
+
+--- Windows ---
+
+Microsoft Windows [Version 10.0.19045.5965]
+
+--- Python ---

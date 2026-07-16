@@ -1,0 +1,12 @@
+{
+  "license_key": "",
+  "remote_cache": {
+    "validated_at": "",
+    "license_expires": "",
+    "updates_until": "",
+    "updates_allowed": true,
+    "customer_name": "",
+    "status": "active",
+    "offline_grace_days": 7
+  }
+}

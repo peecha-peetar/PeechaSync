@@ -1,0 +1,32 @@
+.venv/
+release/installer/wheels/*.whl
+release/installer/python-embed-cache/
+__pycache__/
+*.pyc
+*.pyo
+*.log
+build/
+dist/
+temp/
+.idea/
+.vscode/
+DATA3/
+*.bak
+
+# داده و تنظیمات محلی (نباید در مخزن/بسته فروش باشد)
+sync_app/core/sync_key.key
+sync_app/core/secure_config.bin
+sync_app/core/secure_config.json
+sync_app/core/license.json
+product_woo_map.json
+category_map.json
+category_images_map.json
+product_images_map.json
+category_images/
+product_images/
+
+# deploy token — local only
+tools/wp-license-deploy/
+tools/client-release-deploy/
+tools/wp-license-deploy.local.json
+wordpress-plugin/*.zip
