@@ -1,5 +1,15 @@
 #Requires -Version 5.1
 
+function Test-IsFtpAuthFailure([string]$Text) {
+    # رمز/یوزرِ اشتباه (530/531 یا «Login authentication failed») — این‌جور
+    # خطا با عوض‌کردنِ passive/EPSV/FTPS درست نمی‌شه، فقط باعثِ چند تلاشِ
+    # پشتِ‌همِ اضافه با همون رمزِ غلط می‌شه که خیلی از هاست‌ها (fail2ban/CSF)
+    # بعد از چندتا Login ناموفقِ پیاپی، IP رو موقتاً بلاک می‌کنن. برای همین
+    # این حالت باید فوراً و بدون retry گزارش بشه.
+    if (-not $Text) { return $false }
+    return [bool]($Text -match '530|531|Login authentication failed|Login denied|Login incorrect')
+}
+
 function Get-CurlExe {
     $sys = Join-Path $env:WINDIR 'System32\curl.exe'
     if (Test-Path -LiteralPath $sys) { return $sys }
@@ -97,6 +107,10 @@ function Invoke-CurlUpload {
         $first = $_.Exception.Message
     }
 
+    if (Test-IsFtpAuthFailure $first) {
+        throw "upload failed - رمز/یوزرِ FTP اشتباه است (530/531 Login authentication failed). tools\Setup_WP_LicenseDeploy.bat را دوباره اجرا کنید و رمزِ درست را وارد کنید. جزئیات: $first"
+    }
+
     if (-not $DisableEpsv) {
         try {
             Write-Host "  retry with disable-epsv..." -ForegroundColor DarkYellow
@@ -107,6 +121,9 @@ function Invoke-CurlUpload {
             return
         } catch {
             $second = $_.Exception.Message
+        }
+        if (Test-IsFtpAuthFailure $second) {
+            throw "upload failed - رمز/یوزرِ FTP اشتباه است (530/531 Login authentication failed). tools\Setup_WP_LicenseDeploy.bat را دوباره اجرا کنید و رمزِ درست را وارد کنید. جزئیات: $second"
         }
     }
 
@@ -253,6 +270,12 @@ function Find-WorkingFtpMirrorDir {
                     DisableEpsv = $mode.DisableEpsv
                 }
             }
+            # رمز/یوزرِ اشتباه با عوض‌کردنِ passive/EPSV/path درست نمی‌شه — ادامه‌ی
+            # این حلقه فقط چندین Login ناموفقِ دیگه با همون رمزِ غلط می‌زنه که
+            # می‌تونه IP رو موقتاً نزدِ هاست بلاک کنه. فوراً برمی‌گردیم.
+            if (Test-IsFtpAuthFailure $r.Output) {
+                return @{ Ok = $false; AuthFailed = $true }
+            }
         }
         if (-not $UseFtps) {
             foreach ($mode in $modes) {
@@ -268,6 +291,9 @@ function Find-WorkingFtpMirrorDir {
                         Passive = $mode.Passive
                         DisableEpsv = $mode.DisableEpsv
                     }
+                }
+                if (Test-IsFtpAuthFailure $r2.Output) {
+                    return @{ Ok = $false; AuthFailed = $true }
                 }
             }
         }

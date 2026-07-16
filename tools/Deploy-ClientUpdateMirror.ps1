@@ -92,13 +92,30 @@ try {
             $remoteMirrorDir = $probe.Path
             break
         }
+        if ($probe.AuthFailed) {
+            # رمز اشتباهه — امتحان‌کردنِ host جایگزین هم فایده نداره (اغلب
+            # همون سرورِ فیزیکیه با اسمِ دیگه) و فقط یه Login ناموفقِ دیگه با
+            # همون رمز ثبت می‌کنه. فوراً متوقف می‌شیم تا IP بلاک نشه.
+            break
+        }
+    }
+    if ($probe.AuthFailed) {
+        throw @"
+FTP login failed (530/531) - رمز یا یوزرِ FTP در wp-license-deploy.local.json اشتباهه.
+
+برای جلوگیری از بلاک‌شدنِ IP توسطِ هاست، دیگه تلاشِ خودکار نمی‌کنیم. مراحل:
+1) DirectAdmin -> FTP Accounts -> $user -> reset password
+2) tools\Setup_WP_LicenseDeploy.bat -> رمزِ جدید را Save کنید
+3) چند دقیقه صبر کنید (اگه هاست IP رو موقتاً بلاک کرده باشه، خودش باز می‌شه)
+4) tools\Test-WP-LicenseFtp.bat تا OK بشه
+5) tools\Run_Deploy_ClientUpdate.bat upload-only
+"@
     }
     if (-not $probe.Ok) {
         throw @"
 FTP mirror path not reachable: $remoteMirrorDir
 
-Login failed (531) usually means wrong ftpPassword in wp-license-deploy.local.json.
-1) DirectAdmin -> FTP Accounts -> update@peecha.ir -> reset password
+1) DirectAdmin -> FTP Accounts -> $user -> reset password
 2) tools\Setup_WP_LicenseDeploy.bat -> Save
 3) tools\Test-WP-LicenseFtp.bat until OK
 4) tools\Run_Deploy_ClientUpdate.bat upload-only

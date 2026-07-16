@@ -97,6 +97,27 @@ function Get-GitHubRepo([object]$cfg) {
     return $repo.Trim()
 }
 
+function Test-GitIdentityReady([string]$Root) {
+    Push-Location $Root
+    try {
+        $name = (git config user.name 2>$null)
+        $email = (git config user.email 2>$null)
+        if (-not $name -or -not $email) {
+            throw @"
+هویتِ Git روی این دستگاه تنظیم نشده — git commit بدونِ این دو مورد اجرا نمی‌شه.
+
+یک‌بار این دو خط رو با نام/ایمیلِ خودتون بزنید:
+  git config --global user.name "نام شما"
+  git config --global user.email "email@example.com"
+
+بعدش دوباره tools\Run_Release_All.bat رو اجرا کنید.
+"@
+        }
+    } finally {
+        Pop-Location
+    }
+}
+
 function Invoke-GitPublish {
     param(
         [string]$Root,
@@ -264,6 +285,12 @@ try {
     $version = Get-ClientAppVersion $ProjectRoot
     Write-Host "PeechaSync release pipeline v$version" -ForegroundColor Cyan
     Write-Host "OTA + portable setup + git + GitHub + FTP mirror" -ForegroundColor DarkGray
+
+    if (-not $SkipGit) {
+        Write-Step "0/6 Preflight: git identity"
+        Test-GitIdentityReady $ProjectRoot
+        Write-Host "Git identity OK" -ForegroundColor Green
+    }
 
     Write-Step "1/6 Build OTA client ZIP"
     $pkg = Build-ClientReleaseZip -ProjectRoot $ProjectRoot -ToolsRoot $PSScriptRoot
