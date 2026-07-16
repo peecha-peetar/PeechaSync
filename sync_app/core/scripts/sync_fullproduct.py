@@ -632,6 +632,23 @@ def main():
     import threading
     from sync_app.core.wc_sync_helper import wc_is_slow_connection
 
+    # هر Thread یه Connection SQL جدا نگه می‌داره و برای همه‌ی محصولاتِ
+    # متغیری که همون Thread پردازش می‌کنه دوباره استفاده می‌شه — به‌جای باز/
+    # بسته‌کردنِ یک Connection کاملاً جدید به‌ازای هر محصول (که با تعداد
+    # زیادِ محصولِ متغیر، هزینه‌ی handshake زیادی داشت).
+    _conn_pool_lock = threading.Lock()
+    _conn_pool = []
+    _thread_local = threading.local()
+
+    def _get_thread_local_conn():
+        local_conn = getattr(_thread_local, "conn", None)
+        if local_conn is None:
+            local_conn, _, _ = open_sql_connection(raw_config, timeout=10)
+            _thread_local.conn = local_conn
+            with _conn_pool_lock:
+                _conn_pool.append(local_conn)
+        return local_conn
+
     map_dirty = False
     cursor = conn.cursor()
     variable_codes = load_variable_a_codes(cursor)
@@ -833,13 +850,15 @@ def main():
         # Connection اصلی (conn) بین Threadها مشترکه و pyodbc معمولاً برای
         # استفاده‌ی هم‌زمان از چند Thread امن نیست. زودتر از قبل باز می‌شه
         # (نه فقط بعد از تصمیمِ سینک) چون برای تشخیصِ تغییرِ واریانت‌ها هم
-        # لازمه ردیف‌های واریانت رو زودتر بخونیم.
+        # لازمه ردیف‌های واریانت رو زودتر بخونیم. Connection به‌ازای هر
+        # Thread یک‌بار باز و برای بقیه‌ی محصولاتِ همون Thread دوباره
+        # استفاده می‌شه (_get_thread_local_conn) — نه به‌ازای هر محصول.
         local_conn = None
         erp_variations = None
         attr_map = None
         dim_labels = None
         if has_variants:
-            local_conn, _, _ = open_sql_connection(raw_config, timeout=10)
+            local_conn = _get_thread_local_conn()
             from sync_app.core.scripts.update_variations import fetch_variations_from_db
 
             dim_labels = _attribute_labels()
@@ -875,8 +894,6 @@ def main():
                 skipped_unchanged["count"] += 1
             with stats_lock:
                 stats["ok"] += 1
-            if local_conn is not None:
-                local_conn.close()
             return
 
         if local_map.get(sku) and changed_parts:
@@ -1029,9 +1046,6 @@ def main():
                 stats["failed_skus"].append(sku)
                 stats["last_error"] = e
             log.error(f"❌ خطا در {sku}: {e}")
-        finally:
-            if local_conn is not None:
-                local_conn.close()
 
     # شبکه کند یا تعداد کم → مثل قبل تک‌تک (رفتار قبلی کاملاً حفظ می‌شه).
     # شبکه سریع → موازی، دقیقاً با همون الگوی امنی که برای اعمال دسته
@@ -1053,6 +1067,11 @@ def main():
     map_dirty = True
 
     conn.close()
+    for _pooled_conn in _conn_pool:
+        try:
+            _pooled_conn.close()
+        except Exception:
+            pass
 
     if map_dirty:
         _save_product_woo_map(product_map)

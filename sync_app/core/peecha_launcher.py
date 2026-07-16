@@ -1168,7 +1168,7 @@ class PeechaLauncher(QWidget):
         QTimer.singleShot(0, lambda t=cfg.get("APP_THEME", "navy"): self.apply_theme(t))
         self._restore_connectivity_from_cache(cfg)
         self._header_wc_timer = QTimer(self)
-        self._header_wc_timer.setInterval(6000)
+        self._header_wc_timer.setInterval(10000)
         self._header_wc_timer.timeout.connect(self.refresh_wc_connectivity)
         self._header_sql_timer = QTimer(self)
         self._header_sql_timer.setInterval(28000)
@@ -2502,7 +2502,7 @@ class PeechaLauncher(QWidget):
             sql_show = self._sql_display_ok if self._sql_display_ok is not None else bool(self._last_sql_ok)
             self.dashboard_tab.update_connectivity_quick(bool(sql_show), bool(self._wc_display_ok))
 
-        interval = 12000 if wc_ok else 4000
+        interval = 18000 if wc_ok else 8000
         if self._header_wc_timer.interval() != interval:
             self._header_wc_timer.setInterval(interval)
             self._header_wc_timer.start()
@@ -2523,7 +2523,7 @@ class PeechaLauncher(QWidget):
             wc_show = self._wc_display_ok if self._wc_display_ok is not None else bool(self._last_wc_ok)
             self.dashboard_tab.update_connectivity_quick(bool(sql_show), bool(wc_show))
 
-        interval = 45000 if sql_show else 15000
+        interval = 60000 if sql_show else 20000
         if self._header_sql_timer.interval() != interval:
             self._header_sql_timer.setInterval(interval)
             self._header_sql_timer.start()
