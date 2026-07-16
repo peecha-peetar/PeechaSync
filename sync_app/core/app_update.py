@@ -811,6 +811,16 @@ def _kill_peecha_processes() -> None:
         return
     try:
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        # این تابع از داخلِ همین فرآیندِ در حالِ اجرا (پیچا) صدا زده می‌شه —
+        # چه در وسطِ دانلود/اعمالِ بروزرسانی (روی یک Thread پس‌زمینه)، چه در
+        # لحظه‌ی خروجِ نهایی. اگه PID خودمون رو از این کشتار مستثنی نکنیم،
+        # این فرآیندِ خودش (چون مسیرِ pythonw.exe/python.exe‌اش هم شاملِ
+        # «PeechaSync» می‌شه) هم کشته می‌شه — و اگه این وسطِ اعمالِ بروزرسانی
+        # باشه (قبل از spawn کردنِ اسکریپتِ نصب)، برنامه بدونِ اینکه هیچ‌وقت
+        # واقعاً بروزرسانی رو اعمال یا دوباره باز کنه، ناگهان می‌میره — دقیقاً
+        # همون چیزی که کاربر گزارش داد: «دانلود تمام می‌شه، هیچ اتفاقی
+        # نمی‌افته، دوباره تکرار دانلود».
+        current_pid = os.getpid()
         subprocess.run(
             [
                 "powershell",
@@ -820,7 +830,8 @@ def _kill_peecha_processes() -> None:
                 "-Command",
                 (
                     "Get-Process pythonw,python -EA 0 | "
-                    "Where-Object { $_.Path -and ($_.Path -like '*PeechaSync*') } | "
+                    "Where-Object { $_.Path -and ($_.Path -like '*PeechaSync*') "
+                    f"-and ($_.Id -ne {current_pid}) }} | "
                     "Stop-Process -Force -EA 0"
                 ),
             ],
