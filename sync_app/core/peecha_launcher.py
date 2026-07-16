@@ -3330,16 +3330,14 @@ def _present_startup_window(window, label: str) -> None:
 
     window.setWindowModality(Qt.NonModal)
 
-    # پنجره‌های بی‌فریم+نیمه‌شفاف (مثل فرم ورود) رو نباید با تغییرِ
-    # windowFlag بعد از نمایش، دوباره‌ساخت کرد — روی ویندوز این کار باعث
-    # می‌شد handleِ نیتیوِ پنجره در وسطِ رندر دوباره ساخته بشه و فرم «نصفه
-    # باز» بمونه (گزارشِ کاربر). برای این پنجره‌ها فقط یک بار show/raise/
+    # پنجره‌های بی‌فریم (مثل فرم ورود) رو نباید با تغییرِ windowFlag بعد از
+    # نمایش، دوباره‌ساخت کرد — روی ویندوز این کار باعث می‌شد handleِ
+    # نیتیوِ پنجره در وسطِ رندر دوباره ساخته بشه و فرم «نصفه باز» بمونه
+    # (گزارشِ تکراریِ کاربر). برای این پنجره‌ها فقط یک بار show/raise/
     # activate کافیه، بدون بازی با WindowStaysOnTopHint.
-    is_frameless_translucent = bool(
-        window.windowFlags() & Qt.FramelessWindowHint
-    ) and window.testAttribute(Qt.WA_TranslucentBackground)
+    is_frameless = bool(window.windowFlags() & Qt.FramelessWindowHint)
 
-    if is_frameless_translucent:
+    if is_frameless:
         window.show()
         window.raise_()
         window.activateWindow()

@@ -93,8 +93,13 @@ class LoginWindow(QDialog):
         # mouseMoveEvent) رو داره، دیگه نیازی به نوارِ عنوانِ نیتیو نیست؛
         # حالا رو همه‌ی پلتفرم‌ها (شاملِ ویندوز) بدون‌فریمه، تا کل فرم
         # (شاملِ ناحیه‌ی بالا) واقعاً راست‌چین باشه.
+        # WA_TranslucentBackground حذف شد: روی بعضی سیستم‌های ویندوز (بسته به
+        # درایور/کامپوزیتور DWM) پنجره‌ی بی‌فریمِ نیمه‌شفاف گاهی فقط نیمه
+        # رندر می‌شد و کامل باز نمی‌شد (گزارشِ تکراریِ کاربر). حالا به‌جای
+        # شفافیتِ واقعیِ سیستم‌عامل، پس‌زمینه‌ی خودِ دیالوگ رنگِ تیرهٔ گوشه‌ی
+        # کارت رو می‌گیره — گوشه‌های بیرونِ کارتِ گردشده به‌جای شفاف بودن
+        # همون رنگ تیره می‌مونن، ولی رندر همیشه کامل و قابل‌اعتماده.
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
-        self.setAttribute(Qt.WA_TranslucentBackground)
 
         self._init_ui()
         QTimer.singleShot(1500, self.refresh_connectivity_status)
@@ -102,7 +107,7 @@ class LoginWindow(QDialog):
     def _init_ui(self):
         self.setStyleSheet("""
             QDialog {
-                background: transparent;
+                background: #0f0a1e;
             }
             QFrame#card {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
