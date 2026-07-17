@@ -87,6 +87,33 @@ def _guess_mime(filename):
     }.get(ext, 'image/jpeg')
 
 
+def _derive_site_address_display(cfg: dict) -> str:
+    """آدرسِ نمایشیِ سایت برای فیلدِ «آدرسِ سایت» در قالبِ پست — یا از
+    SITE_ADDRESS_DISPLAYِ تنظیمات (اگه واردشده)، یا خودکار از آدرسِ فروشگاه."""
+    override = str((cfg or {}).get("SITE_ADDRESS_DISPLAY") or "").strip()
+    if override:
+        return override
+    from sync_app.core.integrations.commerce_provider import is_prestashop
+
+    url = (cfg or {}).get("PS_URL") if is_prestashop(cfg) else (cfg or {}).get("WC_URL")
+    return re.sub(r"^https?://", "", str(url or "").strip()).rstrip("/")
+
+
+def _build_template_context(product: dict, fetched: dict, cfg: dict, fallback_link: str = "") -> dict:
+    """context برای render_post_template — فیلدهای واقعیِ محصول + تماس/برندینگِ تنظیمات."""
+    return {
+        "name": product.get("name") or "",
+        "price": product.get("price"),
+        "description": (fetched or {}).get("description") or "",
+        "permalink": (fetched or {}).get("permalink") or fallback_link,
+        "site_address": _derive_site_address_display(cfg),
+        "phone": (cfg or {}).get("CONTACT_PHONE") or "",
+        "social_instagram": (cfg or {}).get("SOCIAL_INSTAGRAM") or "",
+        "social_telegram": (cfg or {}).get("SOCIAL_TELEGRAM") or "",
+        "social_whatsapp": (cfg or {}).get("SOCIAL_WHATSAPP") or "",
+    }
+
+
 class ProductRowWidget(QWidget):
     def __init__(self, text, checked, on_toggle, on_upload, on_clear=None, on_seo=None, on_pipeline=None, on_content=None, on_smart_prep=None, on_delete=None, on_stock_mode_changed=None, on_stock_group=None, parent=None):
         super().__init__(parent)
@@ -1778,10 +1805,15 @@ class ProductTab(QWidget):
         schedule_image_row.addWidget(schedule_image_btn)
         schedule_layout.addLayout(schedule_image_row)
 
-        # لینک و عکسِ واقعیِ محصول از خودِ سایت (نه فرمتِ حدسی قدیمی) —
+        schedule_send_all_images_check = QCheckBox("همه‌ی عکس‌های این محصول از سایت هم ارسال شود (آلبوم)")
+        schedule_send_all_images_check.setEnabled(False)
+        schedule_layout.addWidget(schedule_send_all_images_check)
+
+        # لینک/عکس(ها)/توضیحِ واقعیِ محصول از خودِ سایت (نه فرمتِ حدسی قدیمی) —
         # به‌صورتِ ناهمزمان دریافت می‌شه تا دیالوگ فوراً باز بشه
+        schedule_fetched = {"permalink": "", "description": "", "image_urls": []}
         schedule_fetch_status = QLabel(
-            "🔄 در حالِ دریافتِ لینک و عکسِ واقعیِ محصول از سایت..." if wc_id else ""
+            "🔄 در حالِ دریافتِ لینک/عکس(ها)ی واقعیِ محصول از سایت..." if wc_id else ""
         )
         schedule_fetch_status.setStyleSheet("color:#2563eb; font-size:10px;")
         schedule_fetch_status.setWordWrap(True)
@@ -1796,10 +1828,18 @@ class ProductTab(QWidget):
             image_local = ""
             if fetched.get("image_url"):
                 image_local = download_image_to_temp(fetched["image_url"])
-            return {"permalink": fetched.get("permalink") or "", "image_local": image_local}
+            return {
+                "permalink": fetched.get("permalink") or "",
+                "description": fetched.get("description") or "",
+                "image_urls": fetched.get("image_urls") or [],
+                "image_local": image_local,
+            }
 
         def _apply_fetched_content(fetched):
-            permalink = fetched.get("permalink") or ""
+            schedule_fetched["permalink"] = fetched.get("permalink") or ""
+            schedule_fetched["description"] = fetched.get("description") or ""
+            schedule_fetched["image_urls"] = fetched.get("image_urls") or []
+            permalink = schedule_fetched["permalink"]
             image_local = fetched.get("image_local") or ""
             if permalink:
                 current = schedule_text_edit.toPlainText()
@@ -1814,28 +1854,34 @@ class ProductTab(QWidget):
                 # فقط اگه کاربر از قبل عکسِ دستی انتخاب نکرده، عکسِ سایت جایگزین می‌شه
                 schedule_image_path["value"] = image_local
                 schedule_image_label.setText(f"(از روی سایت) {image_local}")
+            n_images = len(schedule_fetched["image_urls"])
+            if n_images > 1:
+                schedule_send_all_images_check.setText(f"همه‌ی {n_images} عکسِ این محصول از سایت هم ارسال شود (آلبوم)")
+                schedule_send_all_images_check.setEnabled(True)
             if permalink or image_local:
-                schedule_fetch_status.setText("✅ لینک/عکسِ واقعیِ محصول از سایت دریافت شد.")
+                schedule_fetch_status.setText("✅ لینک/عکس/توضیحِ واقعیِ محصول از سایت دریافت شد.")
             else:
-                schedule_fetch_status.setText("⚠️ دریافتِ لینک/عکسِ سایت ناموفق بود؛ لینکِ قبلی حفظ شد.")
+                schedule_fetch_status.setText("⚠️ دریافتِ اطلاعاتِ سایت ناموفق بود؛ متن/عکسِ قبلی حفظ شد.")
 
         def _fetch_real_content_error(_msg):
-            schedule_fetch_status.setText("⚠️ دریافتِ لینک/عکسِ سایت ناموفق بود؛ لینکِ قبلی حفظ شد.")
+            schedule_fetch_status.setText("⚠️ دریافتِ اطلاعاتِ سایت ناموفق بود؛ متن/عکسِ قبلی حفظ شد.")
 
         if wc_id:
             run_in_thread(_fetch_real_content_worker, on_complete=_apply_fetched_content, on_error=_fetch_real_content_error)
 
-        # --- قالبِ پست (طراحیِ بصری) ---
+        # --- کارتِ متنیِ قالب (اختیاری) — عکسِ محصول همیشه دست‌نخورده ارسال
+        # می‌شه؛ قالب فقط یک کارتِ متنیِ جدا (نام/قیمت/توضیح/لینک/تماس/...)
+        # اضافه می‌کنه، نه این‌که روی عکس اثری بذاره ---
         from sync_app.core.post_template_store import find_template, list_templates, save_template
 
         schedule_template_row = QHBoxLayout()
-        schedule_template_row.addWidget(QLabel("قالبِ پست:"))
+        schedule_template_row.addWidget(QLabel("کارتِ متنیِ قالب (اختیاری):"))
         schedule_template_combo = QComboBox()
 
         def _reload_template_combo(select_id=""):
             schedule_template_combo.blockSignals(True)
             schedule_template_combo.clear()
-            schedule_template_combo.addItem("بدون قالب (فقط تصویرِ محصول)", "")
+            schedule_template_combo.addItem("بدونِ کارتِ متنی (فقط عکسِ اصلیِ محصول)", "")
             cfg_now = load_secure_config(None) or {}
             for tpl in list_templates(cfg_now):
                 schedule_template_combo.addItem(tpl.get("title") or "بدون‌عنوان", tpl.get("id"))
@@ -1851,7 +1897,7 @@ class ProductTab(QWidget):
         def _design_new_template():
             from sync_app.core.post_template_designer_dialog import PostTemplateDesignerDialog
 
-            designer = PostTemplateDesignerDialog(self, sample_image_path=schedule_image_path["value"])
+            designer = PostTemplateDesignerDialog(self)
             if designer.exec_() != QDialog.Accepted or not designer.saved_template:
                 return
             import uuid as _uuid
@@ -1868,6 +1914,14 @@ class ProductTab(QWidget):
         schedule_design_btn.clicked.connect(_design_new_template)
         schedule_template_row.addWidget(schedule_design_btn)
         schedule_layout.addLayout(schedule_template_row)
+
+        schedule_template_hint = QLabel(
+            "کارتِ متنی یک عکسِ جداگانه (نامِ محصول/قیمت/توضیح/لینک/تلفن/شبکه‌های اجتماعی، هرکدوم با رنگ و "
+            "فونتِ دلخواه) است که همراهِ عکسِ اصلیِ محصول ارسال می‌شه — روی خودِ عکسِ محصول هیچ تغییری اعمال نمی‌شه."
+        )
+        schedule_template_hint.setWordWrap(True)
+        schedule_template_hint.setStyleSheet("color:#64748b; font-size:10px;")
+        schedule_layout.addWidget(schedule_template_hint)
 
         schedule_layout.addWidget(QLabel("زمانِ ارسال (تاریخِ شمسی):"))
         from sync_app.core.jalali_date_utils import jalali_now, jalali_to_gregorian
@@ -1906,6 +1960,7 @@ class ProductTab(QWidget):
             from datetime import datetime
 
             from sync_app.core.content_calendar_store import add_scheduled_post
+            from sync_app.core.post_template_renderer import render_post_template
 
             try:
                 gy, gm, gd = jalali_to_gregorian(
@@ -1916,27 +1971,42 @@ class ProductTab(QWidget):
                 QMessageBox.critical(self, "خطا", f"تاریخِ واردشده معتبر نیست:\n{exc}")
                 return
 
-            final_image_path = schedule_image_path["value"]
-            template_id = schedule_template_combo.currentData()
-            if template_id and final_image_path:
-                from sync_app.core.post_template_renderer import render_post_template
+            cfg_now = load_secure_config(None) or {}
 
-                cfg_now = load_secure_config(None) or {}
+            # ۱) عکسِ خام (یا آلبومِ همه‌ی عکس‌های سایط) — کاملاً دست‌نخورده
+            if schedule_send_all_images_check.isChecked() and schedule_fetched["image_urls"]:
+                from sync_app.core.product_content_fetcher import download_images_to_temp
+
+                raw_photos = download_images_to_temp(schedule_fetched["image_urls"])
+                if not raw_photos and schedule_image_path["value"]:
+                    raw_photos = [schedule_image_path["value"]]
+            elif schedule_image_path["value"]:
+                raw_photos = [schedule_image_path["value"]]
+            else:
+                raw_photos = []
+
+            # ۲) کارتِ متنیِ قالب (اختیاری) — یک عکسِ جدا، جدا از عکسِ محصول
+            card_paths = []
+            template_id = schedule_template_combo.currentData()
+            if template_id:
                 tpl = find_template(list_templates(cfg_now), template_id)
                 if tpl:
                     import tempfile as _tempfile
 
+                    context = _build_template_context(product, schedule_fetched, cfg_now, short_link)
                     out_path = os.path.join(
-                        _tempfile.gettempdir(), f"peecha_post_{sku}_{int(scheduled_dt.timestamp())}.jpg"
+                        _tempfile.gettempdir(), f"peecha_post_card_{sku}_{int(scheduled_dt.timestamp())}.jpg"
                     )
-                    render_result = render_post_template(final_image_path, product, out_path, tpl)
+                    render_result = render_post_template(out_path, context, tpl)
                     if render_result.ok:
-                        final_image_path = render_result.dst_path
+                        card_paths = [render_result.dst_path]
                     else:
                         QMessageBox.warning(
                             self, "قالبِ پست",
-                            f"رندرِ قالب ناموفق بود؛ عکسِ خامِ محصول ارسال می‌شود:\n{render_result.error}",
+                            f"رندرِ کارتِ متنی ناموفق بود؛ فقط عکسِ محصول ارسال می‌شود:\n{render_result.error}",
                         )
+
+            final_image_paths = (card_paths + raw_photos)[:10]
 
             add_scheduled_post(
                 sku=sku,
@@ -1944,7 +2014,7 @@ class ProductTab(QWidget):
                 platform=schedule_platform_combo.currentData() or "telegram",
                 text=schedule_text_edit.toPlainText(),
                 scheduled_at=scheduled_dt.isoformat(timespec="seconds"),
-                image_path=final_image_path,
+                image_paths=final_image_paths,
             )
             schedule_status_label.setText(
                 f"✅ به تقویمِ محتوا اضافه شد — {schedule_year_spin.value()}/{schedule_month_spin.value():02d}/"
@@ -2036,19 +2106,25 @@ class ProductTab(QWidget):
         v.addLayout(platform_row)
 
         template_row = QHBoxLayout()
-        template_row.addWidget(QLabel("قالبِ پست (اختیاری):"))
+        template_row.addWidget(QLabel("کارتِ متنیِ قالب (اختیاری):"))
         template_combo = QComboBox()
-        template_combo.addItem("بدون قالب (فقط متن)", "")
+        template_combo.addItem("بدونِ کارتِ متنی (فقط عکسِ اصلیِ محصول)", "")
         cfg_now = load_secure_config(None) or {}
         for tpl in list_templates(cfg_now):
             template_combo.addItem(tpl.get("title") or "بدون‌عنوان", tpl.get("id"))
         template_row.addWidget(template_combo, 1)
         v.addLayout(template_row)
 
-        template_hint = QLabel("برای استفاده از قالب، هر محصول باید عکسی روی سایت داشته باشد.")
+        template_hint = QLabel(
+            "کارتِ متنی یک عکسِ جداگانه (نام/قیمت/توضیح/لینک/تماس/شبکه‌های اجتماعی) است که همراهِ عکسِ "
+            "اصلیِ هر محصول ارسال می‌شه — روی خودِ عکسِ محصول تغییری اعمال نمی‌شه."
+        )
         template_hint.setStyleSheet("color:#64748b; font-size:10px;")
         template_hint.setWordWrap(True)
         v.addWidget(template_hint)
+
+        send_all_images_check = QCheckBox("همه‌ی عکس‌های هر محصول از سایت هم ارسال شود (آلبوم)")
+        v.addWidget(send_all_images_check)
 
         v.addWidget(QLabel("زمانِ ارسالِ همه (تاریخِ شمسی) — یکسان برای همه‌ی پست‌ها:"))
         jy_now, jm_now, jd_now = jalali_now()
@@ -2103,13 +2179,15 @@ class ProductTab(QWidget):
             close_btn.setEnabled(False)
             status_label.setText("🔄 در حالِ آماده‌سازیِ پست‌ها (دریافتِ لینک/عکسِ هر محصول از سایت)...")
 
+            send_all_images = send_all_images_check.isChecked()
+
             def _worker():
                 import tempfile as _tempfile
 
                 from sync_app.core.content_calendar_store import add_scheduled_post
                 from sync_app.core.post_template_renderer import render_post_template
                 from sync_app.core.product_content_fetcher import (
-                    download_image_to_temp, fetch_product_content,
+                    download_image_to_temp, download_images_to_temp, fetch_product_content,
                 )
 
                 product_map = load_product_woo_map()
@@ -2121,7 +2199,8 @@ class ProductTab(QWidget):
                     sku = p["sku"]
                     product_data = {"name": p["name"], "price": p["price"], "description": ""}
                     text = generate_telegram_text(product_data)
-                    image_path = ""
+                    fetched = {"permalink": "", "description": "", "image_urls": []}
+                    raw_photos = []
                     wc_id = product_map.get(sku)
                     if wc_id:
                         try:
@@ -2129,18 +2208,26 @@ class ProductTab(QWidget):
                             permalink = fetched.get("permalink") or ""
                             if permalink:
                                 text = f"{text}\n\n🔗 {permalink}"
-                            if fetched.get("image_url"):
-                                image_path = download_image_to_temp(fetched["image_url"])
+                            if send_all_images and fetched.get("image_urls"):
+                                raw_photos = download_images_to_temp(fetched["image_urls"])
+                            elif fetched.get("image_url"):
+                                single = download_image_to_temp(fetched["image_url"])
+                                raw_photos = [single] if single else []
                         except Exception:
                             pass
-                    if tpl and image_path:
+
+                    card_paths = []
+                    if tpl:
+                        context = _build_template_context(product_data, fetched, cfg)
                         out_path = os.path.join(
                             _tempfile.gettempdir(),
-                            f"peecha_post_{sku}_{int(scheduled_dt.timestamp())}.jpg",
+                            f"peecha_post_card_{sku}_{int(scheduled_dt.timestamp())}.jpg",
                         )
-                        render_result = render_post_template(image_path, product_data, out_path, tpl)
+                        render_result = render_post_template(out_path, context, tpl)
                         if render_result.ok:
-                            image_path = render_result.dst_path
+                            card_paths = [render_result.dst_path]
+
+                    image_paths = (card_paths + raw_photos)[:10]
                     try:
                         add_scheduled_post(
                             sku=sku,
@@ -2148,7 +2235,7 @@ class ProductTab(QWidget):
                             platform=platform,
                             text=text,
                             scheduled_at=scheduled_dt.isoformat(timespec="seconds"),
-                            image_path=image_path,
+                            image_paths=image_paths,
                         )
                         done += 1
                     except Exception as exc:

@@ -48,15 +48,20 @@ def add_scheduled_post(
     text: str,
     scheduled_at: str,
     image_path: str = "",
+    image_paths: list[str] | None = None,
 ) -> dict:
-    """scheduled_at: ISO 8601 میلادی (مثلاً از datetime.isoformat())."""
+    """scheduled_at: ISO 8601 میلادی (مثلاً از datetime.isoformat()).
+    image_paths (چند عکس/آلبوم) روی image_path (تکی، برای سازگاری با رکوردهای
+    قدیمی) اولویت داره؛ image_path هم برای نمایش/سازگاریِ عقب‌رو نگه داشته می‌شه."""
+    paths = [p for p in (image_paths or []) if p]
     post = {
         "id": _new_post_id(),
         "sku": sku,
         "product_name": product_name,
         "platform": platform,
         "text": text,
-        "image_path": image_path or "",
+        "image_path": image_path or (paths[0] if paths else ""),
+        "image_paths": paths,
         "scheduled_at": scheduled_at,
         "status": STATUS_PENDING,
         "created_at": datetime.now().isoformat(timespec="seconds"),
@@ -67,6 +72,15 @@ def add_scheduled_post(
     posts.append(post)
     save_scheduled_posts(posts)
     return post
+
+
+def post_image_paths(post: dict) -> list[str]:
+    """همه‌ی مسیرهای عکسِ یک پست — برای رکوردهای قدیمی (فقط image_path) هم کار می‌کنه."""
+    paths = [p for p in (post.get("image_paths") or []) if p]
+    if paths:
+        return paths
+    single = str(post.get("image_path") or "").strip()
+    return [single] if single else []
 
 
 def update_post_status(post_id: str, status: str, *, error: str | None = None) -> None:

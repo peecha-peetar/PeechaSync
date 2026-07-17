@@ -1,51 +1,86 @@
-"""رندرِ پستِ تصویری بر اساسِ یک «قالب» قابل‌تنظیم (رنگ، چیدمان، سایزِ
-متن) — برخلافِ create_promo_image در content_studio_helper.py (که چند
-کیندِ ثابت داره)، اینجا همه‌چیز از روی دیکشنریِ template پارامتری می‌شه،
-تا کاربر بتونه از «طراحِ قالب» (post_template_designer.py) قالبِ دلخواهِ
-خودش رو بسازه و روی محصولاتِ مختلف دوباره استفاده کنه."""
+"""رندرِ «کارتِ متنیِ پست» — یک تصویرِ کاملاً متنی (بدونِ عکسِ محصول داخلِ
+خودش) که به‌همراهِ عکسِ اصلیِ سایت (کاملاً دست‌نخورده) در یک آلبوم ارسال
+می‌شه؛ چون تلگرام/بله رنگ و اندازه‌فونتِ دلخواه رو توی کپشن پشتیبانی
+نمی‌کنن، تنها راهِ داشتنِ فیلدهای رنگی/فونت‌دار همینه.
+
+هر فیلد (نامِ محصول/قیمت/توضیح/لینک/آدرسِ سایت/تلفن/شبکه‌های اجتماعی/
+متنِ دلخواه) اندازه‌فونت، رنگ، ضخامت، چیدمان و فاصله‌ی قبل از خودش رو
+جداگانه داره؛ ارتفاعِ کارت بر اساسِ محتوای واقعی خودکار محاسبه می‌شه."""
 
 from __future__ import annotations
 
 import os
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 from sync_app.core.content_studio_helper import _fmt_price, _get_font, shape_persian_text
-from sync_app.core.media_center import ConvertResult, _fit_to_size_with_padding
+from sync_app.core.media_center import ConvertResult
+from sync_app.core.sync_utils import resource_path
 
-CANVAS_SIZES = {
-    "square": (1080, 1080),
-    "story": (1080, 1920),
+CARD_WIDTH = 1080
+
+_BOLD_FONT_PATH = resource_path("Vazirmatn-Bold.ttf")
+
+
+def _get_bold_font(size: int):
+    try:
+        return ImageFont.truetype(_BOLD_FONT_PATH, size)
+    except Exception:
+        return _get_font(size)
+
+
+FIELD_TYPE_LABELS = {
+    "product_name": "نامِ محصول",
+    "price": "قیمت",
+    "description": "توضیح",
+    "link": "لینکِ محصول",
+    "site_address": "آدرسِ سایت",
+    "phone": "شماره تماس",
+    "social_instagram": "اینستاگرام",
+    "social_telegram": "تلگرام",
+    "social_whatsapp": "واتساپ",
+    "custom_text": "متنِ دلخواه",
 }
 
-CANVAS_LABELS = {
-    "square": "مربعی (پست — ۱۰۸۰×۱۰۸۰)",
-    "story": "استوری (۱۰۸۰×۱۹۲۰)",
-}
+TEXT_ALIGN_LABELS = {"right": "راست", "center": "وسط", "left": "چپ"}
 
-TEXT_ALIGN_LABELS = {
-    "right": "راست",
-    "center": "وسط",
-    "left": "چپ",
+DEFAULT_FIELD = {
+    "type": "custom_text",
+    "text": "",
+    "font_size_pct": 0.045,
+    "color": [30, 30, 30],
+    "bold": False,
+    "align": "right",
+    "spacing_before_pct": 0.025,
 }
 
 DEFAULT_TEMPLATE = {
     "id": "",
     "title": "پیش‌فرض",
-    "canvas": "square",
-    "band_color": [0, 0, 0],
-    "band_opacity": 160,
-    "band_height_pct": 0.22,
-    "name_color": [255, 255, 255],
-    "name_size_pct": 0.045,
-    "price_color": [255, 210, 60],
-    "price_size_pct": 0.055,
-    "text_align": "right",
-    "margin_pct": 0.05,
-    "show_badge": False,
-    "badge_text": "پیشنهاد ویژه",
-    "badge_color": [220, 38, 38],
+    "bg_color": [255, 255, 255],
+    "margin_pct": 0.06,
+    "fields": [
+        {"type": "product_name", "text": "", "font_size_pct": 0.065, "color": [17, 24, 39],
+         "bold": True, "align": "right", "spacing_before_pct": 0.0},
+        {"type": "price", "text": "", "font_size_pct": 0.05, "color": [180, 83, 9],
+         "bold": True, "align": "right", "spacing_before_pct": 0.03},
+        {"type": "description", "text": "", "font_size_pct": 0.035, "color": [71, 85, 105],
+         "bold": False, "align": "right", "spacing_before_pct": 0.035},
+        {"type": "link", "text": "", "font_size_pct": 0.032, "color": [37, 99, 235],
+         "bold": False, "align": "right", "spacing_before_pct": 0.04},
+    ],
 }
+
+
+def normalize_field(raw: dict | None) -> dict:
+    """ادغامِ یک فیلدِ ناقص/قدیمی با مقادیرِ پیش‌فرض."""
+    merged = dict(DEFAULT_FIELD)
+    merged.update({k: v for k, v in (raw or {}).items() if v is not None})
+    if merged.get("type") not in FIELD_TYPE_LABELS:
+        merged["type"] = "custom_text"
+    if merged.get("align") not in TEXT_ALIGN_LABELS:
+        merged["align"] = "right"
+    return merged
 
 
 def normalize_template(raw: dict | None) -> dict:
@@ -53,98 +88,132 @@ def normalize_template(raw: dict | None) -> dict:
     در آینده، قالب‌های ذخیره‌شده‌ی قدیمی رو خراب نکنه."""
     merged = dict(DEFAULT_TEMPLATE)
     merged.update({k: v for k, v in (raw or {}).items() if v is not None})
-    if merged.get("canvas") not in CANVAS_SIZES:
-        merged["canvas"] = "square"
-    if merged.get("text_align") not in TEXT_ALIGN_LABELS:
-        merged["text_align"] = "right"
+    fields = merged.get("fields")
+    if not isinstance(fields, list) or not fields:
+        fields = DEFAULT_TEMPLATE["fields"]
+    normalized_fields = [normalize_field(f) for f in fields if isinstance(f, dict)]
+    merged["fields"] = normalized_fields or [normalize_field(f) for f in DEFAULT_TEMPLATE["fields"]]
     return merged
 
 
-def _align_anchor(align: str) -> tuple[str, str]:
-    """(anchor, x-position-kind) برای PIL draw.text — 'l'/'m'/'r' + a برای align عمودی‌ثابت."""
+def _align_anchor(align: str) -> str:
     if align == "center":
-        return "ma", "center"
+        return "ma"
     if align == "left":
-        return "la", "left"
-    return "ra", "right"
+        return "la"
+    return "ra"
 
 
-def render_post_template(
-    product_image_path: str,
-    product: dict,
-    dst_path: str,
-    template: dict,
-) -> ConvertResult:
+def _field_value(field: dict, context: dict) -> str:
+    ftype = field.get("type")
+    if ftype == "custom_text":
+        return str(field.get("text") or "").strip()
+    if ftype == "product_name":
+        return str(context.get("name") or "").strip()
+    if ftype == "price":
+        price = context.get("price")
+        if price in (None, "", 0):
+            return ""
+        return f"{_fmt_price(price)} تومان"
+    if ftype == "description":
+        return str(context.get("description") or "").strip()
+    if ftype == "link":
+        return str(context.get("permalink") or context.get("link") or "").strip()
+    if ftype == "site_address":
+        return str(context.get("site_address") or "").strip()
+    if ftype == "phone":
+        return str(context.get("phone") or "").strip()
+    if ftype == "social_instagram":
+        v = str(context.get("social_instagram") or "").strip()
+        return f"اینستاگرام: {v}" if v else ""
+    if ftype == "social_telegram":
+        v = str(context.get("social_telegram") or "").strip()
+        return f"تلگرام: {v}" if v else ""
+    if ftype == "social_whatsapp":
+        v = str(context.get("social_whatsapp") or "").strip()
+        return f"واتساپ: {v}" if v else ""
+    return ""
+
+
+def _wrap_text_lines(text: str, font, max_width: float) -> list[str]:
+    """می‌شکنه به چند خط بر اساسِ عرضِ واقعیِ متنِ شکل‌گرفته‌ی فارسی."""
+    words = text.split()
+    if not words:
+        return []
+    raw_lines = []
+    current: list[str] = []
+    for word in words:
+        trial = current + [word]
+        shaped_trial = shape_persian_text(" ".join(trial))
+        width = font.getlength(shaped_trial) if hasattr(font, "getlength") else font.getsize(shaped_trial)[0]
+        if width <= max_width or not current:
+            current = trial
+        else:
+            raw_lines.append(" ".join(current))
+            current = [word]
+    if current:
+        raw_lines.append(" ".join(current))
+    return [shape_persian_text(line) for line in raw_lines]
+
+
+def render_post_template(dst_path: str, context: dict, template: dict) -> ConvertResult:
+    """رندرِ کارتِ متنی — بدونِ عکسِ محصول؛ فقط زمینه + فیلدهای متنیِ قالب.
+    context شاملِ name/price/description/permalink/site_address/phone/
+    social_instagram/social_telegram/social_whatsapp می‌شه."""
     tpl = normalize_template(template)
-    result = ConvertResult(src_path=product_image_path)
-    target_w, target_h = CANVAS_SIZES.get(tpl["canvas"], CANVAS_SIZES["square"])
-
-    if not os.path.isfile(product_image_path):
-        result.error = "تصویر محصول یافت نشد."
-        return result
+    result = ConvertResult(src_path="")
+    margin = int(CARD_WIDTH * float(tpl.get("margin_pct", 0.06)))
+    max_text_width = CARD_WIDTH - 2 * margin
 
     try:
-        result.size_before = os.path.getsize(product_image_path)
-        with Image.open(product_image_path) as img:
-            if img.mode in ("P", "LA"):
-                img = img.convert("RGBA")
-            elif img.mode not in ("RGB", "RGBA"):
-                img = img.convert("RGB")
-            base = _fit_to_size_with_padding(img, target_w, target_h, bg_color=(250, 250, 250))
+        prepared = []
+        for field in tpl["fields"]:
+            value = _field_value(field, context)
+            if not value:
+                continue
+            font_size = max(10, int(CARD_WIDTH * float(field.get("font_size_pct", 0.04))))
+            font = _get_bold_font(font_size) if field.get("bold") else _get_font(font_size)
+            lines = _wrap_text_lines(value, font, max_text_width)
+            if not lines:
+                continue
+            align = field.get("align", "right")
+            if align == "right":
+                x = CARD_WIDTH - margin
+            elif align == "left":
+                x = margin
+            else:
+                x = CARD_WIDTH // 2
+            prepared.append({
+                "lines": lines,
+                "font": font,
+                "color": tuple(int(c) for c in (field.get("color") or [30, 30, 30])),
+                "x": x,
+                "anchor": _align_anchor(align),
+                "line_height": int(font_size * 1.45),
+                "spacing_before": int(CARD_WIDTH * float(field.get("spacing_before_pct", 0.02))),
+            })
 
-        canvas = base.convert("RGBA")
-        draw = ImageDraw.Draw(canvas, "RGBA")
+        if not prepared:
+            result.error = "هیچ فیلدی برای نمایش نداره (همه‌ی فیلدها خالی‌ان)."
+            return result
 
-        band_h = int(target_h * float(tpl["band_height_pct"]))
-        band_rgb = tuple(int(c) for c in tpl["band_color"])
-        band_alpha = max(0, min(255, int(tpl["band_opacity"])))
-        draw.rectangle(
-            [0, target_h - band_h, target_w, target_h],
-            fill=(*band_rgb, band_alpha),
-        )
+        total_h = margin
+        for item in prepared:
+            total_h += item["spacing_before"] + item["line_height"] * len(item["lines"])
+        total_h += margin
 
-        margin = int(target_w * float(tpl["margin_pct"]))
-        anchor, align_kind = _align_anchor(tpl["text_align"])
-        if align_kind == "right":
-            x = target_w - margin
-        elif align_kind == "left":
-            x = margin
-        else:
-            x = target_w // 2
+        bg = tuple(int(c) for c in (tpl.get("bg_color") or [255, 255, 255]))
+        canvas = Image.new("RGB", (CARD_WIDTH, total_h), color=bg)
+        draw = ImageDraw.Draw(canvas)
 
-        name = str(product.get("name") or "").strip()
-        price = _fmt_price(product.get("price"))
-
-        name_font = _get_font(int(target_w * float(tpl["name_size_pct"])))
-        draw.text(
-            (x, target_h - band_h + int(band_h * 0.15)),
-            shape_persian_text(name), font=name_font,
-            fill=tuple(int(c) for c in tpl["name_color"]), anchor=anchor,
-        )
-
-        price_font = _get_font(int(target_w * float(tpl["price_size_pct"])))
-        draw.text(
-            (x, target_h - band_h + int(band_h * 0.5)),
-            shape_persian_text(f"{price} تومان"), font=price_font,
-            fill=tuple(int(c) for c in tpl["price_color"]), anchor=anchor,
-        )
-
-        if tpl.get("show_badge"):
-            badge_text = shape_persian_text(str(tpl.get("badge_text") or "").strip())
-            badge_font = _get_font(int(target_w * 0.045))
-            badge_r = int(target_w * 0.11)
-            badge_color = tuple(int(c) for c in tpl["badge_color"])
-            draw.ellipse(
-                [margin, margin, margin + badge_r * 2, margin + badge_r * 2],
-                fill=(*badge_color, 230),
-            )
-            draw.text(
-                (margin + badge_r, margin + badge_r),
-                badge_text, font=badge_font, fill=(255, 255, 255), anchor="mm",
-            )
+        y = margin
+        for item in prepared:
+            y += item["spacing_before"]
+            for line in item["lines"]:
+                draw.text((item["x"], y), line, font=item["font"], fill=item["color"], anchor=item["anchor"])
+                y += item["line_height"]
 
         os.makedirs(os.path.dirname(dst_path) or ".", exist_ok=True)
-        canvas = canvas.convert("RGB")
         canvas.save(dst_path, quality=92)
         result.dst_path = dst_path
         result.size_after = os.path.getsize(dst_path)

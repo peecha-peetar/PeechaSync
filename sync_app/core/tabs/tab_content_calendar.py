@@ -148,6 +148,7 @@ class ContentCalendarTab(QWidget):
         self.refresh()
 
     def _send_now(self, post_id: str, post: dict):
+        from sync_app.core.content_calendar_store import post_image_paths
         from sync_app.core.secure_config_loader import load_secure_config
         from sync_app.core.social_poster import is_platform_configured, send_post_for_platform
 
@@ -164,7 +165,7 @@ class ContentCalendarTab(QWidget):
 
         def _worker():
             return send_post_for_platform(
-                platform, cfg, post.get("text") or "", photo_path=post.get("image_path") or ""
+                platform, cfg, post.get("text") or "", photo_paths=post_image_paths(post)
             )
 
         def on_complete(result):

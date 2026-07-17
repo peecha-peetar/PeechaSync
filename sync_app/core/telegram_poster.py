@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 
 import requests
@@ -126,10 +127,65 @@ def send_photo_message(
     return True, "ارسال شد."
 
 
-def send_post(
-    bot_token: str, chat_id: str, text: str, *, photo_path: str = "", proxy_url: str = "", timeout: int = 60
+def send_media_group(
+    bot_token: str, chat_id: str, photo_paths: list[str], *, caption: str = "", proxy_url: str = "", timeout: int = 90
 ) -> tuple[bool, str]:
-    """ارسالِ یک پستِ زمان‌بندی‌شده — اگه عکس داشته باشه به‌عنوانِ caption، وگرنه پیامِ متنیِ ساده."""
-    if (photo_path or "").strip():
-        return send_photo_message(bot_token, chat_id, photo_path, caption=text, proxy_url=proxy_url, timeout=timeout)
+    """ارسالِ چند عکس به‌صورتِ آلبوم (حداکثر ۱۰ تا) — کپشن فقط روی موردِ اول قرار می‌گیره."""
+    token = (bot_token or "").strip()
+    chat = (chat_id or "").strip()
+    if not token or not chat:
+        return False, "توکنِ بات یا شناسه‌ی چت خالی است."
+    valid_paths = [p for p in (photo_paths or []) if p and os.path.isfile(p)][:10]
+    if not valid_paths:
+        return False, "هیچ عکسِ معتبری برای ارسال وجود نداره."
+    if len(valid_paths) == 1:
+        return send_photo_message(token, chat, valid_paths[0], caption=caption, proxy_url=proxy_url, timeout=timeout)
+
+    media = []
+    files = {}
+    opened = []
+    try:
+        for idx, path in enumerate(valid_paths):
+            key = f"photo{idx}"
+            item = {"type": "photo", "media": f"attach://{key}"}
+            if idx == 0 and caption:
+                item["caption"] = caption
+                item["parse_mode"] = "HTML"
+            media.append(item)
+            fh = open(path, "rb")
+            opened.append(fh)
+            files[key] = fh
+        resp = requests.post(
+            _API_BASE.format(token=token) + "/sendMediaGroup",
+            data={"chat_id": chat, "media": json.dumps(media)},
+            files=files,
+            timeout=timeout,
+            proxies=_proxies_dict(proxy_url),
+        )
+    except requests.RequestException as exc:
+        return False, _connection_error_hint(exc)
+    except OSError as exc:
+        return False, f"خطای خواندنِ فایلِ تصویر: {exc}"
+    finally:
+        for fh in opened:
+            fh.close()
+    if resp.status_code != 200:
+        return False, _parse_error(resp)
+    data = resp.json() or {}
+    if not data.get("ok"):
+        return False, _parse_error(resp)
+    return True, "ارسال شد."
+
+
+def send_post(
+    bot_token: str, chat_id: str, text: str, *,
+    photo_path: str = "", photo_paths: list[str] | None = None,
+    proxy_url: str = "", timeout: int = 60,
+) -> tuple[bool, str]:
+    """ارسالِ یک پستِ زمان‌بندی‌شده — اگه چند عکس باشه به‌صورتِ آلبوم، اگه یکی باشه با caption، وگرنه پیامِ متنیِ ساده."""
+    paths = [p for p in (photo_paths or []) if p] or ([photo_path] if (photo_path or "").strip() else [])
+    if len(paths) > 1:
+        return send_media_group(bot_token, chat_id, paths, caption=text, proxy_url=proxy_url, timeout=max(timeout, 90))
+    if paths:
+        return send_photo_message(bot_token, chat_id, paths[0], caption=text, proxy_url=proxy_url, timeout=timeout)
     return send_text_message(bot_token, chat_id, text, proxy_url=proxy_url, timeout=timeout)

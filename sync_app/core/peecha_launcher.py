@@ -2707,7 +2707,9 @@ class PeechaLauncher(QWidget):
     def _send_due_content_calendar_posts(self):
         """چکِ پس‌زمینه‌ی پست‌های زمان‌بندی‌شده‌ی سررسیده (همه‌ی پلتفرم‌ها) —
         هر ارسالِ واقعی در Threadِ جدا انجام می‌شه تا UI هیچ‌وقت قفل نشه."""
-        from sync_app.core.content_calendar_store import due_posts, update_post_status, STATUS_SENT, STATUS_FAILED
+        from sync_app.core.content_calendar_store import (
+            due_posts, post_image_paths, update_post_status, STATUS_SENT, STATUS_FAILED,
+        )
 
         try:
             posts = due_posts()
@@ -2743,7 +2745,7 @@ class PeechaLauncher(QWidget):
             for post in posts_to_send:
                 platform = str(post.get("platform") or "telegram")
                 ok, msg = send_post_for_platform(
-                    platform, cfg, post.get("text") or "", photo_path=post.get("image_path") or ""
+                    platform, cfg, post.get("text") or "", photo_paths=post_image_paths(post)
                 )
                 results.append((post.get("id"), ok, msg))
             return results

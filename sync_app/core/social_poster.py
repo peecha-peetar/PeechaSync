@@ -24,8 +24,9 @@ def is_platform_configured(platform: str, config: dict) -> bool:
 
 
 def send_post_for_platform(
-    platform: str, config: dict, text: str, *, photo_path: str = ""
+    platform: str, config: dict, text: str, *, photo_path: str = "", photo_paths: list[str] | None = None
 ) -> tuple[bool, str]:
+    """photo_paths (چند عکس => آلبوم) بر photo_path (تکی، برای سازگاری با کدِ قدیمی) اولویت داره."""
     if platform == "telegram":
         from sync_app.core.telegram_poster import (
             TELEGRAM_BOT_TOKEN_KEY,
@@ -39,7 +40,9 @@ def send_post_for_platform(
         proxy_url = str(config.get(TELEGRAM_PROXY_URL_KEY) or "").strip()
         if not token or not chat_id:
             return False, "توکنِ بات یا شناسه‌ی چتِ تلگرام در تنظیمات وارد نشده."
-        return send_post(token, chat_id, text, photo_path=photo_path, proxy_url=proxy_url)
+        return send_post(
+            token, chat_id, text, photo_path=photo_path, photo_paths=photo_paths, proxy_url=proxy_url
+        )
 
     if platform == "bale":
         from sync_app.core.bale_poster import BALE_BOT_TOKEN_KEY, BALE_CHAT_ID_KEY, send_post
@@ -48,6 +51,6 @@ def send_post_for_platform(
         chat_id = str(config.get(BALE_CHAT_ID_KEY) or "").strip()
         if not token or not chat_id:
             return False, "توکنِ بات یا شناسه‌ی چتِ بله در تنظیمات وارد نشده."
-        return send_post(token, chat_id, text, photo_path=photo_path)
+        return send_post(token, chat_id, text, photo_path=photo_path, photo_paths=photo_paths)
 
     return False, f"پلتفرمِ ناشناخته: {platform}"

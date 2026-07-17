@@ -1685,6 +1685,50 @@ class SettingsTab(QWidget):
         bale_layout.addRow(QLabel(""), self.bale_test_button)
         self.bale_group.setLayout(bale_layout)
 
+        # --- اطلاعاتِ تماس/برندینگ — برای فیلدهای «تلفن»/«آدرسِ سایت»/
+        # شبکه‌های اجتماعی در قالبِ پست (تا یک‌بار وارد بشه و همه‌جا استفاده بشه) ---
+        self.brand_group = QGroupBox("اطلاعاتِ تماس و برندینگ (برای قالبِ پست)")
+        self.brand_group.setLayoutDirection(Qt.LeftToRight)
+        brand_layout = QFormLayout()
+        brand_layout.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        brand_layout.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        brand_layout.setFormAlignment(Qt.AlignTop)
+        brand_layout.setHorizontalSpacing(14)
+        brand_layout.setVerticalSpacing(10)
+
+        self.contact_phone_input = QLineEdit(str(self.config.get("CONTACT_PHONE") or ""))
+        self.contact_phone_input.setPlaceholderText("021-12345678")
+        self.site_address_display_input = QLineEdit(str(self.config.get("SITE_ADDRESS_DISPLAY") or ""))
+        self.site_address_display_input.setPlaceholderText("خالی = خودکار از آدرسِ فروشگاه")
+        self.social_instagram_input = QLineEdit(str(self.config.get("SOCIAL_INSTAGRAM") or ""))
+        self.social_instagram_input.setPlaceholderText("@yourshop")
+        self.social_telegram_input = QLineEdit(str(self.config.get("SOCIAL_TELEGRAM") or ""))
+        self.social_telegram_input.setPlaceholderText("@yourshop_channel")
+        self.social_whatsapp_input = QLineEdit(str(self.config.get("SOCIAL_WHATSAPP") or ""))
+        self.social_whatsapp_input.setPlaceholderText("0912-000-0000")
+        for field in (
+            self.contact_phone_input, self.site_address_display_input,
+            self.social_instagram_input, self.social_telegram_input, self.social_whatsapp_input,
+        ):
+            field.setLayoutDirection(Qt.LeftToRight)
+            field.setAlignment(Qt.AlignLeft)
+            field.setMinimumHeight(38)
+
+        brand_help = QLabel(
+            "این اطلاعات فقط برای فیلدهای «تلفن»/«آدرسِ سایت»/شبکه‌های اجتماعی در «طراحِ قالبِ پست» استفاده می‌شه — "
+            "یک‌بار اینجا وارد کنید تا در همه‌ی قالب‌ها قابلِ استفاده باشه."
+        )
+        brand_help.setStyleSheet("color:#64748b; font-size:10px;")
+        brand_help.setWordWrap(True)
+
+        brand_layout.addRow(english_caption("تلفنِ تماس:"), self.contact_phone_input)
+        brand_layout.addRow(english_caption("آدرسِ سایت:"), self.site_address_display_input)
+        brand_layout.addRow(english_caption("اینستاگرام:"), self.social_instagram_input)
+        brand_layout.addRow(english_caption("تلگرام:"), self.social_telegram_input)
+        brand_layout.addRow(english_caption("واتساپ:"), self.social_whatsapp_input)
+        brand_layout.addRow(QLabel(""), brand_help)
+        self.brand_group.setLayout(brand_layout)
+
         self.monitor_group = QGroupBox("مانیتورینگ عملیات اتصال")
         monitor_layout = QVBoxLayout()
         monitor_layout.setContentsMargins(10, 10, 10, 10)
@@ -1934,6 +1978,8 @@ class SettingsTab(QWidget):
             self.ps_url_input, self.ps_api_key_input, self.ps_site_combo, self.ps_site_name_input,
             self.telegram_bot_token_input, self.telegram_chat_id_input, self.telegram_proxy_url_input,
             self.bale_bot_token_input, self.bale_chat_id_input,
+            self.contact_phone_input, self.site_address_display_input,
+            self.social_instagram_input, self.social_telegram_input, self.social_whatsapp_input,
         ] + list(self._field_sync_checkboxes.values()) + list(self._force_full_sync_checkboxes.values())
 
         _text_inputs = [
@@ -1946,6 +1992,8 @@ class SettingsTab(QWidget):
             self.ps_url_input, self.ps_api_key_input, self.ps_site_name_input,
             self.telegram_bot_token_input, self.telegram_chat_id_input, self.telegram_proxy_url_input,
             self.bale_bot_token_input, self.bale_chat_id_input,
+            self.contact_phone_input, self.site_address_display_input,
+            self.social_instagram_input, self.social_telegram_input, self.social_whatsapp_input,
         ]
         for w in _text_inputs:
             w.textChanged.connect(self._on_settings_field_changed)
@@ -2001,11 +2049,12 @@ class SettingsTab(QWidget):
             grid.addWidget(self.wc_group, 2, 0)
             grid.addWidget(self.telegram_group, 3, 0)
             grid.addWidget(self.bale_group, 4, 0)
-            grid.addWidget(self.customer_group, 5, 0)
-            grid.addWidget(self.fields_group, 6, 0)
-            grid.addWidget(self.license_group, 7, 0)
-            grid.addWidget(self.monitor_group, 8, 0)
-            grid.addWidget(self.backup_group, 9, 0)
+            grid.addWidget(self.brand_group, 5, 0)
+            grid.addWidget(self.customer_group, 6, 0)
+            grid.addWidget(self.fields_group, 7, 0)
+            grid.addWidget(self.license_group, 8, 0)
+            grid.addWidget(self.monitor_group, 9, 0)
+            grid.addWidget(self.backup_group, 10, 0)
         else:
             grid.addWidget(self.sql_group, 0, 0)
             grid.addWidget(self.app_group, 0, 1)
@@ -2013,10 +2062,11 @@ class SettingsTab(QWidget):
             grid.addWidget(self.monitor_group, 1, 1)
             grid.addWidget(self.telegram_group, 2, 0)
             grid.addWidget(self.bale_group, 2, 1)
-            grid.addWidget(self.customer_group, 3, 0)
-            grid.addWidget(self.license_group, 3, 1)
-            grid.addWidget(self.fields_group, 4, 0, 1, 2)
-            grid.addWidget(self.backup_group, 5, 0, 1, 2)
+            grid.addWidget(self.brand_group, 3, 0, 1, 2)
+            grid.addWidget(self.customer_group, 4, 0)
+            grid.addWidget(self.license_group, 4, 1)
+            grid.addWidget(self.fields_group, 5, 0, 1, 2)
+            grid.addWidget(self.backup_group, 6, 0, 1, 2)
             grid.setColumnStretch(0, 1)
             grid.setColumnStretch(1, 1)
 
@@ -4855,6 +4905,11 @@ class SettingsTab(QWidget):
                 "TELEGRAM_PROXY_URL": self.telegram_proxy_url_input.text().strip(),
                 "BALE_BOT_TOKEN": self.bale_bot_token_input.text().strip(),
                 "BALE_CHAT_ID": self.bale_chat_id_input.text().strip(),
+                "CONTACT_PHONE": self.contact_phone_input.text().strip(),
+                "SITE_ADDRESS_DISPLAY": self.site_address_display_input.text().strip(),
+                "SOCIAL_INSTAGRAM": self.social_instagram_input.text().strip(),
+                "SOCIAL_TELEGRAM": self.social_telegram_input.text().strip(),
+                "SOCIAL_WHATSAPP": self.social_whatsapp_input.text().strip(),
             })
             for _cfg_key, _cb in self._field_sync_checkboxes.items():
                 config_to_save[_cfg_key] = _cb.isChecked()
