@@ -1,6 +1,4 @@
 import base64
-import hashlib
-import hmac
 import json
 import os
 import shutil
@@ -59,13 +57,13 @@ def license_file_path() -> str:
 
 LICENSE_BYPASS = False
 
-_SIG_KEY = (
-    "Peecha::"
-    "License::"
-    "V2::"
-    "HMAC::"
-    "2026"
-).encode("utf-8")
+# کلیدِ عمومیِ Ed25519 — امن است که همین‌جا و در سورسِ عمومی باشد؛ فقط
+# برای تأییدِ امضا کاربرد داره، نه ساختِ امضای جدید (کلیدِ خصوصیِ متناظر
+# فقط سمتِ سرور/وردپرس نگه داشته می‌شه). این جایگزینِ کلیدِ مشترکِ HMAC
+# قدیمی (V2) شد، چون اون کلید چون داخلِ سورسِ عمومی هاردکد بود لو رفت —
+# با این طرح، حتی اگه کل سورس همیشه Public بمونه، کسی نمی‌تونه لایسنسِ
+# جعلی بسازه.
+_ED25519_PUBLIC_KEY_B64 = "nQcflkw7e6P1oaV2CJLT0L20nVJtNt181hs6ZhdtEAg="
 
 
 class LicenseTab(QWidget):
@@ -250,19 +248,34 @@ class LicenseTab(QWidget):
         return base64.urlsafe_b64decode(padded.encode("utf-8")).decode("utf-8")
 
     @staticmethod
-    def _validate_v2_signed_key(key, hwid):
+    def _validate_v3_signed_key(key, hwid):
+        """امضای نامتقارنِ Ed25519 — کلیدِ خصوصیِ متناظر فقط سمتِ سرور/
+        وردپرسه، هیچ‌وقت داخلِ این سورس نبوده و نیست. جایگزینِ روشِ قدیمیِ
+        HMACِ مشترک (V2) شد چون اون کلید داخلِ همین سورس هاردکد بود و با
+        Publicشدنِ مخزن لو رفت."""
         if "." not in key:
             return False
 
-        payload_b64, given_sig = key.split(".", 1)
-        expected_sig = hmac.new(_SIG_KEY, payload_b64.encode("utf-8"), hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(expected_sig, given_sig):
+        payload_b64, given_sig_b64 = key.split(".", 1)
+
+        sig_padded = given_sig_b64 + "=" * (-len(given_sig_b64) % 4)
+        signature = base64.urlsafe_b64decode(sig_padded.encode("utf-8"))
+
+        from cryptography.exceptions import InvalidSignature
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+        public_key = Ed25519PublicKey.from_public_bytes(
+            base64.b64decode(_ED25519_PUBLIC_KEY_B64)
+        )
+        try:
+            public_key.verify(signature, payload_b64.encode("utf-8"))
+        except InvalidSignature:
             return False
 
         payload_json = LicenseTab._urlsafe_b64decode_padded(payload_b64)
         payload = json.loads(payload_json)
 
-        if payload.get("v") != 2:
+        if payload.get("v") != 3:
             return False
 
         if payload.get("h") != hwid:
@@ -278,28 +291,12 @@ class LicenseTab(QWidget):
         return True
 
     @staticmethod
-    def _validate_legacy_key(key, hwid):
-        decoded = base64.b64decode(key).decode("utf-8")
-        lic_hwid, lic_expiry = decoded.split("|")
-
-        if lic_hwid != hwid:
-            return False
-        if datetime.strptime(lic_expiry, "%Y-%m-%d") < datetime.now():
-            return False
-        return True
-
-    @staticmethod
     def validate_key(key, hwid):
         if not key:
             return False
 
         try:
-            return LicenseTab._validate_v2_signed_key(key, hwid)
-        except Exception:
-            pass
-
-        try:
-            return LicenseTab._validate_legacy_key(key, hwid)
+            return LicenseTab._validate_v3_signed_key(key, hwid)
         except Exception:
             return False
 

@@ -84,7 +84,6 @@ class Peecha_LM_DB
         }
 
         update_option('peecha_lm_api_key', wp_generate_password(32, false, false));
-        update_option('peecha_lm_hmac_secret', 'Peecha::License::V2::HMAC::2026');
         update_option('peecha_lm_github_repo', PEECHA_LM_DEFAULT_GITHUB_REPO);
         update_option('peecha_lm_latest_version', '1.0.37');
         update_option('peecha_lm_mirror_attachment_id', 0);
@@ -100,13 +99,16 @@ class Peecha_LM_DB
         }
 
         $repo = Peecha_LM_Update::normalize_repo(get_option('peecha_lm_github_repo', ''));
-        if ($repo === '' || stripos($repo, 'shehniv/') !== false) {
+        // فقط اگه خالیه یا دقیقاً یکی از مقادیرِ قدیمیِ شناخته‌شده‌ی اشتباهه،
+        // خودکار با پیش‌فرضِ درست جایگزین می‌شه — نه با هر مقداری که فرق کنه؛
+        // اگه ادمین خودش یه ریپوی سفارشی تنظیم کرده باشه، دست‌نخورده می‌مونه.
+        $known_wrong = array('shehnm/peechasync', 'shehniv/peechasync');
+        if ($repo === '' || in_array(strtolower($repo), $known_wrong, true)) {
             update_option('peecha_lm_github_repo', PEECHA_LM_DEFAULT_GITHUB_REPO);
         }
 
-        if (get_option('peecha_lm_hmac_secret', '') === '') {
-            update_option('peecha_lm_hmac_secret', 'Peecha::License::V2::HMAC::2026');
-        }
+        // دیگر کلیدِ HMAC لورفته رو به‌عنوانِ پیش‌فرض seed نمی‌کنیم — این کلید
+        // چون در تاریخچه‌ی مخزنِ عمومی بوده، بازنشسته شده (به Ed25519 نگاه کنید).
     }
 
     public static function get_license_by_key($license_key)

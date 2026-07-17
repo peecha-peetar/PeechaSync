@@ -308,6 +308,7 @@ class Peecha_LM_Admin
         if ($action === 'save_settings') {
             update_option('peecha_lm_api_key', sanitize_text_field((string) ($_POST['api_key'] ?? '')));
             update_option('peecha_lm_hmac_secret', sanitize_text_field((string) ($_POST['hmac_secret'] ?? '')));
+            update_option('peecha_lm_ed25519_private_key', sanitize_text_field((string) ($_POST['ed25519_private_key'] ?? '')));
             $github_repo = Peecha_LM_Update::normalize_repo((string) ($_POST['github_repo'] ?? ''));
             if ($github_repo === '' && defined('PEECHA_LM_DEFAULT_GITHUB_REPO')) {
                 $github_repo = PEECHA_LM_DEFAULT_GITHUB_REPO;
@@ -644,17 +645,25 @@ class Peecha_LM_Admin
                             </div>
                             <p class="description"><?php echo esc_html(self::t('Put the same key in PeechaSync Settings -> License API Key.', 'همین کلید را در PeechaSync -> تنظیمات -> کلید API لایسنس بگذارید.')); ?></p>
                         </div>
-                        <div class="peecha-lm-field">
-                            <label for="hmac_secret"><?php echo esc_html(self::t('HMAC Secret', 'کلید HMAC')); ?></label>
-                            <input name="hmac_secret" id="hmac_secret" class="regular-text" value="<?php echo esc_attr(get_option('peecha_lm_hmac_secret', '')); ?>" />
+                        <div class="peecha-lm-field peecha-lm-field--full">
+                            <label for="ed25519_private_key"><?php echo esc_html(self::t('Ed25519 Private Key (v3 signing)', 'کلید خصوصی Ed25519 (امضای نسخه ۳)')); ?></label>
+                            <input name="ed25519_private_key" id="ed25519_private_key" class="regular-text" autocomplete="off" value="<?php echo esc_attr(get_option('peecha_lm_ed25519_private_key', '')); ?>" />
                             <?php self::hint(
-                                'Signing key for offline v2 license keys. Must match PeechaSync client.',
-                                'کلید امضای لایسنس آفلاین نسخه ۲. باید با کلید داخل برنامه PeechaSync یکی باشد.'
+                                'SECRET — used only here to sign new licenses. Never share, never commit to git. Generate once and paste the 32-byte base64 seed.',
+                                'محرمانه — فقط همین‌جا برای امضای لایسنس‌های جدید استفاده می‌شود. هیچ‌جا به‌اشتراک نگذارید و در گیت قرار ندهید. یک‌بار تولید و مقدارِ base64 سیدِ ۳۲بایتی را این‌جا جای‌گذاری کنید.'
+                            ); ?>
+                        </div>
+                        <div class="peecha-lm-field peecha-lm-field--full">
+                            <label><?php echo esc_html(self::t('HMAC Secret (legacy v2 — retired)', 'کلید HMAC (نسخه‌ی قدیمیِ ۲ — بازنشسته)')); ?></label>
+                            <input name="hmac_secret" id="hmac_secret" class="regular-text" value="<?php echo esc_attr(get_option('peecha_lm_hmac_secret', '')); ?>" readonly />
+                            <?php self::hint(
+                                'No longer used to verify licenses (this key leaked in the public repo history). Kept only for historical reference.',
+                                'دیگر برای تأییدِ لایسنس استفاده نمی‌شود (این کلید در تاریخچه‌ی مخزنِ عمومی لو رفته بود). فقط برای مرجعِ تاریخی نگه داشته شده.'
                             ); ?>
                         </div>
                         <div class="peecha-lm-field">
                             <label for="github_repo"><?php echo esc_html(self::t('GitHub repo', 'ریپوی GitHub')); ?></label>
-                            <input name="github_repo" id="github_repo" class="regular-text" value="<?php echo esc_attr(Peecha_LM_Update::github_repo() ?: (defined('PEECHA_LM_DEFAULT_GITHUB_REPO') ? PEECHA_LM_DEFAULT_GITHUB_REPO : 'shehnm/PeechaSync')); ?>" />
+                            <input name="github_repo" id="github_repo" class="regular-text" value="<?php echo esc_attr(Peecha_LM_Update::github_repo() ?: (defined('PEECHA_LM_DEFAULT_GITHUB_REPO') ? PEECHA_LM_DEFAULT_GITHUB_REPO : 'peecha-peetar/PeechaSync')); ?>" />
                             <?php self::hint(
                                 'Repo for updates (owner/name). Server downloads latest release ZIP from here.',
                                 'مسیر ریپو برای بروزرسانی (owner/name). سرور آخرین ZIP ریلیز را از همینجا می‌گیرد.'
