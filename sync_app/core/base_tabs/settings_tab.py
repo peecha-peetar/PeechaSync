@@ -1601,7 +1601,11 @@ class SettingsTab(QWidget):
         self._apply_platform_field_visibility()
 
         # --- تلگرام (برای تقویم محتوا) — مستقل از پلتفرم فروشگاه، همیشه نمایان ---
-        from sync_app.core.telegram_poster import TELEGRAM_BOT_TOKEN_KEY, TELEGRAM_CHAT_ID_KEY
+        from sync_app.core.telegram_poster import (
+            TELEGRAM_BOT_TOKEN_KEY,
+            TELEGRAM_CHAT_ID_KEY,
+            TELEGRAM_PROXY_URL_KEY,
+        )
 
         self.telegram_group = QGroupBox("تلگرام (برای تقویم محتوا)")
         self.telegram_group.setLayoutDirection(Qt.LeftToRight)
@@ -1616,14 +1620,18 @@ class SettingsTab(QWidget):
         self.telegram_bot_token_input.setPlaceholderText("123456:ABC-DEF...")
         self.telegram_chat_id_input = QLineEdit(str(self.config.get(TELEGRAM_CHAT_ID_KEY) or ""))
         self.telegram_chat_id_input.setPlaceholderText("@channel_username یا -1001234567890")
-        for field in (self.telegram_bot_token_input, self.telegram_chat_id_input):
+        self.telegram_proxy_url_input = QLineEdit(str(self.config.get(TELEGRAM_PROXY_URL_KEY) or ""))
+        self.telegram_proxy_url_input.setPlaceholderText("مثلاً socks5://127.0.0.1:1080 (اختیاری)")
+        for field in (self.telegram_bot_token_input, self.telegram_chat_id_input, self.telegram_proxy_url_input):
             field.setLayoutDirection(Qt.LeftToRight)
             field.setAlignment(Qt.AlignLeft)
             field.setMinimumHeight(38)
 
         telegram_help = QLabel(
             "توکنِ بات: با @BotFather بسازید. شناسه‌ی چت: نامِ کاربریِ کانال (با @) یا آیدیِ عددیِ آن — "
-            "ربات باید ادمینِ کانال/گروه باشد."
+            "ربات باید ادمینِ کانال/گروه باشد.\n"
+            "⚠️ api.telegram.org معمولاً در ایران فیلتر است — اگه اتصال با خطای "
+            "«Connection refused» ناموفق شد، آدرسِ یک پراکسی (VPNِ محلی یا socks5) را در فیلدِ پراکسی وارد کنید."
         )
         telegram_help.setStyleSheet("color:#64748b; font-size:10px;")
         telegram_help.setWordWrap(True)
@@ -1634,6 +1642,7 @@ class SettingsTab(QWidget):
 
         telegram_layout.addRow(english_caption("Bot Token:"), self.telegram_bot_token_input)
         telegram_layout.addRow(english_caption("Chat ID:"), self.telegram_chat_id_input)
+        telegram_layout.addRow(english_caption("Proxy URL:"), self.telegram_proxy_url_input)
         telegram_layout.addRow(QLabel(""), telegram_help)
         telegram_layout.addRow(QLabel(""), self.telegram_test_button)
         self.telegram_group.setLayout(telegram_layout)
@@ -1885,7 +1894,7 @@ class SettingsTab(QWidget):
             self.default_customer_mode_combo, self.login_screen_enabled_checkbox,
             self.auto_update_enabled_checkbox,
             self.ps_url_input, self.ps_api_key_input, self.ps_site_combo, self.ps_site_name_input,
-            self.telegram_bot_token_input, self.telegram_chat_id_input,
+            self.telegram_bot_token_input, self.telegram_chat_id_input, self.telegram_proxy_url_input,
         ] + list(self._field_sync_checkboxes.values()) + list(self._force_full_sync_checkboxes.values())
 
         _text_inputs = [
@@ -1896,7 +1905,7 @@ class SettingsTab(QWidget):
             self.app_login_username_input, self.app_login_password_input, self.license_server_url_input,
             self.license_api_key_input, self.default_customer_code_input,
             self.ps_url_input, self.ps_api_key_input, self.ps_site_name_input,
-            self.telegram_bot_token_input, self.telegram_chat_id_input,
+            self.telegram_bot_token_input, self.telegram_chat_id_input, self.telegram_proxy_url_input,
         ]
         for w in _text_inputs:
             w.textChanged.connect(self._on_settings_field_changed)
@@ -3700,6 +3709,7 @@ class SettingsTab(QWidget):
         from sync_app.core.telegram_poster import test_connection as telegram_test_connection
 
         token = self.telegram_bot_token_input.text().strip()
+        proxy_url = self.telegram_proxy_url_input.text().strip()
         if not token:
             QMessageBox.warning(self, "تلگرام", "ابتدا توکنِ بات را وارد کنید.")
             return
@@ -3721,7 +3731,9 @@ class SettingsTab(QWidget):
             self.telegram_test_button.setText("تست اتصال تلگرام")
             QMessageBox.critical(self, "تلگرام", f"خطا: {err}")
 
-        run_in_thread(telegram_test_connection, token, on_complete=on_complete, on_error=on_error)
+        run_in_thread(
+            telegram_test_connection, token, proxy_url=proxy_url, on_complete=on_complete, on_error=on_error
+        )
 
     def test_ps_connection(self):
         if self._ps_thread is not None and self._ps_thread.isRunning():
@@ -4770,6 +4782,7 @@ class SettingsTab(QWidget):
                 "PS_API_KEY": self.ps_api_key_input.text().strip(),
                 "TELEGRAM_BOT_TOKEN": self.telegram_bot_token_input.text().strip(),
                 "TELEGRAM_CHAT_ID": self.telegram_chat_id_input.text().strip(),
+                "TELEGRAM_PROXY_URL": self.telegram_proxy_url_input.text().strip(),
             })
             for _cfg_key, _cb in self._field_sync_checkboxes.items():
                 config_to_save[_cfg_key] = _cb.isChecked()

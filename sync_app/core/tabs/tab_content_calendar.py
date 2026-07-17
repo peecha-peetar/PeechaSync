@@ -152,11 +152,17 @@ class ContentCalendarTab(QWidget):
 
     def _send_now(self, post_id: str, post: dict):
         from sync_app.core.secure_config_loader import load_secure_config
-        from sync_app.core.telegram_poster import TELEGRAM_BOT_TOKEN_KEY, TELEGRAM_CHAT_ID_KEY, send_post
+        from sync_app.core.telegram_poster import (
+            TELEGRAM_BOT_TOKEN_KEY,
+            TELEGRAM_CHAT_ID_KEY,
+            TELEGRAM_PROXY_URL_KEY,
+            send_post,
+        )
 
         cfg = load_secure_config(None) or {}
         token = str(cfg.get(TELEGRAM_BOT_TOKEN_KEY) or "").strip()
         chat_id = str(cfg.get(TELEGRAM_CHAT_ID_KEY) or "").strip()
+        proxy_url = str(cfg.get(TELEGRAM_PROXY_URL_KEY) or "").strip()
         if not token or not chat_id:
             QMessageBox.warning(
                 self, "تلگرام تنظیم نشده",
@@ -167,7 +173,9 @@ class ContentCalendarTab(QWidget):
         self.refresh_btn.setEnabled(False)
 
         def _worker():
-            return send_post(token, chat_id, post.get("text") or "", photo_path=post.get("image_path") or "")
+            return send_post(
+                token, chat_id, post.get("text") or "", photo_path=post.get("image_path") or "", proxy_url=proxy_url
+            )
 
         def on_complete(result):
             ok, msg = result

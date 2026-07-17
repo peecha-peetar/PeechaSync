@@ -2721,10 +2721,16 @@ class PeechaLauncher(QWidget):
         except Exception:
             return
 
-        from sync_app.core.telegram_poster import TELEGRAM_BOT_TOKEN_KEY, TELEGRAM_CHAT_ID_KEY, send_post
+        from sync_app.core.telegram_poster import (
+            TELEGRAM_BOT_TOKEN_KEY,
+            TELEGRAM_CHAT_ID_KEY,
+            TELEGRAM_PROXY_URL_KEY,
+            send_post,
+        )
 
         token = str(cfg.get(TELEGRAM_BOT_TOKEN_KEY) or "").strip()
         chat_id = str(cfg.get(TELEGRAM_CHAT_ID_KEY) or "").strip()
+        proxy_url = str(cfg.get(TELEGRAM_PROXY_URL_KEY) or "").strip()
         if not token or not chat_id:
             for post in posts:
                 update_post_status(
@@ -2739,7 +2745,8 @@ class PeechaLauncher(QWidget):
             results = []
             for post in posts_to_send:
                 ok, msg = send_post(
-                    token, chat_id, post.get("text") or "", photo_path=post.get("image_path") or ""
+                    token, chat_id, post.get("text") or "", photo_path=post.get("image_path") or "",
+                    proxy_url=proxy_url,
                 )
                 results.append((post.get("id"), ok, msg))
             return results
