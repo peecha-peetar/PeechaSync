@@ -1647,6 +1647,44 @@ class SettingsTab(QWidget):
         telegram_layout.addRow(QLabel(""), self.telegram_test_button)
         self.telegram_group.setLayout(telegram_layout)
 
+        # --- بله (Bale) — برای تقویمِ محتوا، فیلتر نیست، نیازی به پراکسی نداره ---
+        from sync_app.core.bale_poster import BALE_BOT_TOKEN_KEY, BALE_CHAT_ID_KEY
+
+        self.bale_group = QGroupBox("بله — Bale (برای تقویم محتوا)")
+        self.bale_group.setLayoutDirection(Qt.LeftToRight)
+        bale_layout = QFormLayout()
+        bale_layout.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        bale_layout.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        bale_layout.setFormAlignment(Qt.AlignTop)
+        bale_layout.setHorizontalSpacing(14)
+        bale_layout.setVerticalSpacing(10)
+
+        self.bale_bot_token_input = PasswordLineEdit(str(self.config.get(BALE_BOT_TOKEN_KEY) or ""))
+        self.bale_bot_token_input.setPlaceholderText("123456:AAHdq...")
+        self.bale_chat_id_input = QLineEdit(str(self.config.get(BALE_CHAT_ID_KEY) or ""))
+        self.bale_chat_id_input.setPlaceholderText("@channel_username یا -1001234567890")
+        for field in (self.bale_bot_token_input, self.bale_chat_id_input):
+            field.setLayoutDirection(Qt.LeftToRight)
+            field.setAlignment(Qt.AlignLeft)
+            field.setMinimumHeight(38)
+
+        bale_help = QLabel(
+            "ساختِ بات: در برنامه‌ی بله سرچ کنید «BotFather» و مراحلِ مشابهِ تلگرام را طی کنید. "
+            "بله در ایران فیلتر نیست — نیازی به پراکسی/VPN ندارد."
+        )
+        bale_help.setStyleSheet("color:#64748b; font-size:10px;")
+        bale_help.setWordWrap(True)
+
+        self.bale_test_button = QPushButton("تست اتصال بله")
+        self.bale_test_button.setMinimumHeight(38)
+        self.bale_test_button.clicked.connect(self._test_bale_connection)
+
+        bale_layout.addRow(english_caption("Bot Token:"), self.bale_bot_token_input)
+        bale_layout.addRow(english_caption("Chat ID:"), self.bale_chat_id_input)
+        bale_layout.addRow(QLabel(""), bale_help)
+        bale_layout.addRow(QLabel(""), self.bale_test_button)
+        self.bale_group.setLayout(bale_layout)
+
         self.monitor_group = QGroupBox("مانیتورینگ عملیات اتصال")
         monitor_layout = QVBoxLayout()
         monitor_layout.setContentsMargins(10, 10, 10, 10)
@@ -1895,6 +1933,7 @@ class SettingsTab(QWidget):
             self.auto_update_enabled_checkbox,
             self.ps_url_input, self.ps_api_key_input, self.ps_site_combo, self.ps_site_name_input,
             self.telegram_bot_token_input, self.telegram_chat_id_input, self.telegram_proxy_url_input,
+            self.bale_bot_token_input, self.bale_chat_id_input,
         ] + list(self._field_sync_checkboxes.values()) + list(self._force_full_sync_checkboxes.values())
 
         _text_inputs = [
@@ -1906,6 +1945,7 @@ class SettingsTab(QWidget):
             self.license_api_key_input, self.default_customer_code_input,
             self.ps_url_input, self.ps_api_key_input, self.ps_site_name_input,
             self.telegram_bot_token_input, self.telegram_chat_id_input, self.telegram_proxy_url_input,
+            self.bale_bot_token_input, self.bale_chat_id_input,
         ]
         for w in _text_inputs:
             w.textChanged.connect(self._on_settings_field_changed)
@@ -1960,19 +2000,21 @@ class SettingsTab(QWidget):
             grid.addWidget(self.app_group, 1, 0)
             grid.addWidget(self.wc_group, 2, 0)
             grid.addWidget(self.telegram_group, 3, 0)
-            grid.addWidget(self.customer_group, 4, 0)
-            grid.addWidget(self.fields_group, 5, 0)
-            grid.addWidget(self.license_group, 6, 0)
-            grid.addWidget(self.monitor_group, 7, 0)
-            grid.addWidget(self.backup_group, 8, 0)
+            grid.addWidget(self.bale_group, 4, 0)
+            grid.addWidget(self.customer_group, 5, 0)
+            grid.addWidget(self.fields_group, 6, 0)
+            grid.addWidget(self.license_group, 7, 0)
+            grid.addWidget(self.monitor_group, 8, 0)
+            grid.addWidget(self.backup_group, 9, 0)
         else:
             grid.addWidget(self.sql_group, 0, 0)
             grid.addWidget(self.app_group, 0, 1)
             grid.addWidget(self.wc_group, 1, 0)
             grid.addWidget(self.monitor_group, 1, 1)
             grid.addWidget(self.telegram_group, 2, 0)
-            grid.addWidget(self.customer_group, 2, 1)
-            grid.addWidget(self.license_group, 3, 0)
+            grid.addWidget(self.bale_group, 2, 1)
+            grid.addWidget(self.customer_group, 3, 0)
+            grid.addWidget(self.license_group, 3, 1)
             grid.addWidget(self.fields_group, 4, 0, 1, 2)
             grid.addWidget(self.backup_group, 5, 0, 1, 2)
             grid.setColumnStretch(0, 1)
@@ -3704,6 +3746,34 @@ class SettingsTab(QWidget):
             "PS_ROOT_CATEGORY_ID": (self.config or {}).get("PS_ROOT_CATEGORY_ID", 2),
         }
 
+    def _test_bale_connection(self):
+        from sync_app.core.threading_helper import run_in_thread
+        from sync_app.core.bale_poster import test_connection as bale_test_connection
+
+        token = self.bale_bot_token_input.text().strip()
+        if not token:
+            QMessageBox.warning(self, "بله", "ابتدا توکنِ بات را وارد کنید.")
+            return
+
+        self.bale_test_button.setEnabled(False)
+        self.bale_test_button.setText("در حال تست اتصال...")
+
+        def on_complete(result):
+            ok, msg = result
+            self.bale_test_button.setEnabled(True)
+            self.bale_test_button.setText("تست اتصال بله")
+            if ok:
+                QMessageBox.information(self, "بله", msg)
+            else:
+                QMessageBox.critical(self, "بله", f"اتصال ناموفق بود:\n{msg}")
+
+        def on_error(err):
+            self.bale_test_button.setEnabled(True)
+            self.bale_test_button.setText("تست اتصال بله")
+            QMessageBox.critical(self, "بله", f"خطا: {err}")
+
+        run_in_thread(bale_test_connection, token, on_complete=on_complete, on_error=on_error)
+
     def _test_telegram_connection(self):
         from sync_app.core.threading_helper import run_in_thread
         from sync_app.core.telegram_poster import test_connection as telegram_test_connection
@@ -4783,6 +4853,8 @@ class SettingsTab(QWidget):
                 "TELEGRAM_BOT_TOKEN": self.telegram_bot_token_input.text().strip(),
                 "TELEGRAM_CHAT_ID": self.telegram_chat_id_input.text().strip(),
                 "TELEGRAM_PROXY_URL": self.telegram_proxy_url_input.text().strip(),
+                "BALE_BOT_TOKEN": self.bale_bot_token_input.text().strip(),
+                "BALE_CHAT_ID": self.bale_chat_id_input.text().strip(),
             })
             for _cfg_key, _cb in self._field_sync_checkboxes.items():
                 config_to_save[_cfg_key] = _cb.isChecked()

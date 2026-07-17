@@ -1727,9 +1727,21 @@ class ProductTab(QWidget):
         banner_layout.addStretch()
         sub_tabs.addTab(banner_tab, "🎨 بنر / پست / استوری")
 
-        # --- زیرتب زمان‌بندیِ تلگرام (تقویمِ محتوا) ---
+        # --- زیرتب زمان‌بندیِ شبکه‌ی اجتماعی (تقویمِ محتوا) ---
+        from sync_app.core.social_poster import PLATFORM_LABELS
+
         schedule_tab = QWidget()
         schedule_layout = QVBoxLayout(schedule_tab)
+
+        schedule_platform_row = QHBoxLayout()
+        schedule_platform_row.addWidget(QLabel("پلتفرم:"))
+        schedule_platform_combo = QComboBox()
+        for platform_key, platform_label in PLATFORM_LABELS.items():
+            schedule_platform_combo.addItem(platform_label, platform_key)
+        schedule_platform_row.addWidget(schedule_platform_combo)
+        schedule_platform_row.addStretch()
+        schedule_layout.addLayout(schedule_platform_row)
+
         schedule_layout.addWidget(QLabel("متنِ پست:"))
         schedule_text_edit = QTextEdit(texts["متن تلگرام"])
         schedule_text_edit.setMinimumHeight(100)
@@ -1808,7 +1820,7 @@ class ProductTab(QWidget):
             add_scheduled_post(
                 sku=sku,
                 product_name=product.get("name") or sku,
-                platform="telegram",
+                platform=schedule_platform_combo.currentData() or "telegram",
                 text=schedule_text_edit.toPlainText(),
                 scheduled_at=scheduled_dt.isoformat(timespec="seconds"),
                 image_path=schedule_image_path["value"],
@@ -1823,14 +1835,15 @@ class ProductTab(QWidget):
         schedule_layout.addWidget(add_to_calendar_btn)
 
         schedule_hint = QLabel(
-            "پست در زمانِ تعیین‌شده خودکار به کانال/گروهِ تلگرامِ تنظیم‌شده در «تنظیمات → تلگرام» ارسال می‌شود. "
+            "پست در زمانِ تعیین‌شده خودکار به کانال/گروهِ همون پلتفرمی که بالا انتخاب کردید "
+            "(تنظیم‌شده در «تنظیمات → تلگرام» یا «تنظیمات → بله») ارسال می‌شود. "
             "برای مدیریتِ همه‌ی پست‌های زمان‌بندی‌شده، به زیرتبِ «📅 تقویم محتوا» (در دستیار هوشمند) بروید."
         )
         schedule_hint.setWordWrap(True)
         schedule_hint.setStyleSheet("color:#64748b; font-size:10px;")
         schedule_layout.addWidget(schedule_hint)
         schedule_layout.addStretch()
-        sub_tabs.addTab(schedule_tab, "📅 زمان‌بندی تلگرام")
+        sub_tabs.addTab(schedule_tab, "📅 زمان‌بندی شبکه اجتماعی")
 
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
         buttons.rejected.connect(dialog.reject)

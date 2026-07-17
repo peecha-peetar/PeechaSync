@@ -2705,8 +2705,8 @@ class PeechaLauncher(QWidget):
         self.header_autosync_badge.setVisible(True)
 
     def _send_due_content_calendar_posts(self):
-        """چکِ پس‌زمینه‌ی پست‌های زمان‌بندی‌شده‌ی سررسیده — هر ارسالِ واقعی
-        در Threadِ جدا انجام می‌شه تا UI هیچ‌وقت قفل نشه."""
+        """چکِ پس‌زمینه‌ی پست‌های زمان‌بندی‌شده‌ی سررسیده (همه‌ی پلتفرم‌ها) —
+        هر ارسالِ واقعی در Threadِ جدا انجام می‌شه تا UI هیچ‌وقت قفل نشه."""
         from sync_app.core.content_calendar_store import due_posts, update_post_status, STATUS_SENT, STATUS_FAILED
 
         try:
@@ -2721,32 +2721,29 @@ class PeechaLauncher(QWidget):
         except Exception:
             return
 
-        from sync_app.core.telegram_poster import (
-            TELEGRAM_BOT_TOKEN_KEY,
-            TELEGRAM_CHAT_ID_KEY,
-            TELEGRAM_PROXY_URL_KEY,
-            send_post,
-        )
+        from sync_app.core.social_poster import PLATFORM_LABELS, is_platform_configured, send_post_for_platform
+        from sync_app.core.threading_helper import run_in_thread
 
-        token = str(cfg.get(TELEGRAM_BOT_TOKEN_KEY) or "").strip()
-        chat_id = str(cfg.get(TELEGRAM_CHAT_ID_KEY) or "").strip()
-        proxy_url = str(cfg.get(TELEGRAM_PROXY_URL_KEY) or "").strip()
-        if not token or not chat_id:
-            for post in posts:
+        sendable_posts = []
+        for post in posts:
+            platform = str(post.get("platform") or "telegram")
+            if is_platform_configured(platform, cfg):
+                sendable_posts.append(post)
+            else:
+                label = PLATFORM_LABELS.get(platform, platform)
                 update_post_status(
                     post.get("id"), STATUS_FAILED,
-                    error="توکن بات یا شناسه‌ی چتِ تلگرام در تنظیمات وارد نشده.",
+                    error=f"توکن بات یا شناسه‌ی چتِ {label} در تنظیمات وارد نشده.",
                 )
+        if not sendable_posts:
             return
-
-        from sync_app.core.threading_helper import run_in_thread
 
         def _worker(posts_to_send):
             results = []
             for post in posts_to_send:
-                ok, msg = send_post(
-                    token, chat_id, post.get("text") or "", photo_path=post.get("image_path") or "",
-                    proxy_url=proxy_url,
+                platform = str(post.get("platform") or "telegram")
+                ok, msg = send_post_for_platform(
+                    platform, cfg, post.get("text") or "", photo_path=post.get("image_path") or ""
                 )
                 results.append((post.get("id"), ok, msg))
             return results
@@ -2755,7 +2752,7 @@ class PeechaLauncher(QWidget):
             for post_id, ok, msg in results:
                 update_post_status(post_id, STATUS_SENT if ok else STATUS_FAILED, error=None if ok else msg)
 
-        run_in_thread(_worker, posts, on_complete=on_complete)
+        run_in_thread(_worker, sendable_posts, on_complete=on_complete)
 
     def _refresh_link_warning(self):
         """محاسبه‌ی تعداد موارد لینک‌نشده در پس‌زمینه — فقط خواندنی، UI را قفل نمی‌کند."""

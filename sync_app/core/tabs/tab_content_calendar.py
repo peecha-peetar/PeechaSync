@@ -1,5 +1,5 @@
 """تب «تقویم محتوا» — لیستِ پست‌های زمان‌بندی‌شده‌ی شبکه‌های اجتماعی
-(فعلاً فقط تلگرام) که از زیرتبِ «📅 زمان‌بندی تلگرام» در Content Studio
+(تلگرام/بله) که از زیرتبِ «📅 زمان‌بندی شبکه اجتماعی» در Content Studio
 (تبِ محصولات) اضافه شده‌اند. ارسالِ واقعی به‌صورتِ خودکار توسطِ تایمرِ
 پس‌زمینه در peecha_launcher.py انجام می‌شود؛ این تب فقط برای مدیریت
 (مشاهده/لغو/حذف/ارسالِ فوری) است."""
@@ -20,6 +20,7 @@ from sync_app.core.content_calendar_store import (
     update_post_status,
 )
 from sync_app.core.jalali_date_utils import to_jalali_datetime_str
+from sync_app.core.social_poster import PLATFORM_LABELS
 from sync_app.core.threading_helper import run_in_thread
 
 _STATUS_LABELS = {
@@ -27,10 +28,6 @@ _STATUS_LABELS = {
     STATUS_SENT: "✅ ارسال‌شده",
     STATUS_FAILED: "❌ ناموفق",
     STATUS_CANCELLED: "🚫 لغوشده",
-}
-
-_PLATFORM_LABELS = {
-    "telegram": "تلگرام",
 }
 
 
@@ -53,7 +50,7 @@ class ContentCalendarTab(QWidget):
 
         subtitle = QLabel(
             "پست‌های زمان‌بندی‌شده برای شبکه‌های اجتماعی — برای افزودنِ پستِ جدید، از تبِ «محصولات»، "
-            "روی دکمه‌ی محتوای هر محصول، زیرتبِ «📅 زمان‌بندی تلگرام» را باز کنید."
+            "روی دکمه‌ی محتوای هر محصول، زیرتبِ «📅 زمان‌بندی شبکه اجتماعی» را باز کنید."
         )
         subtitle.setProperty("role", "caption")
         subtitle.setAlignment(Qt.AlignCenter)
@@ -104,7 +101,7 @@ class ContentCalendarTab(QWidget):
             self.table.setItem(row, 1, QTableWidgetItem(product_label))
 
             platform = str(post.get("platform") or "")
-            self.table.setItem(row, 2, QTableWidgetItem(_PLATFORM_LABELS.get(platform, platform)))
+            self.table.setItem(row, 2, QTableWidgetItem(PLATFORM_LABELS.get(platform, platform)))
 
             status = str(post.get("status") or "")
             if status == STATUS_PENDING:
@@ -152,29 +149,22 @@ class ContentCalendarTab(QWidget):
 
     def _send_now(self, post_id: str, post: dict):
         from sync_app.core.secure_config_loader import load_secure_config
-        from sync_app.core.telegram_poster import (
-            TELEGRAM_BOT_TOKEN_KEY,
-            TELEGRAM_CHAT_ID_KEY,
-            TELEGRAM_PROXY_URL_KEY,
-            send_post,
-        )
+        from sync_app.core.social_poster import is_platform_configured, send_post_for_platform
 
         cfg = load_secure_config(None) or {}
-        token = str(cfg.get(TELEGRAM_BOT_TOKEN_KEY) or "").strip()
-        chat_id = str(cfg.get(TELEGRAM_CHAT_ID_KEY) or "").strip()
-        proxy_url = str(cfg.get(TELEGRAM_PROXY_URL_KEY) or "").strip()
-        if not token or not chat_id:
+        platform = str(post.get("platform") or "telegram")
+        if not is_platform_configured(platform, cfg):
             QMessageBox.warning(
-                self, "تلگرام تنظیم نشده",
-                "ابتدا توکنِ بات و شناسه‌ی چت را در «تنظیمات → تلگرام» وارد کنید.",
+                self, f"{PLATFORM_LABELS.get(platform, platform)} تنظیم نشده",
+                f"ابتدا توکنِ بات و شناسه‌ی چت را در «تنظیمات → {PLATFORM_LABELS.get(platform, platform)}» وارد کنید.",
             )
             return
 
         self.refresh_btn.setEnabled(False)
 
         def _worker():
-            return send_post(
-                token, chat_id, post.get("text") or "", photo_path=post.get("image_path") or "", proxy_url=proxy_url
+            return send_post_for_platform(
+                platform, cfg, post.get("text") or "", photo_path=post.get("image_path") or ""
             )
 
         def on_complete(result):
