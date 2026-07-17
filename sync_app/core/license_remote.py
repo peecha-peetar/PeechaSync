@@ -78,6 +78,20 @@ def _runtime_license_config(config: dict | None = None) -> dict:
 def license_site_url(config: dict | None = None) -> str:
     """فروشگاهی که این دستگاه با آن سینک می‌کند — برای نمایش در پنل لایسنس."""
     cfg = _runtime_license_config(config)
+
+    from sync_app.core.integrations.commerce_provider import is_prestashop
+
+    if is_prestashop(cfg):
+        raw = str(cfg.get("PS_URL") or "").strip()
+        if not raw:
+            return ""
+        try:
+            from sync_app.core.ps_api_helper import normalize_ps_store_url
+
+            return normalize_ps_store_url(raw)
+        except Exception:
+            return raw.rstrip("/")
+
     raw = str(cfg.get("WC_URL") or cfg.get("WOOCOMMERCE_URL") or "").strip()
     if not raw:
         return ""
