@@ -1777,6 +1777,21 @@ class ProductTab(QWidget):
         schedule_platform_row.addStretch()
         schedule_layout.addLayout(schedule_platform_row)
 
+        schedule_recipient_row = QHBoxLayout()
+        schedule_recipient_row.addWidget(QLabel("مقصدِ سفارشی (اختیاری):"))
+        schedule_recipient_input = QLineEdit()
+        schedule_recipient_input.setPlaceholderText("خالی = همون مقصدِ پیش‌فرضِ Settings؛ برای شخص/کانال/گروهِ دیگه، آیدیِ عددی یا @username")
+        schedule_recipient_row.addWidget(schedule_recipient_input, 1)
+        schedule_layout.addLayout(schedule_recipient_row)
+
+        schedule_recipient_hint = QLabel(
+            "برای ارسال به یک شخصِ خاص (نه کانالِ تنظیم‌شده)، اون شخص باید قبلاً یک پیام به باتِ شما "
+            "فرستاده باشه (/start) — بات نمی‌تونه اول‌به‌اول به کسی که هنوز باهاش چت نکرده پیام بده."
+        )
+        schedule_recipient_hint.setWordWrap(True)
+        schedule_recipient_hint.setStyleSheet("color:#64748b; font-size:10px;")
+        schedule_layout.addWidget(schedule_recipient_hint)
+
         schedule_layout.addWidget(QLabel("متنِ پست:"))
         schedule_text_edit = QTextEdit(texts["متن تلگرام"])
         schedule_text_edit.setMinimumHeight(100)
@@ -2057,6 +2072,7 @@ class ProductTab(QWidget):
                 text=schedule_text_edit.toPlainText(),
                 scheduled_at=scheduled_dt.isoformat(timespec="seconds"),
                 image_paths=final_image_paths,
+                chat_id_override=schedule_recipient_input.text().strip(),
             )
             schedule_status_label.setText(
                 f"✅ به تقویمِ محتوا اضافه شد — {schedule_year_spin.value()}/{schedule_month_spin.value():02d}/"
@@ -2147,6 +2163,13 @@ class ProductTab(QWidget):
         platform_row.addStretch()
         v.addLayout(platform_row)
 
+        recipient_row = QHBoxLayout()
+        recipient_row.addWidget(QLabel("مقصدِ سفارشی (اختیاری):"))
+        recipient_input = QLineEdit()
+        recipient_input.setPlaceholderText("خالی = مقصدِ پیش‌فرضِ Settings؛ برای شخص/کانال/گروهِ دیگه، آیدیِ عددی یا @username (برای همه‌ی این پست‌ها)")
+        recipient_row.addWidget(recipient_input, 1)
+        v.addLayout(recipient_row)
+
         template_row = QHBoxLayout()
         template_row.addWidget(QLabel("قالبِ متنِ پست (اختیاری):"))
         template_combo = QComboBox()
@@ -2222,6 +2245,7 @@ class ProductTab(QWidget):
             status_label.setText("🔄 در حالِ آماده‌سازیِ پست‌ها (دریافتِ لینک/عکسِ هر محصول از سایت)...")
 
             send_all_images = send_all_images_check.isChecked()
+            chat_id_override = recipient_input.text().strip()
 
             def _worker():
                 from sync_app.core.content_calendar_store import add_scheduled_post
@@ -2271,6 +2295,7 @@ class ProductTab(QWidget):
                             text=text,
                             scheduled_at=scheduled_dt.isoformat(timespec="seconds"),
                             image_paths=image_paths,
+                            chat_id_override=chat_id_override,
                         )
                         done += 1
                     except Exception as exc:

@@ -2729,7 +2729,8 @@ class PeechaLauncher(QWidget):
         sendable_posts = []
         for post in posts:
             platform = str(post.get("platform") or "telegram")
-            if is_platform_configured(platform, cfg):
+            chat_id_override = str(post.get("chat_id_override") or "").strip()
+            if is_platform_configured(platform, cfg, chat_id_override=chat_id_override):
                 sendable_posts.append(post)
             else:
                 label = PLATFORM_LABELS.get(platform, platform)
@@ -2745,7 +2746,9 @@ class PeechaLauncher(QWidget):
             for post in posts_to_send:
                 platform = str(post.get("platform") or "telegram")
                 ok, msg = send_post_for_platform(
-                    platform, cfg, post.get("text") or "", photo_paths=post_image_paths(post)
+                    platform, cfg, post.get("text") or "",
+                    photo_paths=post_image_paths(post),
+                    chat_id_override=str(post.get("chat_id_override") or "").strip(),
                 )
                 results.append((post.get("id"), ok, msg))
             return results

@@ -49,10 +49,13 @@ def add_scheduled_post(
     scheduled_at: str,
     image_path: str = "",
     image_paths: list[str] | None = None,
+    chat_id_override: str = "",
 ) -> dict:
     """scheduled_at: ISO 8601 میلادی (مثلاً از datetime.isoformat()).
     image_paths (چند عکس/آلبوم) روی image_path (تکی، برای سازگاری با رکوردهای
-    قدیمی) اولویت داره؛ image_path هم برای نمایش/سازگاریِ عقب‌رو نگه داشته می‌شه."""
+    قدیمی) اولویت داره؛ image_path هم برای نمایش/سازگاریِ عقب‌رو نگه داشته می‌شه.
+    chat_id_override: اگه پر باشه، به‌جای شناسه‌ی چتِ تنظیم‌شده در Settings،
+    این پست به همین مقصد (شخص/کانال/گروهِ خاص) ارسال می‌شه."""
     paths = [p for p in (image_paths or []) if p]
     post = {
         "id": _new_post_id(),
@@ -62,6 +65,7 @@ def add_scheduled_post(
         "text": text,
         "image_path": image_path or (paths[0] if paths else ""),
         "image_paths": paths,
+        "chat_id_override": (chat_id_override or "").strip(),
         "scheduled_at": scheduled_at,
         "status": STATUS_PENDING,
         "created_at": datetime.now().isoformat(timespec="seconds"),
@@ -102,6 +106,19 @@ def delete_scheduled_post(post_id: str) -> None:
     posts = load_scheduled_posts()
     posts = [p for p in posts if str(p.get("id")) != post_id]
     save_scheduled_posts(posts)
+
+
+def delete_scheduled_posts(post_ids: list[str]) -> int:
+    """حذفِ گروهی — یک‌بار خواندن/نوشتنِ فایل به‌جایِ N بار. تعدادِ واقعاً حذف‌شده رو برمی‌گردونه."""
+    ids = {str(pid) for pid in (post_ids or [])}
+    if not ids:
+        return 0
+    posts = load_scheduled_posts()
+    kept = [p for p in posts if str(p.get("id")) not in ids]
+    removed = len(posts) - len(kept)
+    if removed:
+        save_scheduled_posts(kept)
+    return removed
 
 
 def due_posts(now: datetime | None = None) -> list[dict]:
