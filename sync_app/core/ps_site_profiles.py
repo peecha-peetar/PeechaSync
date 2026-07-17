@@ -1,21 +1,25 @@
-"""چند سایت ووکامرس — ذخیره پروفایل‌ها و اعمال سایت فعال روی کلیدهای WC_*."""
+"""چند سایت پرستاشاپ — ذخیره پروفایل‌ها و اعمال سایت فعال روی کلیدهای PS_*.
+
+هم‌ساختار با wc_site_profiles.py (که همین مکانیزم رو برای ووکامرس پیاده
+می‌کنه) تا هر دو پلتفرم از یک الگوی یکسان برای «چند فروشگاه در یک پروفایل»
+استفاده کنن.
+"""
 
 from __future__ import annotations
 
 import copy
 import uuid
-from typing import Any
 from urllib.parse import urlparse
 
-WC_SITES_KEY = "WC_SITES"
-ACTIVE_WC_SITE_ID_KEY = "ACTIVE_WC_SITE_ID"
+PS_SITES_KEY = "PS_SITES"
+ACTIVE_PS_SITE_ID_KEY = "ACTIVE_PS_SITE_ID"
 
 _SITE_FIELDS = (
     "url",
-    "consumer_key",
-    "consumer_secret",
-    "wp_username",
-    "wp_app_password",
+    "api_key",
+    "verify_ssl",
+    "lang_id",
+    "root_category_id",
     "currency_is_toman",
 )
 
@@ -42,15 +46,15 @@ def site_display_label(site: dict | None) -> str:
 
 def _site_from_flat(config: dict) -> dict:
     cfg = config or {}
-    url = str(cfg.get("WC_URL") or "").strip()
+    url = str(cfg.get("PS_URL") or "").strip()
     return {
         "id": _new_site_id(),
         "label": _host_label(url),
         "url": url,
-        "consumer_key": str(cfg.get("WC_CONSUMER_KEY") or "").strip(),
-        "consumer_secret": str(cfg.get("WC_CONSUMER_SECRET") or "").strip(),
-        "wp_username": str(cfg.get("WP_USERNAME") or "").strip(),
-        "wp_app_password": str(cfg.get("WP_APP_PASSWORD") or "").strip(),
+        "api_key": str(cfg.get("PS_API_KEY") or "").strip(),
+        "verify_ssl": bool(cfg.get("PS_VERIFY_SSL", False)),
+        "lang_id": int(cfg.get("PS_LANG_ID") or 1),
+        "root_category_id": int(cfg.get("PS_ROOT_CATEGORY_ID") or 2),
         "currency_is_toman": bool(cfg.get("WC_CURRENCY_IS_TOMAN", True)),
     }
 
@@ -59,28 +63,36 @@ def _normalize_site(raw: dict) -> dict | None:
     if not isinstance(raw, dict):
         return None
     site_id = str(raw.get("id") or "").strip() or _new_site_id()
-    url = str(raw.get("url") or raw.get("WC_URL") or "").strip()
+    url = str(raw.get("url") or raw.get("PS_URL") or "").strip()
+    try:
+        lang_id = int(raw.get("lang_id") if raw.get("lang_id") is not None else raw.get("PS_LANG_ID") or 1)
+    except (TypeError, ValueError):
+        lang_id = 1
+    try:
+        root_category_id = int(
+            raw.get("root_category_id")
+            if raw.get("root_category_id") is not None
+            else raw.get("PS_ROOT_CATEGORY_ID") or 2
+        )
+    except (TypeError, ValueError):
+        root_category_id = 2
     return {
         "id": site_id,
         "label": str(raw.get("label") or "").strip() or _host_label(url),
         "url": url,
-        "consumer_key": str(raw.get("consumer_key") or raw.get("WC_CONSUMER_KEY") or "").strip(),
-        "consumer_secret": str(
-            raw.get("consumer_secret") or raw.get("WC_CONSUMER_SECRET") or ""
-        ).strip(),
-        "wp_username": str(raw.get("wp_username") or raw.get("WP_USERNAME") or "").strip(),
-        "wp_app_password": str(
-            raw.get("wp_app_password") or raw.get("WP_APP_PASSWORD") or ""
-        ).strip(),
+        "api_key": str(raw.get("api_key") or raw.get("PS_API_KEY") or "").strip(),
+        "verify_ssl": bool(raw.get("verify_ssl", raw.get("PS_VERIFY_SSL", False))),
+        "lang_id": lang_id,
+        "root_category_id": root_category_id,
         "currency_is_toman": bool(
             raw.get("currency_is_toman", raw.get("WC_CURRENCY_IS_TOMAN", True))
         ),
     }
 
 
-def get_wc_sites(config: dict | None) -> list[dict]:
+def get_ps_sites(config: dict | None) -> list[dict]:
     cfg = config or {}
-    sites_raw = cfg.get(WC_SITES_KEY)
+    sites_raw = cfg.get(PS_SITES_KEY)
     if not isinstance(sites_raw, list):
         return []
     sites: list[dict] = []
@@ -92,10 +104,10 @@ def get_wc_sites(config: dict | None) -> list[dict]:
 
 
 def get_active_site_id(config: dict | None) -> str:
-    return str((config or {}).get(ACTIVE_WC_SITE_ID_KEY) or "").strip()
+    return str((config or {}).get(ACTIVE_PS_SITE_ID_KEY) or "").strip()
 
 
-def find_wc_site(sites: list[dict], site_id: str) -> dict | None:
+def find_ps_site(sites: list[dict], site_id: str) -> dict | None:
     sid = (site_id or "").strip()
     if not sid:
         return None
@@ -106,28 +118,28 @@ def find_wc_site(sites: list[dict], site_id: str) -> dict | None:
 
 
 def apply_site_to_flat_keys(config: dict, site: dict | None) -> None:
-    """کلیدهای WC_* و WP_* را از یک پروفایل سایت پر می‌کند."""
+    """کلیدهای PS_* را از یک پروفایل سایت پر می‌کند."""
     cfg = config
     if not isinstance(site, dict):
         return
-    cfg["WC_URL"] = str(site.get("url") or "").strip()
-    cfg["WC_CONSUMER_KEY"] = str(site.get("consumer_key") or "").strip()
-    cfg["WC_CONSUMER_SECRET"] = str(site.get("consumer_secret") or "").strip()
-    cfg["WP_USERNAME"] = str(site.get("wp_username") or "").strip()
-    cfg["WP_APP_PASSWORD"] = str(site.get("wp_app_password") or "").strip()
+    cfg["PS_URL"] = str(site.get("url") or "").strip()
+    cfg["PS_API_KEY"] = str(site.get("api_key") or "").strip()
+    cfg["PS_VERIFY_SSL"] = bool(site.get("verify_ssl", False))
+    cfg["PS_LANG_ID"] = int(site.get("lang_id") or 1)
+    cfg["PS_ROOT_CATEGORY_ID"] = int(site.get("root_category_id") or 2)
     cfg["WC_CURRENCY_IS_TOMAN"] = bool(site.get("currency_is_toman", True))
 
 
-def ensure_wc_sites(config: dict | None) -> dict:
+def ensure_ps_sites(config: dict | None) -> dict:
     """مهاجرت از فرمت تک‌سایته و هم‌تراز کردن کلیدهای فعال."""
     cfg = dict(config or {})
-    sites = get_wc_sites(cfg)
+    sites = get_ps_sites(cfg)
     active_id = get_active_site_id(cfg)
 
     if not sites:
-        flat_url = str(cfg.get("WC_URL") or "").strip()
-        flat_ck = str(cfg.get("WC_CONSUMER_KEY") or "").strip()
-        if flat_url or flat_ck:
+        flat_url = str(cfg.get("PS_URL") or "").strip()
+        flat_key = str(cfg.get("PS_API_KEY") or "").strip()
+        if flat_url or flat_key:
             site = _site_from_flat(cfg)
             sites = [site]
             active_id = site["id"]
@@ -135,14 +147,14 @@ def ensure_wc_sites(config: dict | None) -> dict:
             sites = []
             active_id = ""
 
-    if active_id and not find_wc_site(sites, active_id):
+    if active_id and not find_ps_site(sites, active_id):
         active_id = str(sites[0]["id"]) if sites else ""
 
-    cfg[WC_SITES_KEY] = sites
-    cfg[ACTIVE_WC_SITE_ID_KEY] = active_id
+    cfg[PS_SITES_KEY] = sites
+    cfg[ACTIVE_PS_SITE_ID_KEY] = active_id
 
-    active = find_wc_site(sites, active_id)
-    if active and str(cfg.get("STORE_PLATFORM") or "woocommerce").strip().lower() != "prestashop":
+    active = find_ps_site(sites, active_id)
+    if active and str(cfg.get("STORE_PLATFORM") or "").strip().lower() == "prestashop":
         apply_site_to_flat_keys(cfg, active)
 
     return cfg
@@ -151,10 +163,10 @@ def ensure_wc_sites(config: dict | None) -> dict:
 def site_from_form(
     *,
     url: str,
-    consumer_key: str,
-    consumer_secret: str,
-    wp_username: str,
-    wp_app_password: str,
+    api_key: str,
+    verify_ssl: bool,
+    lang_id: int,
+    root_category_id: int,
     currency_is_toman: bool,
     site_id: str = "",
     label: str = "",
@@ -164,10 +176,10 @@ def site_from_form(
         "id": (site_id or "").strip() or _new_site_id(),
         "label": (label or "").strip() or _host_label(url),
         "url": url,
-        "consumer_key": (consumer_key or "").strip(),
-        "consumer_secret": (consumer_secret or "").strip(),
-        "wp_username": (wp_username or "").strip(),
-        "wp_app_password": (wp_app_password or "").strip(),
+        "api_key": (api_key or "").strip(),
+        "verify_ssl": bool(verify_ssl),
+        "lang_id": int(lang_id or 1),
+        "root_category_id": int(root_category_id or 2),
         "currency_is_toman": bool(currency_is_toman),
     }
     return site
@@ -177,29 +189,23 @@ def merge_form_into_site(
     site: dict,
     *,
     url: str,
-    consumer_key: str,
-    consumer_secret: str,
-    wp_username: str,
-    wp_app_password: str,
+    api_key: str,
+    verify_ssl: bool,
+    lang_id: int,
+    root_category_id: int,
     currency_is_toman: bool,
     preserve_secrets: bool = True,
 ) -> dict:
-    """فرم را در پروفایل ادغام می‌کند؛ فیلدهای خالی رمز را نگه می‌دارد."""
+    """فرم را در پروفایل ادغام می‌کند؛ فیلد خالی کلید API را نگه می‌دارد."""
     merged = dict(site or {})
     merged["url"] = (url or "").strip()
-    if (consumer_key or "").strip():
-        merged["consumer_key"] = consumer_key.strip()
+    if (api_key or "").strip():
+        merged["api_key"] = api_key.strip()
     elif not preserve_secrets:
-        merged["consumer_key"] = ""
-    if (consumer_secret or "").strip():
-        merged["consumer_secret"] = consumer_secret.strip()
-    elif not preserve_secrets:
-        merged["consumer_secret"] = ""
-    merged["wp_username"] = (wp_username or "").strip()
-    if (wp_app_password or "").strip():
-        merged["wp_app_password"] = wp_app_password.strip()
-    elif not preserve_secrets:
-        merged["wp_app_password"] = ""
+        merged["api_key"] = ""
+    merged["verify_ssl"] = bool(verify_ssl)
+    merged["lang_id"] = int(lang_id or 1)
+    merged["root_category_id"] = int(root_category_id or 2)
     merged["currency_is_toman"] = bool(currency_is_toman)
     if not str(merged.get("label") or "").strip():
         merged["label"] = _host_label(merged.get("url") or "")
@@ -213,7 +219,7 @@ def sync_sites_to_config(
     *,
     form_site: dict | None = None,
 ) -> dict:
-    """لیست سایت‌ها و سایت فعال را در config ذخیره و کلیدهای WC_* را به‌روز می‌کند."""
+    """لیستِ سایت‌ها و سایتِ فعال را در config ذخیره و کلیدهای PS_* را به‌روز می‌کند."""
     cfg = dict(config or {})
     normalized: list[dict] = []
     seen: set[str] = set()
@@ -242,13 +248,13 @@ def sync_sites_to_config(
                 normalized.append(fs)
             active_id = fs["id"]
 
-    if active_id and not find_wc_site(normalized, active_id):
+    if active_id and not find_ps_site(normalized, active_id):
         active_id = str(normalized[0]["id"]) if normalized else ""
 
-    cfg[WC_SITES_KEY] = normalized
-    cfg[ACTIVE_WC_SITE_ID_KEY] = active_id
+    cfg[PS_SITES_KEY] = normalized
+    cfg[ACTIVE_PS_SITE_ID_KEY] = active_id
 
-    active = find_wc_site(normalized, active_id)
+    active = find_ps_site(normalized, active_id)
     if active:
         apply_site_to_flat_keys(cfg, active)
 
@@ -260,10 +266,10 @@ def create_empty_site(*, label: str = "") -> dict:
         "id": _new_site_id(),
         "label": (label or "").strip() or "سایت جدید",
         "url": "",
-        "consumer_key": "",
-        "consumer_secret": "",
-        "wp_username": "",
-        "wp_app_password": "",
+        "api_key": "",
+        "verify_ssl": False,
+        "lang_id": 1,
+        "root_category_id": 2,
         "currency_is_toman": True,
     }
 

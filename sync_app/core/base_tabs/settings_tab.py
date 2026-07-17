@@ -587,6 +587,11 @@ class SettingsTab(QWidget):
         self._wc_site_switching = False
         self._wc_active_site_baseline = {}
         self._wc_guard_busy = False
+        self._ps_sites = []
+        self._active_ps_site_id = ""
+        self._ps_site_switching = False
+        self._ps_active_site_baseline = {}
+        self._ps_guard_busy = False
         self._last_success_sql_auth_mode = (self.config or {}).get("SQL_AUTH_MODE", "auto")
         self._dirty = False
         self._field_baselines = {}
@@ -1436,6 +1441,57 @@ class SettingsTab(QWidget):
         ps_section_label.setStyleSheet("font-weight:700; margin-top:10px;")
         wc_form_layout.addRow(QLabel(""), ps_section_label)
 
+        from sync_app.core.ps_site_profiles import (
+            copy_sites as ps_copy_sites,
+            create_empty_site as ps_create_empty_site,
+            find_ps_site,
+            get_active_site_id as ps_get_active_site_id,
+            get_ps_sites,
+            site_display_label as ps_site_display_label,
+        )
+
+        self._ps_sites = ps_copy_sites(get_ps_sites(self.config))
+        self._active_ps_site_id = ps_get_active_site_id(self.config)
+        if not self._ps_sites:
+            self._ps_sites = [ps_create_empty_site(label="سایت ۱")]
+            self._active_ps_site_id = str(self._ps_sites[0].get("id") or "")
+
+        self.ps_site_combo = QComboBox()
+        self.ps_site_combo.setMinimumHeight(38)
+        self.ps_site_combo.setLayoutDirection(Qt.LeftToRight)
+        self.ps_add_site_btn = QPushButton("➕ سایت جدید")
+        self.ps_add_site_btn.setMinimumHeight(38)
+        self.ps_delete_site_btn = QPushButton("🗑 حذف")
+        self.ps_delete_site_btn.setMinimumHeight(38)
+        self.ps_add_site_btn.clicked.connect(self._on_add_ps_site)
+        self.ps_delete_site_btn.clicked.connect(self._on_delete_ps_site)
+        self.ps_site_combo.currentIndexChanged.connect(self._on_ps_site_combo_changed)
+
+        self.ps_site_name_input = QLineEdit()
+        self.ps_site_name_input.setMinimumHeight(38)
+        self.ps_site_name_input.setPlaceholderText("نام دلخواه فروشگاه (مثلاً فروشگاه اصلی)")
+        self.ps_site_name_input.editingFinished.connect(self._on_ps_site_name_changed)
+
+        ps_site_row = QWidget()
+        ps_site_row_layout = QHBoxLayout(ps_site_row)
+        ps_site_row_layout.setContentsMargins(0, 0, 0, 0)
+        ps_site_row_layout.setSpacing(8)
+        ps_site_row_layout.addWidget(self.ps_site_combo, 1)
+        ps_site_row_layout.addWidget(self.ps_add_site_btn)
+        ps_site_row_layout.addWidget(self.ps_delete_site_btn)
+
+        ps_sites_help = QLabel(
+            "هر فروشگاه با URL و کلید Webservice جدا ذخیره می‌شود.\n"
+            "اگر تنظیمات مربوط به فروشگاه دیگری است، «سایت جدید +» بزنید — "
+            "ویرایش پروفایل موجود، اطلاعات همان سایت را بازنویسی می‌کند."
+        )
+        ps_sites_help.setStyleSheet("color:#64748b; font-size:10px;")
+        ps_sites_help.setWordWrap(True)
+
+        wc_form_layout.addRow(QLabel("فروشگاه پرستاشاپ:"), ps_site_row)
+        wc_form_layout.addRow(QLabel("نام سایت:"), self.ps_site_name_input)
+        wc_form_layout.addRow(QLabel(""), ps_sites_help)
+
         self.ps_url_input = QLineEdit(self.config.get("PS_URL", ""))
         self.ps_url_input.setPlaceholderText("https://your-prestashop-store.com")
         self.ps_api_key_input = PasswordLineEdit(self.config.get("PS_API_KEY", ""))
@@ -1464,6 +1520,14 @@ class SettingsTab(QWidget):
         wc_form_layout.addRow(QLabel(""), ps_api_help)
         wc_form_layout.addRow(QLabel(""), self.ps_test_button)
 
+        self._refresh_ps_site_combo(select_id=self._active_ps_site_id)
+        active_ps_site = find_ps_site(self._ps_sites, self._active_ps_site_id)
+        if active_ps_site:
+            self.ps_url_input.setText(str(active_ps_site.get("url") or self.ps_url_input.text()))
+            self.ps_api_key_input.setText(str(active_ps_site.get("api_key") or self.ps_api_key_input.text()))
+            self.ps_site_name_input.setText(str(active_ps_site.get("label") or ""))
+        self._snapshot_ps_site_baseline()
+
         # --- نمایش/مخفی‌کردن فیلدهای مخصوص هر پلتفرم بر اساس store_platform_combo ---
         # currency_combo/product_mode_combo عمداً اینجا نیستن — این دو مشترک بین هر
         # دو پلتفرمن (تبدیل قیمت ERP و نوع محصول)، نه مخصوص ووکامرس.
@@ -1480,6 +1544,7 @@ class SettingsTab(QWidget):
         ]
         self._ps_only_fields = [
             ps_section_label,
+            ps_site_row, self.ps_site_name_input, ps_sites_help,
             self.ps_url_input, self.ps_api_key_input,
             ps_api_help, self.ps_test_button,
         ]
@@ -1734,6 +1799,7 @@ class SettingsTab(QWidget):
             self.font_size_combo, self.erp_provider_combo, self.currency_combo,
             self.default_customer_mode_combo, self.login_screen_enabled_checkbox,
             self.auto_update_enabled_checkbox,
+            self.ps_url_input, self.ps_api_key_input, self.ps_site_combo, self.ps_site_name_input,
         ] + list(self._field_sync_checkboxes.values()) + list(self._force_full_sync_checkboxes.values())
 
         _text_inputs = [
@@ -1743,6 +1809,7 @@ class SettingsTab(QWidget):
             self.timeout_input, self.wc_site_name_input,
             self.app_login_username_input, self.app_login_password_input, self.license_server_url_input,
             self.license_api_key_input, self.default_customer_code_input,
+            self.ps_url_input, self.ps_api_key_input, self.ps_site_name_input,
         ]
         for w in _text_inputs:
             w.textChanged.connect(self._on_settings_field_changed)
@@ -3014,6 +3081,324 @@ class SettingsTab(QWidget):
         self._active_wc_site_id = str(updated.get("ACTIVE_WC_SITE_ID") or self._active_wc_site_id)
         return updated
 
+    # ------------------------------------------------------------------
+    # چند سایتِ پرستاشاپ — هم‌ساختار با متدهای چندسایتیِ ووکامرسِ بالا
+    # ------------------------------------------------------------------
+
+    def _ps_form_values(self):
+        cfg = self.config or {}
+        return {
+            "url": self.ps_url_input.text().strip(),
+            "api_key": self.ps_api_key_input.text().strip(),
+            "verify_ssl": bool(cfg.get("PS_VERIFY_SSL", False)),
+            "lang_id": int(cfg.get("PS_LANG_ID") or 1),
+            "root_category_id": int(cfg.get("PS_ROOT_CATEGORY_ID") or 2),
+            "currency_is_toman": bool(self.currency_combo.currentData()),
+        }
+
+    def _current_ps_form_site(self) -> dict:
+        from sync_app.core.ps_site_profiles import find_ps_site, site_display_label, site_from_form
+
+        active = find_ps_site(self._ps_sites, self._active_ps_site_id) or {}
+        merged = {**active, **self._ps_form_values()}
+        label = (self.ps_site_name_input.text() or "").strip() or site_display_label(merged)
+        return site_from_form(
+            site_id=self._active_ps_site_id,
+            label=label,
+            **self._ps_form_values(),
+        )
+
+    def _snapshot_ps_site_baseline(self):
+        from sync_app.core.ps_site_profiles import find_ps_site
+
+        site = find_ps_site(self._ps_sites, self._active_ps_site_id)
+        self._ps_active_site_baseline = copy.deepcopy(site) if site else {}
+
+    def _needs_ps_site_guard(self) -> bool:
+        from sync_app.core.ps_site_edit_guard import ps_site_credentials_changed, ps_site_is_saved_profile
+
+        if self._ps_guard_busy or self._ps_site_switching:
+            return False
+        baseline = self._ps_active_site_baseline or {}
+        if not ps_site_is_saved_profile(baseline):
+            return False
+        return ps_site_credentials_changed(baseline, self._current_ps_form_site())
+
+    def _guard_ps_site_save(self) -> str:
+        from sync_app.core.ps_site_edit_guard import (
+            ACTION_CANCEL,
+            ACTION_NEW_SITE,
+            ACTION_PROCEED,
+            confirm_ps_site_edit,
+        )
+
+        if not self._needs_ps_site_guard():
+            return ACTION_PROCEED
+
+        self._ps_guard_busy = True
+        try:
+            action = confirm_ps_site_edit(
+                self,
+                baseline_site=self._ps_active_site_baseline,
+                form_site=self._current_ps_form_site(),
+            )
+            if action == ACTION_CANCEL:
+                self._revert_ps_form_to_baseline()
+            elif action == ACTION_NEW_SITE:
+                self._promote_ps_form_to_new_site()
+            return action
+        finally:
+            self._ps_guard_busy = False
+
+    def _revert_ps_form_to_baseline(self):
+        if not self._ps_active_site_baseline:
+            return
+        self._load_ps_site_into_form(self._ps_active_site_baseline, refresh_baseline=False)
+
+    def _promote_ps_form_to_new_site(self):
+        from sync_app.core.ps_site_profiles import (
+            find_ps_site,
+            site_display_label,
+            site_from_form,
+        )
+        from sync_app.core.ps_site_edit_guard import restore_site_in_list
+
+        active_id = (self._active_ps_site_id or "").strip()
+        form_site = self._current_ps_form_site()
+        baseline = self._ps_active_site_baseline or find_ps_site(self._ps_sites, active_id) or {}
+
+        self._ps_sites = restore_site_in_list(self._ps_sites, active_id, baseline)
+
+        label = (form_site.get("label") or "").strip() or site_display_label(form_site)
+        new_site = site_from_form(
+            url=form_site.get("url") or "",
+            api_key=form_site.get("api_key") or "",
+            verify_ssl=bool(form_site.get("verify_ssl", False)),
+            lang_id=int(form_site.get("lang_id") or 1),
+            root_category_id=int(form_site.get("root_category_id") or 2),
+            currency_is_toman=bool(form_site.get("currency_is_toman", True)),
+            label=label,
+        )
+        self._ps_sites.append(new_site)
+        self._active_ps_site_id = str(new_site.get("id") or "")
+        self._refresh_ps_site_combo(select_id=self._active_ps_site_id)
+        self._load_ps_site_into_form(new_site)
+        self._apply_active_ps_site_to_runtime_config()
+        self._refresh_dirty_state()
+        append_system_log(
+            "settings",
+            f"تنظیمات PrestaShop به‌عنوان سایت جدید «{label}» ذخیره شد — پروفایل قبلی بازگردانده شد.",
+        )
+
+    def _stash_ps_form_to_active_site(self):
+        active_id = (self._active_ps_site_id or "").strip()
+        if not active_id:
+            return
+        from sync_app.core.ps_site_profiles import find_ps_site, merge_form_into_site, site_display_label
+
+        site = find_ps_site(self._ps_sites, active_id)
+        if site is None:
+            return
+        merged = merge_form_into_site(site, preserve_secrets=True, **self._ps_form_values())
+        custom = (self.ps_site_name_input.text() or "").strip()
+        merged["label"] = custom or site_display_label(merged)
+        for idx, item in enumerate(self._ps_sites):
+            if str(item.get("id")) == active_id:
+                self._ps_sites[idx] = merged
+                break
+
+    def _quick_save_ps_sites(self, *, broadcast: bool = True, skip_guard: bool = False) -> bool:
+        """ذخیره فوری پروفایل‌های PrestaShop — بدون انتظار «ذخیره تنظیمات» کامل."""
+        from sync_app.core.ps_site_edit_guard import ACTION_CANCEL, ACTION_NEW_SITE, ACTION_PROCEED
+
+        action = ACTION_PROCEED
+        if not skip_guard:
+            action = self._guard_ps_site_save()
+            if action == ACTION_CANCEL:
+                return False
+
+        try:
+            self._stash_ps_form_to_active_site()
+            config = load_secure_config(None) or {}
+            config = self._apply_ps_sites_to_config_dict(config)
+            save_secure_config(config)
+            self.config = dict(config)
+            self._snapshot_ps_site_baseline()
+            if broadcast:
+                self._broadcast_wc_config_reload()
+            if action == ACTION_NEW_SITE:
+                self.status_label.setText("✅ به‌عنوان سایت جدید ذخیره شد")
+                self.status_label.setStyleSheet(
+                    "color: #166534; font-weight: 700; font-size: 12px; "
+                    "padding: 6px 14px; background: #dcfce7; border-radius: 8px;"
+                )
+            return True
+        except Exception as exc:
+            append_system_log("settings", f"ذخیره سایت PrestaShop: {exc}", level="ERROR")
+            return False
+
+    def _on_ps_site_name_changed(self):
+        if self._ps_site_switching:
+            return
+        from sync_app.core.ps_site_profiles import find_ps_site, site_display_label
+
+        site = find_ps_site(self._ps_sites, self._active_ps_site_id)
+        if site is None:
+            return
+        custom = (self.ps_site_name_input.text() or "").strip()
+        site["label"] = custom or site_display_label({**site, "url": self.ps_url_input.text().strip()})
+        self._refresh_ps_site_combo(select_id=self._active_ps_site_id)
+        self._quick_save_ps_sites(broadcast=False)
+        self._on_settings_field_changed()
+
+    def _load_ps_site_into_form(self, site, *, refresh_baseline: bool = True):
+        self._ps_site_switching = True
+        try:
+            site = site or {}
+            self.ps_url_input.setText(str(site.get("url") or ""))
+            self.ps_api_key_input.setText(str(site.get("api_key") or ""))
+            self.ps_site_name_input.setText(str(site.get("label") or ""))
+        finally:
+            self._ps_site_switching = False
+        if refresh_baseline:
+            self._snapshot_ps_site_baseline()
+
+    def _refresh_ps_site_combo(self, *, select_id=None):
+        from sync_app.core.ps_site_profiles import site_display_label
+
+        self._ps_site_switching = True
+        try:
+            self.ps_site_combo.blockSignals(True)
+            self.ps_site_combo.clear()
+            for site in self._ps_sites:
+                sid = str(site.get("id") or "")
+                self.ps_site_combo.addItem(site_display_label(site), sid)
+            target = (select_id or self._active_ps_site_id or "").strip()
+            idx = self.ps_site_combo.findData(target)
+            if idx >= 0:
+                self.ps_site_combo.setCurrentIndex(idx)
+            elif self.ps_site_combo.count():
+                self.ps_site_combo.setCurrentIndex(0)
+                self._active_ps_site_id = str(self.ps_site_combo.currentData() or "")
+            self.ps_delete_site_btn.setEnabled(len(self._ps_sites) > 1)
+        finally:
+            self.ps_site_combo.blockSignals(False)
+            self._ps_site_switching = False
+
+    def _apply_active_ps_site_to_runtime_config(self):
+        from sync_app.core.ps_site_profiles import apply_site_to_flat_keys, find_ps_site
+
+        site = find_ps_site(self._ps_sites, self._active_ps_site_id)
+        if site:
+            apply_site_to_flat_keys(self.config, site)
+
+    def _on_ps_site_combo_changed(self, _index):
+        if self._ps_site_switching:
+            return
+        from sync_app.core.ps_site_profiles import find_ps_site
+        from sync_app.core.ps_site_edit_guard import ACTION_CANCEL, ACTION_NEW_SITE, ACTION_PROCEED
+
+        new_id = str(self.ps_site_combo.currentData() or "").strip()
+        if not new_id or new_id == self._active_ps_site_id:
+            return
+
+        prev_id = (self._active_ps_site_id or "").strip()
+        action = ACTION_PROCEED
+        if self._needs_ps_site_guard():
+            action = self._guard_ps_site_save()
+            if action == ACTION_CANCEL:
+                self._ps_site_switching = True
+                try:
+                    self.ps_site_combo.blockSignals(True)
+                    idx = self.ps_site_combo.findData(prev_id)
+                    if idx >= 0:
+                        self.ps_site_combo.setCurrentIndex(idx)
+                finally:
+                    self.ps_site_combo.blockSignals(False)
+                    self._ps_site_switching = False
+                return
+
+        if action == ACTION_NEW_SITE:
+            self._quick_save_ps_sites(broadcast=True, skip_guard=True)
+            self._on_settings_field_changed()
+            return
+
+        self._stash_ps_form_to_active_site()
+        self._active_ps_site_id = new_id
+        site = find_ps_site(self._ps_sites, new_id)
+        self._load_ps_site_into_form(site)
+        self._apply_active_ps_site_to_runtime_config()
+        self._quick_save_ps_sites(broadcast=True, skip_guard=True)
+        self._on_settings_field_changed()
+
+    def _on_add_ps_site(self):
+        from sync_app.core.ps_site_profiles import create_empty_site, find_ps_site
+
+        self._stash_ps_form_to_active_site()
+        site = create_empty_site(label=f"سایت {len(self._ps_sites) + 1}")
+        self._ps_sites.append(site)
+        self._active_ps_site_id = str(site.get("id") or "")
+        self._refresh_ps_site_combo(select_id=self._active_ps_site_id)
+        self._load_ps_site_into_form(site)
+        self._apply_active_ps_site_to_runtime_config()
+        self._quick_save_ps_sites(broadcast=True)
+        self.ps_url_input.setFocus()
+        self._on_settings_field_changed()
+
+    def _on_delete_ps_site(self):
+        from sync_app.core.ps_site_profiles import find_ps_site, site_display_label
+
+        if len(self._ps_sites) <= 1:
+            QMessageBox.information(
+                self,
+                "حذف سایت",
+                "حداقل یک سایت باید باقی بماند.\nبرای قطع اتصال، فیلدهای آن را خالی کنید.",
+            )
+            return
+        active_id = (self._active_ps_site_id or "").strip()
+        label = site_display_label(find_ps_site(self._ps_sites, active_id))
+        answer = QMessageBox.question(
+            self,
+            "حذف سایت",
+            f"سایت «{label}» حذف شود؟",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        self._ps_sites = [s for s in self._ps_sites if str(s.get("id")) != active_id]
+        self._active_ps_site_id = str(self._ps_sites[0].get("id") or "")
+        self._refresh_ps_site_combo(select_id=self._active_ps_site_id)
+        self._load_ps_site_into_form(find_ps_site(self._ps_sites, self._active_ps_site_id))
+        self._apply_active_ps_site_to_runtime_config()
+        self._quick_save_ps_sites(broadcast=True)
+        self._on_settings_field_changed()
+
+    def _apply_ps_sites_to_config_dict(self, config):
+        from sync_app.core.ps_site_profiles import (
+            find_ps_site,
+            site_display_label,
+            site_from_form,
+            sync_sites_to_config,
+        )
+
+        self._stash_ps_form_to_active_site()
+        active = find_ps_site(self._ps_sites, self._active_ps_site_id) or {}
+        form_site = site_from_form(
+            site_id=self._active_ps_site_id,
+            label=(self.ps_site_name_input.text() or "").strip() or site_display_label(active),
+            **self._ps_form_values(),
+        )
+        updated = sync_sites_to_config(
+            config,
+            self._ps_sites,
+            self._active_ps_site_id,
+            form_site=form_site,
+        )
+        self._ps_sites = list(updated.get("PS_SITES") or self._ps_sites)
+        self._active_ps_site_id = str(updated.get("ACTIVE_PS_SITE_ID") or self._active_ps_site_id)
+        return updated
+
     def _wc_config_from_form(self):
         timeout_sec = self.get_optimized_timeout()
         return {
@@ -3681,6 +4066,11 @@ class SettingsTab(QWidget):
         self._refresh_dirty_state()
 
     def _refresh_dirty_state(self):
+        if not hasattr(self, "status_label"):
+            # ممکنه در حینِ ساختِ init_ui، هایدشدن/دیده‌شدنِ یک فیلدِ ووکامرس/پرستاشاپ
+            # (در _apply_platform_field_visibility) سیگنالِ editingFinished رو زودتر
+            # از تکمیلِ کاملِ UI شلیک کنه — تا اون موقع چیزی برای رفرش نیست.
+            return
         any_modified = False
         for widget in self._tracked_widgets:
             baseline = self._field_baselines.get(id(widget))
@@ -4119,7 +4509,20 @@ class SettingsTab(QWidget):
                     )
                     return
 
+            from sync_app.core.ps_site_edit_guard import ACTION_CANCEL as PS_ACTION_CANCEL
+
+            if self._needs_ps_site_guard():
+                ps_guard_action = self._guard_ps_site_save()
+                if ps_guard_action == PS_ACTION_CANCEL:
+                    self.status_label.setText("● ذخیره لغو شد — تغییرات PrestaShop برگردانده شد")
+                    self.status_label.setStyleSheet(
+                        "color: #92400e; font-weight: 700; font-size: 12px; "
+                        "padding: 6px 14px; background: #fef3c7; border-radius: 8px;"
+                    )
+                    return
+
             config_to_save = self._apply_wc_sites_to_config_dict(config_to_save)
+            config_to_save = self._apply_ps_sites_to_config_dict(config_to_save)
             config_to_save["WC_PARALLEL_WORKERS"] = int(self.parallel_workers_spin.value())
             old_product_mode = str(self.config.get("PRODUCT_MODE", "with_variants"))
             new_product_mode = self.product_mode_combo.currentData()
