@@ -499,6 +499,8 @@ class Peecha_LM_Admin
                 'license_expires' => $license_expires,
                 'updates_until' => Peecha_LM_License::cap_updates_until($license_expires, $updates_until),
                 'notes' => sanitize_textarea_field((string) ($_POST['notes'] ?? '')),
+                'max_sites' => Peecha_LM_License::normalize_max_sites($_POST['max_sites'] ?? 0),
+                'platform_scope' => Peecha_LM_License::normalize_platform_scope($_POST['platform_scope'] ?? 'both'),
             ));
             if ($new_status === 'active') {
                 $unblock_hwid = $new_hwid;
@@ -889,49 +891,36 @@ class Peecha_LM_Admin
                                 'بروزرسانی تا این تاریخ مجاز است. نمی‌تواند از تاریخ انقضای لایسنس بیشتر باشد.'
                             ); ?>
                         </div>
-                        <?php if (!$edit_row) : ?>
-                            <div class="peecha-lm-field">
-                                <label><?php echo esc_html(self::t('Sites allowed', 'تعداد سایت مجاز')); ?></label>
-                                <input type="number" name="max_sites" min="0" step="1" value="1" class="small-text" />
-                                <?php self::hint(
-                                    'Number of distinct store URLs allowed (locked to the first N the app connects to). Enter 0 for unlimited.',
-                                    'تعدادِ آدرس‌های فروشگاهیِ متفاوتِ مجاز (لایسنس با اولین N سایتی که برنامه به آن‌ها وصل شود قفل می‌شود). برای نامحدود، عدد 0 را وارد کنید.'
-                                ); ?>
-                            </div>
-                            <div class="peecha-lm-field">
-                                <label><?php echo esc_html(self::t('Platform', 'پلتفرم')); ?></label>
-                                <select name="platform_scope">
-                                    <option value="both"><?php echo esc_html(self::t('WooCommerce + PrestaShop', 'ووکامرس + پرستاشاپ')); ?></option>
-                                    <option value="wc"><?php echo esc_html(self::t('WooCommerce only', 'فقط ووکامرس')); ?></option>
-                                    <option value="ps"><?php echo esc_html(self::t('PrestaShop only', 'فقط پرستاشاپ')); ?></option>
-                                </select>
-                                <?php self::hint(
-                                    'Which store platform(s) this license may be used with.',
-                                    'این لایسنس روی کدام پلتفرمِ فروشگاهی قابلِ استفاده باشد.'
-                                ); ?>
-                            </div>
-                        <?php else : ?>
+                        <?php $field_max_sites = $edit_row ? (int) ($edit_row['max_sites'] ?? 0) : 1; ?>
+                        <div class="peecha-lm-field">
+                            <label><?php echo esc_html(self::t('Sites allowed', 'تعداد سایت مجاز')); ?></label>
+                            <input type="number" name="max_sites" min="0" step="1" value="<?php echo esc_attr((string) $field_max_sites); ?>" class="small-text" />
+                            <?php self::hint(
+                                'Number of distinct store URLs allowed (locked to the first N the app connects to). Enter 0 for unlimited.',
+                                'تعدادِ آدرس‌های فروشگاهیِ متفاوتِ مجاز (لایسنس با اولین N سایتی که برنامه به آن‌ها وصل شود قفل می‌شود). برای نامحدود، عدد 0 را وارد کنید.'
+                            ); ?>
+                        </div>
+                        <div class="peecha-lm-field">
+                            <label><?php echo esc_html(self::t('Platform', 'پلتفرم')); ?></label>
+                            <select name="platform_scope">
+                                <?php $field_platform = $edit_row ? ($edit_row['platform_scope'] ?? 'both') : 'both'; ?>
+                                <option value="both" <?php selected($field_platform, 'both'); ?>><?php echo esc_html(self::t('WooCommerce + PrestaShop', 'ووکامرس + پرستاشاپ')); ?></option>
+                                <option value="wc" <?php selected($field_platform, 'wc'); ?>><?php echo esc_html(self::t('WooCommerce only', 'فقط ووکامرس')); ?></option>
+                                <option value="ps" <?php selected($field_platform, 'ps'); ?>><?php echo esc_html(self::t('PrestaShop only', 'فقط پرستاشاپ')); ?></option>
+                            </select>
+                            <?php self::hint(
+                                'Which store platform(s) this license may be used with.',
+                                'این لایسنس روی کدام پلتفرمِ فروشگاهی قابلِ استفاده باشد.'
+                            ); ?>
+                        </div>
+                        <?php if ($edit_row) : ?>
                             <div class="peecha-lm-field peecha-lm-field--full">
-                                <label><?php echo esc_html(self::t('Sites / Platform scope', 'محدودیتِ سایت / پلتفرم')); ?></label>
-                                <p class="description">
-                                    <?php
-                                    $scope_max_sites = (int) ($edit_row['max_sites'] ?? 0);
-                                    $scope_sites = $scope_max_sites > 0
-                                        ? sprintf(self::t('%d site(s)', '%d سایت'), $scope_max_sites)
-                                        : self::t('Unlimited sites', 'نامحدود');
-                                    $scope_platform_map = array(
-                                        'wc' => self::t('WooCommerce only', 'فقط ووکامرس'),
-                                        'ps' => self::t('PrestaShop only', 'فقط پرستاشاپ'),
-                                        'both' => self::t('WooCommerce + PrestaShop', 'ووکامرس + پرستاشاپ'),
-                                    );
-                                    $scope_platform = $scope_platform_map[$edit_row['platform_scope'] ?? 'both'] ?? $scope_platform_map['both'];
-                                    echo esc_html($scope_sites . ' — ' . $scope_platform);
-                                    ?>
+                                <p class="description" style="color:#b45309;">
+                                    <?php echo esc_html(self::t(
+                                        'These limits are baked into the signed key. After changing them, click "Regenerate signed key" below so the change actually takes effect for the customer.',
+                                        'این محدودیت‌ها داخلِ کلیدِ امضاشده ثبت می‌شن. بعد از تغییرشون، برای اینکه واقعاً روی مشتری اعمال بشه، پایینِ همین صفحه دکمه‌ی «ساخت مجدد کلید امضا‌شده» را بزنید.'
+                                    )); ?>
                                 </p>
-                                <?php self::hint(
-                                    'Baked into the signed key at creation — cannot be changed by editing. Issue a new license to change it.',
-                                    'این مقدار داخلِ کلیدِ امضاشده در لحظه‌ی ساخت ثبت شده — با ویرایش تغییر نمی‌کند؛ برای تغییرش باید لایسنسِ جدید صادر شود.'
-                                ); ?>
                             </div>
                         <?php endif; ?>
                         <div class="peecha-lm-field peecha-lm-field--full">
@@ -944,12 +933,28 @@ class Peecha_LM_Admin
                         </div>
                         <?php if ($edit_row) : ?>
                             <div class="peecha-lm-field peecha-lm-field--full">
-                                <label><?php echo esc_html(self::t('Website', 'وب‌سایت مشتری')); ?></label>
-                                <?php $edit_site = trim((string) ($edit_row['site_url'] ?? '')); ?>
-                                <?php if ($edit_site !== '') : ?>
-                                    <p><a href="<?php echo esc_url($edit_site); ?>" target="_blank" rel="noopener"><?php echo esc_html($edit_site); ?></a></p>
+                                <?php $edit_sites_seen = Peecha_LM_DB::decode_sites_seen($edit_row); ?>
+                                <label>
+                                    <?php echo esc_html(sprintf(
+                                        self::t('Websites seen (%d)', 'سایت‌های دیده‌شده (%d)'),
+                                        count($edit_sites_seen)
+                                    )); ?>
+                                </label>
+                                <?php if ($edit_sites_seen) : ?>
+                                    <ul class="peecha-lm-site-list">
+                                        <?php foreach ($edit_sites_seen as $site_entry) : ?>
+                                            <?php $entry_url = trim((string) ($site_entry['url'] ?? '')); ?>
+                                            <?php if ($entry_url === '') { continue; } ?>
+                                            <li>
+                                                <a href="<?php echo esc_url($entry_url); ?>" target="_blank" rel="noopener"><?php echo esc_html($entry_url); ?></a>
+                                                <?php if (!empty($site_entry['first_seen'])) : ?>
+                                                    <small style="color:#64748b;"> — <?php echo esc_html((string) $site_entry['first_seen']); ?></small>
+                                                <?php endif; ?>
+                                            </li>
+                                        <?php endforeach; ?>
+                                    </ul>
                                 <?php else : ?>
-                                    <p class="description"><?php echo esc_html(self::t('Filled when client connects with WooCommerce URL in settings.', 'با اتصال کلاینت و آدرس ووکامرس در تنظیمات پر می‌شود.')); ?></p>
+                                    <p class="description"><?php echo esc_html(self::t('Filled automatically when the app connects.', 'با اتصال برنامه به‌صورت خودکار پر می‌شود.')); ?></p>
                                 <?php endif; ?>
                             </div>
                             <div class="peecha-lm-field peecha-lm-field--full">
@@ -1020,13 +1025,14 @@ class Peecha_LM_Admin
                                 <th><?php echo esc_html(self::t('Expires', 'انقضا')); ?></th>
                                 <th><?php echo esc_html(self::t('Updates until', 'بروزرسانی تا')); ?></th>
                                 <th><?php echo esc_html(self::t('Last seen', 'آخرین اتصال')); ?></th>
-                                <th><?php echo esc_html(self::t('Website', 'وب‌سایت')); ?></th>
+                                <th><?php echo esc_html(self::t('Platform', 'پلتفرم')); ?></th>
+                                <th><?php echo esc_html(self::t('Sites', 'سایت‌ها')); ?></th>
                                 <th><?php echo esc_html(self::t('Actions', 'عملیات')); ?></th>
                             </tr>
                         </thead>
                         <tbody>
                         <?php if (!$licenses) : ?>
-                            <tr><td colspan="9" class="peecha-lm-empty"><?php echo esc_html(self::t('No licenses yet.', 'هنوز لایسنسی ثبت نشده.')); ?></td></tr>
+                            <tr><td colspan="10" class="peecha-lm-empty"><?php echo esc_html(self::t('No licenses yet.', 'هنوز لایسنسی ثبت نشده.')); ?></td></tr>
                         <?php else : ?>
                             <?php foreach ($licenses as $row) : ?>
                                 <tr>
@@ -1045,9 +1051,34 @@ class Peecha_LM_Admin
                                     <td class="peecha-gdate" data-gdate="<?php echo esc_attr($row['updates_until']); ?>"><?php echo esc_html($row['updates_until']); ?></td>
                                     <td><?php echo esc_html($row['last_seen_at'] ?: '—'); ?></td>
                                     <td>
-                                        <?php $site = trim((string) ($row['site_url'] ?? '')); ?>
-                                        <?php if ($site !== '') : ?>
-                                            <a href="<?php echo esc_url($site); ?>" target="_blank" rel="noopener"><?php echo esc_html(preg_replace('#^https?://#i', '', untrailingslashit($site))); ?></a>
+                                        <?php
+                                        $row_platform_map = array(
+                                            'wc' => self::t('WooCommerce', 'ووکامرس'),
+                                            'ps' => self::t('PrestaShop', 'پرستاشاپ'),
+                                            'both' => self::t('WC + PS', 'هر دو'),
+                                        );
+                                        echo esc_html($row_platform_map[$row['platform_scope'] ?? 'both'] ?? $row_platform_map['both']);
+                                        ?>
+                                    </td>
+                                    <td>
+                                        <?php
+                                        $row_sites_seen = Peecha_LM_DB::decode_sites_seen($row);
+                                        $row_max_sites = (int) ($row['max_sites'] ?? 0);
+                                        $row_max_label = $row_max_sites > 0 ? (string) $row_max_sites : '∞';
+                                        ?>
+                                        <?php if ($row_sites_seen) : ?>
+                                            <span title="<?php
+                                                echo esc_attr(implode("\n", array_map(
+                                                    static function ($entry) { return (string) ($entry['url'] ?? ''); },
+                                                    $row_sites_seen
+                                                )));
+                                            ?>">
+                                                <?php echo esc_html(preg_replace('#^https?://#i', '', untrailingslashit((string) ($row_sites_seen[0]['url'] ?? '')))); ?>
+                                                <?php if (count($row_sites_seen) > 1) : ?>
+                                                    <span class="peecha-lm-site-count">+<?php echo esc_html((string) (count($row_sites_seen) - 1)); ?></span>
+                                                <?php endif; ?>
+                                            </span>
+                                            <br /><small style="color:#64748b;"><?php echo esc_html(count($row_sites_seen) . ' / ' . $row_max_label); ?></small>
                                         <?php else : ?>
                                             —
                                         <?php endif; ?>
