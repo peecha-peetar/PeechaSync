@@ -88,9 +88,14 @@ def normalize_template(raw: dict | None) -> dict:
 
 
 def _field_value(field: dict, context: dict) -> str:
+    """مقدارِ نهاییِ فیلد. برای هر نوعی به‌جز نام/قیمتِ محصول (که همیشه باید
+    از خودِ محصول باشن)، اگه کاربر توی جعبه‌ی «متن» چیزی نوشته باشه، همون
+    override به‌جایِ مقدارِ خودکار (از تنظیمات/سایت) استفاده می‌شه — تا
+    بدونِ نیاز به پرکردنِ تنظیماتِ سراسری هم بشه فیلدها رو پر کرد."""
     ftype = field.get("type")
+    override = str(field.get("text") or "").strip()
     if ftype == "custom_text":
-        return str(field.get("text") or "").strip()
+        return override
     if ftype == "product_name":
         return str(context.get("name") or "").strip()
     if ftype == "price":
@@ -99,21 +104,21 @@ def _field_value(field: dict, context: dict) -> str:
             return ""
         return f"{_fmt_price(price)} تومان"
     if ftype == "description":
-        return str(context.get("description") or "").strip()
+        return override or str(context.get("description") or "").strip()
     if ftype == "link":
-        return str(context.get("permalink") or context.get("link") or "").strip()
+        return override or str(context.get("permalink") or context.get("link") or "").strip()
     if ftype == "site_address":
-        return str(context.get("site_address") or "").strip()
+        return override or str(context.get("site_address") or "").strip()
     if ftype == "phone":
-        return str(context.get("phone") or "").strip()
+        return override or str(context.get("phone") or "").strip()
     if ftype == "social_instagram":
-        v = str(context.get("social_instagram") or "").strip()
+        v = override or str(context.get("social_instagram") or "").strip()
         return f"اینستاگرام: {v}" if v else ""
     if ftype == "social_telegram":
-        v = str(context.get("social_telegram") or "").strip()
+        v = override or str(context.get("social_telegram") or "").strip()
         return f"تلگرام: {v}" if v else ""
     if ftype == "social_whatsapp":
-        v = str(context.get("social_whatsapp") or "").strip()
+        v = override or str(context.get("social_whatsapp") or "").strip()
         return f"واتساپ: {v}" if v else ""
     return ""
 

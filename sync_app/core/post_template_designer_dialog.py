@@ -34,10 +34,14 @@ from sync_app.core.post_template_renderer import (
 )
 
 _EMOJI_CHOICES = [
-    "🔥", "✅", "❌", "⭐", "🎉", "🎁", "📦", "🚚", "💯", "💰", "🏷️", "🛍️",
-    "📱", "📸", "✨", "👍", "❤️", "😍", "🆕", "⚡", "🔔", "📢", "💬", "🔗",
-    "🕒", "📍", "🎯", "✔️", "➡️", "⬅️", "👇", "👉", "🌟", "💎", "🥇",
-    "🔵", "🟢", "🟡", "🔴", "⚠️",
+    ("🔥", "آتش/داغ"), ("✅", "تیک"), ("❌", "ضربدر"), ("⭐", "ستاره"), ("🎉", "جشن"),
+    ("🎁", "هدیه"), ("📦", "بسته"), ("🚚", "ارسال"), ("💯", "صددرصد"), ("💰", "پول"),
+    ("🏷️", "برچسبِ تخفیف"), ("🛍️", "خرید"), ("📱", "موبایل"), ("📸", "دوربین"), ("✨", "درخشش"),
+    ("👍", "لایک"), ("❤️", "قلب"), ("😍", "عاشق"), ("🆕", "جدید"), ("⚡", "فوری"),
+    ("🔔", "زنگ/اعلان"), ("📢", "اطلاعیه"), ("💬", "پیام"), ("🔗", "لینک"), ("🕒", "زمان"),
+    ("📍", "مکان"), ("🎯", "هدف"), ("✔️", "چک"), ("➡️", "فلشِ راست"), ("⬅️", "فلشِ چپ"),
+    ("👇", "پایین"), ("👉", "اشاره‌ی راست"), ("🌟", "ستاره‌ی درخشان"), ("💎", "الماس"), ("🥇", "طلا"),
+    ("🔵", "دایره‌ی آبی"), ("🟢", "دایره‌ی سبز"), ("🟡", "دایره‌ی زرد"), ("🔴", "دایره‌ی قرمز"), ("⚠️", "هشدار"),
 ]
 
 _SAMPLE_CONTEXT = {
@@ -146,14 +150,24 @@ class PostTemplateDesignerDialog(QDialog):
 
         text_row = QHBoxLayout()
         self.field_text_input = QLineEdit()
-        self.field_text_input.setPlaceholderText("فقط برای «متنِ دلخواه» استفاده می‌شه")
+        self.field_text_input.setPlaceholderText("برای «متنِ دلخواه» الزامیه؛ برای بقیه اختیاریه")
         self.field_text_input.textChanged.connect(self._on_panel_changed)
         text_row.addWidget(self.field_text_input, 1)
-        self.field_emoji_btn = QPushButton("😀")
-        self.field_emoji_btn.setFixedWidth(40)
+        self.field_emoji_btn = QPushButton("😀 ایموجی")
+        self.field_emoji_btn.setToolTip("درجِ ایموجی در متنِ این فیلد")
+        self.field_emoji_btn.setFixedWidth(90)
         self.field_emoji_btn.clicked.connect(self._open_emoji_menu)
         text_row.addWidget(self.field_emoji_btn)
-        panel_form.addRow("متن (برای متنِ دلخواه):", text_row)
+        panel_form.addRow("متن / مقدارِ دستی:", text_row)
+
+        text_hint = QLabel(
+            "برای «متنِ دلخواه» این جعبه همون متنه. برای بقیه‌ی فیلدها (تلفن/اینستاگرام/توضیح/...) اگه اینجا "
+            "چیزی بنویسید همون استفاده می‌شه؛ اگه خالی بمونه، خودکار از «تنظیمات → اطلاعاتِ تماس و برندینگ» یا "
+            "اطلاعاتِ واقعیِ محصول پر می‌شه."
+        )
+        text_hint.setWordWrap(True)
+        text_hint.setStyleSheet("color:#94a3b8; font-size:9px;")
+        panel_form.addRow("", text_hint)
 
         self.field_bold_check = QCheckBox("ضخیم (Bold)")
         self.field_bold_check.stateChanged.connect(self._on_panel_changed)
@@ -257,8 +271,9 @@ class PostTemplateDesignerDialog(QDialog):
 
     def _open_emoji_menu(self):
         menu = QMenu(self)
-        for emoji in _EMOJI_CHOICES:
-            action = menu.addAction(emoji)
+        menu.setLayoutDirection(Qt.RightToLeft)
+        for emoji, label in _EMOJI_CHOICES:
+            action = menu.addAction(f"{emoji}  {label}")
             action.triggered.connect(lambda _=False, e=emoji: self._insert_emoji(e))
         menu.exec_(QCursor.pos())
 
