@@ -1,19 +1,15 @@
-"""دیالوگِ «طراحِ قالبِ پست» — ویرایشگرِ فیلد به فیلدِ کارتِ متنی: هر فیلد
-(نامِ محصول/قیمت/توضیح/لینک/آدرسِ سایت/تلفن/شبکه‌های اجتماعی/متنِ دلخواه)
-اندازه‌فونت، رنگ، ضخامت، چیدمان و فاصله‌ی خودش رو داره؛ می‌شه فیلد
-اضافه/حذف/جابه‌جا کرد. پیش‌نمایش با یک contextِ نمونه زنده به‌روز می‌شه.
+"""دیالوگِ «طراحِ قالبِ پست» — ویرایشگرِ فیلد-به-فیلدِ متنِ پست (نه عکس):
+فیلدهای ثابت (نامِ محصول/قیمت/توضیح/لینک/آدرسِ سایت/تلفن/شبکه‌های
+اجتماعی) یا متنِ دلخواه، هرکدوم با امکانِ Bold/Italic و افزودنِ خطِ
+خالیِ قبلش؛ می‌شه فیلد اضافه/حذف/جابه‌جا کرد. پیش‌نمایشِ زنده روی یک
+contextِ نمونه — دقیقاً همون HTML‌ی که به تلگرام/بله ارسال می‌شه.
 خروجی یک دیکشنریِ «قالب» است که با post_template_store.py ذخیره می‌شه."""
 
 from __future__ import annotations
 
-import os
-import tempfile
-
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QColor, QPixmap
 from PyQt5.QtWidgets import (
     QCheckBox,
-    QColorDialog,
     QComboBox,
     QDialog,
     QFormLayout,
@@ -23,23 +19,21 @@ from PyQt5.QtWidgets import (
     QListWidget,
     QMessageBox,
     QPushButton,
-    QScrollArea,
-    QSlider,
+    QTextEdit,
     QVBoxLayout,
 )
 
 from sync_app.core.post_template_renderer import (
     FIELD_TYPE_LABELS,
-    TEXT_ALIGN_LABELS,
     normalize_field,
     normalize_template,
-    render_post_template,
+    render_post_text,
 )
 
 _SAMPLE_CONTEXT = {
     "name": "نمونه محصول شما",
     "price": 1250000,
-    "description": "این یک توضیحِ نمونه برای پیش‌نمایش است — می‌تونه چند خط بشه.",
+    "description": "این یک توضیحِ نمونه برای پیش‌نمایش است.",
     "permalink": "https://yourshop.com/product/sample",
     "site_address": "yourshop.com",
     "phone": "021-00000000",
@@ -49,20 +43,6 @@ _SAMPLE_CONTEXT = {
 }
 
 
-def _color_button(initial_rgb: list) -> QPushButton:
-    btn = QPushButton()
-    btn.setFixedWidth(60)
-    btn.setMinimumHeight(28)
-    _apply_button_color(btn, initial_rgb)
-    return btn
-
-
-def _apply_button_color(btn: QPushButton, rgb: list) -> None:
-    r, g, b = (int(c) for c in rgb)
-    btn.setStyleSheet(f"background-color: rgb({r},{g},{b}); border: 1px solid #94a3b8;")
-    btn.setProperty("rgb", [r, g, b])
-
-
 def _field_summary(field: dict) -> str:
     label = FIELD_TYPE_LABELS.get(field.get("type"), field.get("type"))
     if field.get("type") == "custom_text" and field.get("text"):
@@ -70,51 +50,47 @@ def _field_summary(field: dict) -> str:
     extras = []
     if field.get("bold"):
         extras.append("Bold")
-    extras.append(TEXT_ALIGN_LABELS.get(field.get("align"), ""))
-    extras_text = "، ".join(e for e in extras if e)
+    if field.get("italic"):
+        extras.append("Italic")
+    if field.get("blank_line_before"):
+        extras.append("فاصله")
+    extras_text = "، ".join(extras)
     return f"{label} ({extras_text})" if extras_text else label
 
 
 class PostTemplateDesignerDialog(QDialog):
     def __init__(self, parent=None, *, template: dict | None = None):
         super().__init__(parent)
-        self.setWindowTitle("🎨 طراحِ قالبِ پست")
+        self.setWindowTitle("🧩 طراحِ قالبِ متنِ پست")
         self.setLayoutDirection(Qt.RightToLeft)
-        self.resize(940, 640)
+        self.resize(880, 560)
 
         self._template = normalize_template(template)
         self._fields = [dict(f) for f in self._template["fields"]]
         self._current_index = 0 if self._fields else -1
-        self._preview_tmp_dir = tempfile.mkdtemp(prefix="peecha_template_preview_")
         self.saved_template: dict | None = None
         self._updating_panel = False
 
         root = QHBoxLayout(self)
 
-        # --- پیش‌نمایش (اسکرول‌شونده چون ارتفاعِ کارت داینامیکه) ---
+        # --- پیش‌نمایش ---
         preview_col = QVBoxLayout()
-        preview_col.addWidget(QLabel("پیش‌نمایشِ زنده:"))
-        self.preview_scroll = QScrollArea()
-        self.preview_scroll.setWidgetResizable(True)
-        self.preview_scroll.setFixedWidth(340)
-        self.preview_label = QLabel()
-        self.preview_label.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
-        self.preview_label.setStyleSheet("background:#f1f5f9;")
-        self.preview_scroll.setWidget(self.preview_label)
-        preview_col.addWidget(self.preview_scroll, 1)
-        root.addLayout(preview_col)
+        preview_col.addWidget(QLabel("پیش‌نمایشِ متنِ نهایی (همون‌طور که در تلگرام/بله دیده می‌شه):"))
+        self.preview_edit = QTextEdit()
+        self.preview_edit.setReadOnly(True)
+        self.preview_edit.setLayoutDirection(Qt.RightToLeft)
+        self.preview_edit.setStyleSheet("background:#f1f5f9;")
+        preview_col.addWidget(self.preview_edit, 1)
+        root.addLayout(preview_col, 1)
 
-        # --- ستونِ میانی: عنوان + رنگِ زمینه + لیستِ فیلدها ---
+        # --- ستونِ میانی: عنوان + لیستِ فیلدها ---
         mid_col = QVBoxLayout()
         form_top = QFormLayout()
         self.title_input = QLineEdit(str(self._template.get("title") or ""))
         form_top.addRow("عنوانِ قالب:", self.title_input)
-        self.bg_color_btn = _color_button(self._template.get("bg_color") or [255, 255, 255])
-        self.bg_color_btn.clicked.connect(lambda: self._pick_color(self.bg_color_btn, refresh_only=True))
-        form_top.addRow("رنگِ زمینه‌ی کارت:", self.bg_color_btn)
         mid_col.addLayout(form_top)
 
-        mid_col.addWidget(QLabel("فیلدهای کارت (به‌ترتیبِ نمایش):"))
+        mid_col.addWidget(QLabel("فیلدهای متن (به‌ترتیبِ نمایش):"))
         self.field_list = QListWidget()
         self.field_list.currentRowChanged.connect(self._on_field_selected)
         mid_col.addWidget(self.field_list, 1)
@@ -154,29 +130,17 @@ class PostTemplateDesignerDialog(QDialog):
         self.field_text_input.textChanged.connect(self._on_panel_changed)
         panel_form.addRow("متن (برای متنِ دلخواه):", self.field_text_input)
 
-        self.field_color_btn = _color_button([30, 30, 30])
-        self.field_color_btn.clicked.connect(lambda: self._pick_color(self.field_color_btn))
-        panel_form.addRow("رنگِ متن:", self.field_color_btn)
-
-        self.field_size_slider = QSlider(Qt.Horizontal)
-        self.field_size_slider.setRange(2, 10)
-        self.field_size_slider.valueChanged.connect(self._on_panel_changed)
-        panel_form.addRow("اندازه‌ی فونت (٪):", self.field_size_slider)
-
         self.field_bold_check = QCheckBox("ضخیم (Bold)")
         self.field_bold_check.stateChanged.connect(self._on_panel_changed)
         panel_form.addRow("", self.field_bold_check)
 
-        self.field_align_combo = QComboBox()
-        for key, label in TEXT_ALIGN_LABELS.items():
-            self.field_align_combo.addItem(label, key)
-        self.field_align_combo.currentIndexChanged.connect(self._on_panel_changed)
-        panel_form.addRow("چیدمان:", self.field_align_combo)
+        self.field_italic_check = QCheckBox("کج (Italic)")
+        self.field_italic_check.stateChanged.connect(self._on_panel_changed)
+        panel_form.addRow("", self.field_italic_check)
 
-        self.field_spacing_slider = QSlider(Qt.Horizontal)
-        self.field_spacing_slider.setRange(0, 10)
-        self.field_spacing_slider.valueChanged.connect(self._on_panel_changed)
-        panel_form.addRow("فاصله از فیلدِ قبلی (٪):", self.field_spacing_slider)
+        self.field_blank_line_check = QCheckBox("یک خطِ خالی قبل از این فیلد")
+        self.field_blank_line_check.stateChanged.connect(self._on_panel_changed)
+        panel_form.addRow("", self.field_blank_line_check)
 
         right_col.addLayout(panel_form)
         right_col.addStretch()
@@ -221,9 +185,8 @@ class PostTemplateDesignerDialog(QDialog):
         try:
             enabled = field is not None
             for w in (
-                self.field_type_combo, self.field_text_input, self.field_color_btn,
-                self.field_size_slider, self.field_bold_check, self.field_align_combo,
-                self.field_spacing_slider,
+                self.field_type_combo, self.field_text_input,
+                self.field_bold_check, self.field_italic_check, self.field_blank_line_check,
             ):
                 w.setEnabled(enabled)
             if not field:
@@ -231,12 +194,9 @@ class PostTemplateDesignerDialog(QDialog):
             idx = self.field_type_combo.findData(field.get("type"))
             self.field_type_combo.setCurrentIndex(idx if idx >= 0 else 0)
             self.field_text_input.setText(str(field.get("text") or ""))
-            _apply_button_color(self.field_color_btn, field.get("color") or [30, 30, 30])
-            self.field_size_slider.setValue(int(float(field.get("font_size_pct", 0.04)) * 100))
             self.field_bold_check.setChecked(bool(field.get("bold")))
-            align_idx = self.field_align_combo.findData(field.get("align"))
-            self.field_align_combo.setCurrentIndex(align_idx if align_idx >= 0 else 0)
-            self.field_spacing_slider.setValue(int(float(field.get("spacing_before_pct", 0.02)) * 100))
+            self.field_italic_check.setChecked(bool(field.get("italic")))
+            self.field_blank_line_check.setChecked(bool(field.get("blank_line_before")))
         finally:
             self._updating_panel = False
 
@@ -246,11 +206,9 @@ class PostTemplateDesignerDialog(QDialog):
         field = self._fields[self._current_index]
         field["type"] = self.field_type_combo.currentData()
         field["text"] = self.field_text_input.text()
-        field["color"] = self.field_color_btn.property("rgb")
-        field["font_size_pct"] = self.field_size_slider.value() / 100.0
         field["bold"] = self.field_bold_check.isChecked()
-        field["align"] = self.field_align_combo.currentData()
-        field["spacing_before_pct"] = self.field_spacing_slider.value() / 100.0
+        field["italic"] = self.field_italic_check.isChecked()
+        field["blank_line_before"] = self.field_blank_line_check.isChecked()
         self.field_list.item(self._current_index).setText(_field_summary(field))
         self._refresh_preview()
 
@@ -276,37 +234,17 @@ class PostTemplateDesignerDialog(QDialog):
         self._reload_field_list(select_index=j)
         self._refresh_preview()
 
-    def _pick_color(self, btn: QPushButton, *, refresh_only: bool = False):
-        current = btn.property("rgb") or [0, 0, 0]
-        color = QColorDialog.getColor(QColor(*current), self, "انتخابِ رنگ")
-        if color.isValid():
-            _apply_button_color(btn, [color.red(), color.green(), color.blue()])
-            if refresh_only:
-                self._refresh_preview()
-            else:
-                self._on_panel_changed()
-
     def _current_template_fields(self) -> dict:
         return {
             "title": self.title_input.text().strip(),
-            "bg_color": self.bg_color_btn.property("rgb"),
             "fields": [dict(f) for f in self._fields],
         }
 
     def _refresh_preview(self):
         template = normalize_template(self._current_template_fields())
-        dst = os.path.join(self._preview_tmp_dir, "preview.jpg")
-        result = render_post_template(dst, _SAMPLE_CONTEXT, template)
-        if not result.ok:
-            self.preview_label.setText(f"خطا در پیش‌نمایش:\n{result.error}")
-            self.preview_label.setPixmap(QPixmap())
-            return
-        pix = QPixmap(dst)
-        if pix.isNull():
-            return
-        scaled = pix.scaledToWidth(320, Qt.SmoothTransformation)
-        self.preview_label.setPixmap(scaled)
-        self.preview_label.resize(scaled.size())
+        rendered = render_post_text(_SAMPLE_CONTEXT, template)
+        html_preview = rendered.replace("\n", "<br>") or "<i style='color:#94a3b8'>(هیچ فیلدی مقدار نداره)</i>"
+        self.preview_edit.setHtml(html_preview)
 
     def _save(self):
         title = self.title_input.text().strip()

@@ -59,7 +59,7 @@ def send_text_message(bot_token: str, chat_id: str, text: str, *, timeout: int =
     try:
         resp = requests.post(
             _API_BASE.format(token=token) + "/sendMessage",
-            data={"chat_id": chat, "text": text or ""},
+            data={"chat_id": chat, "text": text or "", "parse_mode": "HTML"},
             timeout=timeout,
         )
     except requests.RequestException as exc:
@@ -85,7 +85,7 @@ def send_photo_message(
         with open(photo_path, "rb") as f:
             resp = requests.post(
                 _API_BASE.format(token=token) + "/sendPhoto",
-                data={"chat_id": chat, "caption": caption or ""},
+                data={"chat_id": chat, "caption": caption or "", "parse_mode": "HTML"},
                 files={"photo": f},
                 timeout=timeout,
             )
@@ -124,6 +124,7 @@ def send_media_group(
             item = {"type": "photo", "media": f"attach://{key}"}
             if idx == 0 and caption:
                 item["caption"] = caption
+                item["parse_mode"] = "HTML"
             media.append(item)
             fh = open(path, "rb")
             opened.append(fh)
