@@ -892,13 +892,10 @@ class Peecha_LM_Admin
                         <?php if (!$edit_row) : ?>
                             <div class="peecha-lm-field">
                                 <label><?php echo esc_html(self::t('Sites allowed', 'تعداد سایت مجاز')); ?></label>
-                                <select name="max_sites">
-                                    <option value="1"><?php echo esc_html(self::t('Single site', 'تک‌سایتی')); ?></option>
-                                    <option value="0"><?php echo esc_html(self::t('Unlimited sites', 'چندسایتی (نامحدود)')); ?></option>
-                                </select>
+                                <input type="number" name="max_sites" min="0" step="1" value="1" class="small-text" />
                                 <?php self::hint(
-                                    'Single-site: license locks to the first store URL the app connects to. Unlimited: no site limit.',
-                                    'تک‌سایتی: لایسنس با اولین آدرسِ فروشگاهی که برنامه به آن وصل شود قفل می‌شود. نامحدود: هیچ محدودیتی روی تعداد سایت نیست.'
+                                    'Number of distinct store URLs allowed (locked to the first N the app connects to). Enter 0 for unlimited.',
+                                    'تعدادِ آدرس‌های فروشگاهیِ متفاوتِ مجاز (لایسنس با اولین N سایتی که برنامه به آن‌ها وصل شود قفل می‌شود). برای نامحدود، عدد 0 را وارد کنید.'
                                 ); ?>
                             </div>
                             <div class="peecha-lm-field">
@@ -918,9 +915,10 @@ class Peecha_LM_Admin
                                 <label><?php echo esc_html(self::t('Sites / Platform scope', 'محدودیتِ سایت / پلتفرم')); ?></label>
                                 <p class="description">
                                     <?php
-                                    $scope_sites = ((int) ($edit_row['max_sites'] ?? 0)) > 0
-                                        ? self::t('Single site', 'تک‌سایتی')
-                                        : self::t('Unlimited sites', 'چندسایتی (نامحدود)');
+                                    $scope_max_sites = (int) ($edit_row['max_sites'] ?? 0);
+                                    $scope_sites = $scope_max_sites > 0
+                                        ? sprintf(self::t('%d site(s)', '%d سایت'), $scope_max_sites)
+                                        : self::t('Unlimited sites', 'نامحدود');
                                     $scope_platform_map = array(
                                         'wc' => self::t('WooCommerce only', 'فقط ووکامرس'),
                                         'ps' => self::t('PrestaShop only', 'فقط پرستاشاپ'),
