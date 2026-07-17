@@ -844,7 +844,7 @@ class SettingsTab(QWidget):
         subtitle.setAlignment(Qt.AlignCenter)
         outer_layout.addWidget(subtitle)
 
-        # ── پریست‌های نام‌دارِ کلِ تنظیمات — چند مجموعه تنظیماتِ کامل (دیتابیس
+        # ── پیش‌تنظیم‌های نام‌دارِ کلِ تنظیمات — چند مجموعه تنظیماتِ کامل (دیتابیس
         # + پلتفرم + فروشگاه + تم) زیرِ یک عنوان، قابلِ سوییچِ آنی بدونِ نیاز
         # به تعویضِ پروفایل/راه‌اندازیِ مجددِ برنامه ──────────────────────
         preset_bar = QWidget()
@@ -857,7 +857,7 @@ class SettingsTab(QWidget):
         preset_bar_layout.setContentsMargins(12, 8, 12, 8)
         preset_bar_layout.setSpacing(8)
 
-        preset_label = QLabel("پریست تنظیمات:")
+        preset_label = QLabel("پیش‌تنظیم:")
         preset_label.setStyleSheet("font-weight:700; color:#3730a3;")
         preset_bar_layout.addWidget(preset_label)
 
@@ -879,8 +879,8 @@ class SettingsTab(QWidget):
         outer_layout.addWidget(preset_bar)
 
         preset_hint = QLabel(
-            "هر پریست کل تنظیمات این تب (دیتابیس، پلتفرم، فروشگاه، تم و بقیه) را زیر یک "
-            "عنوان ذخیره می‌کند — با انتخاب یک پریست، همه‌ی این تنظیمات جایگزین تنظیمات "
+            "هر پیش‌تنظیم کل تنظیمات این تب (دیتابیس، پلتفرم، فروشگاه، تم و بقیه) را زیر یک "
+            "عنوان ذخیره می‌کند — با انتخاب یک پیش‌تنظیم، همه‌ی این تنظیمات جایگزین تنظیمات "
             "فعلی و بلافاصله اعمال می‌شود."
         )
         preset_hint.setWordWrap(True)
@@ -3447,7 +3447,7 @@ class SettingsTab(QWidget):
         return updated
 
     # ------------------------------------------------------------------
-    # پریست‌های نام‌دارِ کلِ تنظیمات
+    # پیش‌تنظیم‌های نام‌دارِ کلِ تنظیمات
     # ------------------------------------------------------------------
 
     def _refresh_preset_combo(self):
@@ -3458,7 +3458,7 @@ class SettingsTab(QWidget):
         try:
             self.preset_combo.blockSignals(True)
             self.preset_combo.clear()
-            self.preset_combo.addItem("— بدون پریست (تنظیمات فعلی) —", "")
+            self.preset_combo.addItem("— بدون پیش‌تنظیم (تنظیمات فعلی) —", "")
             for p in presets:
                 self.preset_combo.addItem(str(p.get("title") or "بدون عنوان"), str(p.get("id") or ""))
             active_id = str((self.config or {}).get(ACTIVE_CONFIG_PRESET_ID_KEY) or "")
@@ -3486,8 +3486,8 @@ class SettingsTab(QWidget):
 
         answer = QMessageBox.question(
             self,
-            "تعویض پریست تنظیمات",
-            f"همه‌ی فیلدهای این تب با تنظیماتِ پریستِ «{preset.get('title')}» جایگزین می‌شود — "
+            "تعویض پیش‌تنظیم",
+            f"همه‌ی فیلدهای این تب با تنظیماتِ پیش‌تنظیمِ «{preset.get('title')}» جایگزین می‌شود — "
             "تغییرات ذخیره‌نشده‌ی فعلی از دست می‌روند. ادامه می‌دهید؟",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
@@ -3506,6 +3506,12 @@ class SettingsTab(QWidget):
         save_secure_config(new_cfg)
         self.config = dict(new_cfg)
         self._ui_built = False
+        # _update_responsive_layout (که init_ui صداش می‌زنه) اگه compact/wide با
+        # دفعه‌ی قبل فرق نکنه، زودتر برمی‌گرده و main_grid رو پر نمی‌کنه — چون
+        # این تب همین الان هم دیده می‌شه (نه در حالِ نمایشِ اولیه)، showEvent هم
+        # دوباره شلیک نمی‌شه تا این حالتِ خالی رو خودش تشخیص بده. با ریست‌کردنِ
+        # این پرچم قبل از بازسازی، مطمئن می‌شیم گرید همیشه واقعاً پر بشه.
+        self._settings_compact = None
         self._deferred_build_ui()
 
         from sync_app.core.connectivity_guard import find_peecha_launcher
@@ -3533,7 +3539,7 @@ class SettingsTab(QWidget):
 
         title, ok = QInputDialog.getText(
             self,
-            "ذخیره پریست تنظیمات",
+            "ذخیره پیش‌تنظیم",
             "یک عنوان برای این مجموعه‌ی تنظیمات وارد کنید:",
             text=str((current_preset or {}).get("title") or ""),
         )
@@ -3541,21 +3547,21 @@ class SettingsTab(QWidget):
             return
         title = (title or "").strip()
         if not title:
-            QMessageBox.warning(self, "پریست تنظیمات", "عنوان نمی‌تواند خالی باشد.")
+            QMessageBox.warning(self, "پیش‌تنظیم", "عنوان نمی‌تواند خالی باشد.")
             return
 
-        # اگه عنوانِ واردشده همونِ عنوانِ پریستِ فعلاً انتخاب‌شده باشه، یعنی
-        # کاربر می‌خواد همونو آپدیت کنه. وگرنه (چه پریستی انتخاب نشده باشه، چه
-        # عنوان فرق کنه) پیش‌فرض ساختنِ پریستِ جدیده — مگر اینکه عنوان دقیقاً
-        # مالِ یه پریستِ دیگه باشه که اون موقع با تاییدِ صریح بازنویسی می‌شه.
+        # اگه عنوانِ واردشده همونِ عنوانِ پیش‌تنظیمِ فعلاً انتخاب‌شده باشه، یعنی
+        # کاربر می‌خواد همونو آپدیت کنه. وگرنه (چه پیش‌تنظیمی انتخاب نشده باشه، چه
+        # عنوان فرق کنه) پیش‌فرض ساختنِ پیش‌تنظیمِ جدیده — مگر اینکه عنوان دقیقاً
+        # مالِ یه پیش‌تنظیمِ دیگه باشه که اون موقع با تاییدِ صریح بازنویسی می‌شه.
         by_title = next((p for p in presets if str(p.get("title") or "").strip() == title), None)
         if current_preset and str(current_preset.get("title") or "").strip() == title:
             target_id = current_id
         elif by_title:
             answer = QMessageBox.question(
                 self,
-                "بازنویسی پریست",
-                f"پریستی با عنوان «{title}» از قبل وجود دارد. بازنویسی شود؟",
+                "بازنویسی پیش‌تنظیم",
+                f"پیش‌تنظیمی با عنوان «{title}» از قبل وجود دارد. بازنویسی شود؟",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No,
             )
@@ -3573,7 +3579,7 @@ class SettingsTab(QWidget):
         save_secure_config(updated_cfg)
         self.config = dict(updated_cfg)
         self._refresh_preset_combo()
-        QMessageBox.information(self, "پریست تنظیمات", f"تنظیمات با عنوان «{title}» ذخیره شد.")
+        QMessageBox.information(self, "پیش‌تنظیم", f"تنظیمات با عنوان «{title}» ذخیره شد.")
 
     def _on_delete_config_preset(self):
         from sync_app.core.config_presets import ACTIVE_CONFIG_PRESET_ID_KEY, delete_preset, list_presets
@@ -3583,11 +3589,11 @@ class SettingsTab(QWidget):
             return
         presets = list_presets(self.config)
         preset = next((p for p in presets if str(p.get("id")) == current_id), None)
-        title = str((preset or {}).get("title") or "این پریست")
+        title = str((preset or {}).get("title") or "این پیش‌تنظیم")
         answer = QMessageBox.question(
             self,
-            "حذف پریست",
-            f"پریستِ «{title}» حذف شود؟ (تنظیمات فعلیِ برنامه تغییری نمی‌کند، فقط از لیست حذف می‌شود.)",
+            "حذف پیش‌تنظیم",
+            f"پیش‌تنظیمِ «{title}» حذف شود؟ (تنظیمات فعلیِ برنامه تغییری نمی‌کند، فقط از لیست حذف می‌شود.)",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
