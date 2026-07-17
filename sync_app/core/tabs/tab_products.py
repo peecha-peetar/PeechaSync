@@ -1780,13 +1780,15 @@ class ProductTab(QWidget):
         schedule_recipient_row = QHBoxLayout()
         schedule_recipient_row.addWidget(QLabel("مقصدِ سفارشی (اختیاری):"))
         schedule_recipient_input = QLineEdit()
-        schedule_recipient_input.setPlaceholderText("خالی = همون مقصدِ پیش‌فرضِ Settings؛ برای شخص/کانال/گروهِ دیگه، آیدیِ عددی یا @username")
+        schedule_recipient_input.setPlaceholderText("خالی = همون مقصدِ پیش‌فرضِ Settings؛ تلگرام: آیدیِ عددی یا @username؛ بله: فقط آیدیِ عددی")
         schedule_recipient_row.addWidget(schedule_recipient_input, 1)
         schedule_layout.addLayout(schedule_recipient_row)
 
         schedule_recipient_hint = QLabel(
             "برای ارسال به یک شخصِ خاص (نه کانالِ تنظیم‌شده)، اون شخص باید قبلاً یک پیام به باتِ شما "
-            "فرستاده باشه (/start) — بات نمی‌تونه اول‌به‌اول به کسی که هنوز باهاش چت نکرده پیام بده."
+            "فرستاده باشه (/start) — بات نمی‌تونه اول‌به‌اول به کسی که هنوز باهاش چت نکرده پیام بده. "
+            "⚠️ بله (برخلافِ تلگرام) فقط آیدیِ عددی رو قبول می‌کنه، @username کار نمی‌کنه — با پیام‌دادنِ اون "
+            "شخص به یک باتِ «نمایشِ آیدی» (مثلِ ble.ir/showchatdbot)، آیدیِ عددیِ خودش رو می‌گیره و به شما می‌ده."
         )
         schedule_recipient_hint.setWordWrap(True)
         schedule_recipient_hint.setStyleSheet("color:#64748b; font-size:10px;")
@@ -2166,9 +2168,16 @@ class ProductTab(QWidget):
         recipient_row = QHBoxLayout()
         recipient_row.addWidget(QLabel("مقصدِ سفارشی (اختیاری):"))
         recipient_input = QLineEdit()
-        recipient_input.setPlaceholderText("خالی = مقصدِ پیش‌فرضِ Settings؛ برای شخص/کانال/گروهِ دیگه، آیدیِ عددی یا @username (برای همه‌ی این پست‌ها)")
+        recipient_input.setPlaceholderText("خالی = مقصدِ پیش‌فرضِ Settings؛ تلگرام: آیدیِ عددی یا @username؛ بله: فقط آیدیِ عددی (برای همه‌ی این پست‌ها)")
         recipient_row.addWidget(recipient_input, 1)
         v.addLayout(recipient_row)
+
+        recipient_hint = QLabel(
+            "⚠️ بله (برخلافِ تلگرام) فقط آیدیِ عددی رو قبول می‌کنه؛ برای ارسال به شخص، اون شخص باید قبلاً به بات پیام داده باشه."
+        )
+        recipient_hint.setWordWrap(True)
+        recipient_hint.setStyleSheet("color:#64748b; font-size:10px;")
+        v.addWidget(recipient_hint)
 
         template_row = QHBoxLayout()
         template_row.addWidget(QLabel("قالبِ متنِ پست (اختیاری):"))

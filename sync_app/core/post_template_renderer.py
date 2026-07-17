@@ -106,7 +106,10 @@ def _field_value(field: dict, context: dict) -> str:
     if ftype == "description":
         return override or str(context.get("description") or "").strip()
     if ftype == "link":
-        return override or str(context.get("permalink") or context.get("link") or "").strip()
+        # override برای لینک معنیِ متفاوتی داره: نه جایگزینیِ خودِ URL،
+        # بلکه برچسبِ نمایشی (در render_post_text مدیریت می‌شه) — پس اینجا
+        # همیشه لینکِ واقعیِ محصول برمی‌گرده، نه override
+        return str(context.get("permalink") or context.get("link") or "").strip()
     if ftype == "site_address":
         return override or str(context.get("site_address") or "").strip()
     if ftype == "phone":
@@ -150,10 +153,14 @@ def render_post_text(context: dict, template: dict, *, as_html: bool = True) -> 
         if field.get("blank_line_before") and lines:
             lines.append("")
 
+        is_link = field.get("type") == "link"
+        link_label = str(field.get("text") or "").strip() if is_link else ""
+
         if as_html:
-            if field.get("type") == "link":
+            if is_link:
                 escaped_url = _html.escape(value, quote=True)
-                text = f'<a href="{escaped_url}">{_html.escape(value)}</a>'
+                display = _html.escape(link_label) if link_label else _html.escape(value)
+                text = f'<a href="{escaped_url}">{display}</a>'
             else:
                 text = _html.escape(value)
             if field.get("bold"):
@@ -161,7 +168,10 @@ def render_post_text(context: dict, template: dict, *, as_html: bool = True) -> 
             if field.get("italic"):
                 text = f"<i>{text}</i>"
         else:
-            text = value
+            # متنِ ساده (بله): چون بدونِ HTML نمی‌شه یک برچسب رو به‌جایِ خودِ
+            # لینک کلیک‌پذیر کرد، برچسب (اگه باشه) قبل از خودِ URL میاد،
+            # نه به‌جاش — وگرنه لینک اصلاً قابلِ‌استفاده نمی‌مونه
+            text = f"{link_label}: {value}" if (is_link and link_label) else value
 
         text = _apply_align(text, field.get("align", "right"))
         lines.append(text)
