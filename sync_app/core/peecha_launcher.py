@@ -1209,6 +1209,11 @@ class PeechaLauncher(QWidget):
         QTimer.singleShot(120000, self._update_check_timer.start)
         QTimer.singleShot(200, self._setup_tray_icon)
 
+        self._content_calendar_timer = QTimer(self)
+        self._content_calendar_timer.setInterval(60000)
+        self._content_calendar_timer.timeout.connect(self._send_due_content_calendar_posts)
+        QTimer.singleShot(15000, self._content_calendar_timer.start)
+
     def _refresh_header_update_ui(self) -> None:
         from sync_app.core.app_version import app_version_label
 
@@ -2698,6 +2703,52 @@ class PeechaLauncher(QWidget):
                 text = f"⚡ همگام‌سازی خودکار: {minutes} دقیقه مانده"
         self.header_autosync_badge.setText(text)
         self.header_autosync_badge.setVisible(True)
+
+    def _send_due_content_calendar_posts(self):
+        """چکِ پس‌زمینه‌ی پست‌های زمان‌بندی‌شده‌ی سررسیده — هر ارسالِ واقعی
+        در Threadِ جدا انجام می‌شه تا UI هیچ‌وقت قفل نشه."""
+        from sync_app.core.content_calendar_store import due_posts, update_post_status, STATUS_SENT, STATUS_FAILED
+
+        try:
+            posts = due_posts()
+        except Exception:
+            return
+        if not posts:
+            return
+
+        try:
+            cfg = load_secure_config(None) or {}
+        except Exception:
+            return
+
+        from sync_app.core.telegram_poster import TELEGRAM_BOT_TOKEN_KEY, TELEGRAM_CHAT_ID_KEY, send_post
+
+        token = str(cfg.get(TELEGRAM_BOT_TOKEN_KEY) or "").strip()
+        chat_id = str(cfg.get(TELEGRAM_CHAT_ID_KEY) or "").strip()
+        if not token or not chat_id:
+            for post in posts:
+                update_post_status(
+                    post.get("id"), STATUS_FAILED,
+                    error="توکن بات یا شناسه‌ی چتِ تلگرام در تنظیمات وارد نشده.",
+                )
+            return
+
+        from sync_app.core.threading_helper import run_in_thread
+
+        def _worker(posts_to_send):
+            results = []
+            for post in posts_to_send:
+                ok, msg = send_post(
+                    token, chat_id, post.get("text") or "", photo_path=post.get("image_path") or ""
+                )
+                results.append((post.get("id"), ok, msg))
+            return results
+
+        def on_complete(results):
+            for post_id, ok, msg in results:
+                update_post_status(post_id, STATUS_SENT if ok else STATUS_FAILED, error=None if ok else msg)
+
+        run_in_thread(_worker, posts, on_complete=on_complete)
 
     def _refresh_link_warning(self):
         """محاسبه‌ی تعداد موارد لینک‌نشده در پس‌زمینه — فقط خواندنی، UI را قفل نمی‌کند."""

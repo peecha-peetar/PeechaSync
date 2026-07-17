@@ -1600,6 +1600,44 @@ class SettingsTab(QWidget):
         )
         self._apply_platform_field_visibility()
 
+        # --- تلگرام (برای تقویم محتوا) — مستقل از پلتفرم فروشگاه، همیشه نمایان ---
+        from sync_app.core.telegram_poster import TELEGRAM_BOT_TOKEN_KEY, TELEGRAM_CHAT_ID_KEY
+
+        self.telegram_group = QGroupBox("تلگرام (برای تقویم محتوا)")
+        self.telegram_group.setLayoutDirection(Qt.LeftToRight)
+        telegram_layout = QFormLayout()
+        telegram_layout.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        telegram_layout.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        telegram_layout.setFormAlignment(Qt.AlignTop)
+        telegram_layout.setHorizontalSpacing(14)
+        telegram_layout.setVerticalSpacing(10)
+
+        self.telegram_bot_token_input = PasswordLineEdit(str(self.config.get(TELEGRAM_BOT_TOKEN_KEY) or ""))
+        self.telegram_bot_token_input.setPlaceholderText("123456:ABC-DEF...")
+        self.telegram_chat_id_input = QLineEdit(str(self.config.get(TELEGRAM_CHAT_ID_KEY) or ""))
+        self.telegram_chat_id_input.setPlaceholderText("@channel_username یا -1001234567890")
+        for field in (self.telegram_bot_token_input, self.telegram_chat_id_input):
+            field.setLayoutDirection(Qt.LeftToRight)
+            field.setAlignment(Qt.AlignLeft)
+            field.setMinimumHeight(38)
+
+        telegram_help = QLabel(
+            "توکنِ بات: با @BotFather بسازید. شناسه‌ی چت: نامِ کاربریِ کانال (با @) یا آیدیِ عددیِ آن — "
+            "ربات باید ادمینِ کانال/گروه باشد."
+        )
+        telegram_help.setStyleSheet("color:#64748b; font-size:10px;")
+        telegram_help.setWordWrap(True)
+
+        self.telegram_test_button = QPushButton("تست اتصال تلگرام")
+        self.telegram_test_button.setMinimumHeight(38)
+        self.telegram_test_button.clicked.connect(self._test_telegram_connection)
+
+        telegram_layout.addRow(english_caption("Bot Token:"), self.telegram_bot_token_input)
+        telegram_layout.addRow(english_caption("Chat ID:"), self.telegram_chat_id_input)
+        telegram_layout.addRow(QLabel(""), telegram_help)
+        telegram_layout.addRow(QLabel(""), self.telegram_test_button)
+        self.telegram_group.setLayout(telegram_layout)
+
         self.monitor_group = QGroupBox("مانیتورینگ عملیات اتصال")
         monitor_layout = QVBoxLayout()
         monitor_layout.setContentsMargins(10, 10, 10, 10)
@@ -1847,6 +1885,7 @@ class SettingsTab(QWidget):
             self.default_customer_mode_combo, self.login_screen_enabled_checkbox,
             self.auto_update_enabled_checkbox,
             self.ps_url_input, self.ps_api_key_input, self.ps_site_combo, self.ps_site_name_input,
+            self.telegram_bot_token_input, self.telegram_chat_id_input,
         ] + list(self._field_sync_checkboxes.values()) + list(self._force_full_sync_checkboxes.values())
 
         _text_inputs = [
@@ -1857,6 +1896,7 @@ class SettingsTab(QWidget):
             self.app_login_username_input, self.app_login_password_input, self.license_server_url_input,
             self.license_api_key_input, self.default_customer_code_input,
             self.ps_url_input, self.ps_api_key_input, self.ps_site_name_input,
+            self.telegram_bot_token_input, self.telegram_chat_id_input,
         ]
         for w in _text_inputs:
             w.textChanged.connect(self._on_settings_field_changed)
@@ -1910,20 +1950,22 @@ class SettingsTab(QWidget):
             grid.addWidget(self.sql_group, 0, 0)
             grid.addWidget(self.app_group, 1, 0)
             grid.addWidget(self.wc_group, 2, 0)
-            grid.addWidget(self.customer_group, 3, 0)
-            grid.addWidget(self.fields_group, 4, 0)
-            grid.addWidget(self.license_group, 5, 0)
-            grid.addWidget(self.monitor_group, 6, 0)
-            grid.addWidget(self.backup_group, 7, 0)
+            grid.addWidget(self.telegram_group, 3, 0)
+            grid.addWidget(self.customer_group, 4, 0)
+            grid.addWidget(self.fields_group, 5, 0)
+            grid.addWidget(self.license_group, 6, 0)
+            grid.addWidget(self.monitor_group, 7, 0)
+            grid.addWidget(self.backup_group, 8, 0)
         else:
             grid.addWidget(self.sql_group, 0, 0)
             grid.addWidget(self.app_group, 0, 1)
             grid.addWidget(self.wc_group, 1, 0)
             grid.addWidget(self.monitor_group, 1, 1)
-            grid.addWidget(self.customer_group, 2, 0)
-            grid.addWidget(self.license_group, 2, 1)
-            grid.addWidget(self.fields_group, 3, 0, 1, 2)
-            grid.addWidget(self.backup_group, 4, 0, 1, 2)
+            grid.addWidget(self.telegram_group, 2, 0)
+            grid.addWidget(self.customer_group, 2, 1)
+            grid.addWidget(self.license_group, 3, 0)
+            grid.addWidget(self.fields_group, 4, 0, 1, 2)
+            grid.addWidget(self.backup_group, 5, 0, 1, 2)
             grid.setColumnStretch(0, 1)
             grid.setColumnStretch(1, 1)
 
@@ -3653,6 +3695,34 @@ class SettingsTab(QWidget):
             "PS_ROOT_CATEGORY_ID": (self.config or {}).get("PS_ROOT_CATEGORY_ID", 2),
         }
 
+    def _test_telegram_connection(self):
+        from sync_app.core.threading_helper import run_in_thread
+        from sync_app.core.telegram_poster import test_connection as telegram_test_connection
+
+        token = self.telegram_bot_token_input.text().strip()
+        if not token:
+            QMessageBox.warning(self, "تلگرام", "ابتدا توکنِ بات را وارد کنید.")
+            return
+
+        self.telegram_test_button.setEnabled(False)
+        self.telegram_test_button.setText("در حال تست اتصال...")
+
+        def on_complete(result):
+            ok, msg = result
+            self.telegram_test_button.setEnabled(True)
+            self.telegram_test_button.setText("تست اتصال تلگرام")
+            if ok:
+                QMessageBox.information(self, "تلگرام", msg)
+            else:
+                QMessageBox.critical(self, "تلگرام", f"اتصال ناموفق بود:\n{msg}")
+
+        def on_error(err):
+            self.telegram_test_button.setEnabled(True)
+            self.telegram_test_button.setText("تست اتصال تلگرام")
+            QMessageBox.critical(self, "تلگرام", f"خطا: {err}")
+
+        run_in_thread(telegram_test_connection, token, on_complete=on_complete, on_error=on_error)
+
     def test_ps_connection(self):
         if self._ps_thread is not None and self._ps_thread.isRunning():
             self._append_monitor("تست قبلی هنوز در حال اجراست...")
@@ -4698,6 +4768,8 @@ class SettingsTab(QWidget):
                 "STORE_PLATFORM": self.store_platform_combo.currentData() or "woocommerce",
                 "PS_URL": self.ps_url_input.text().strip(),
                 "PS_API_KEY": self.ps_api_key_input.text().strip(),
+                "TELEGRAM_BOT_TOKEN": self.telegram_bot_token_input.text().strip(),
+                "TELEGRAM_CHAT_ID": self.telegram_chat_id_input.text().strip(),
             })
             for _cfg_key, _cb in self._field_sync_checkboxes.items():
                 config_to_save[_cfg_key] = _cb.isChecked()

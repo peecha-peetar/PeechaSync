@@ -11,7 +11,7 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QPushButton,
     QListWidget, QMessageBox, QHBoxLayout, QTextEdit, QListWidgetItem, QToolTip, QSplitter,
     QLineEdit, QCheckBox, QFileDialog, QProgressBar, QToolButton, QDialog, QDialogButtonBox,
-    QComboBox, QApplication, QTabWidget, QInputDialog
+    QComboBox, QApplication, QTabWidget, QInputDialog, QSpinBox
 )
 from PyQt5.QtCore import Qt, QTimer, QPoint, QEvent, QSize
 from PyQt5.QtGui import QColor, QCursor, QFont, QGuiApplication, QPainter, QPixmap
@@ -1726,6 +1726,111 @@ class ProductTab(QWidget):
 
         banner_layout.addStretch()
         sub_tabs.addTab(banner_tab, "🎨 بنر / پست / استوری")
+
+        # --- زیرتب زمان‌بندیِ تلگرام (تقویمِ محتوا) ---
+        schedule_tab = QWidget()
+        schedule_layout = QVBoxLayout(schedule_tab)
+        schedule_layout.addWidget(QLabel("متنِ پست:"))
+        schedule_text_edit = QTextEdit(texts["متن تلگرام"])
+        schedule_text_edit.setMinimumHeight(100)
+        schedule_layout.addWidget(schedule_text_edit)
+
+        schedule_image_row = QHBoxLayout()
+        schedule_image_path = {"value": ""}
+        manual_paths = self._existing_manual_image_paths(sku)
+        if manual_paths:
+            schedule_image_path["value"] = manual_paths[0]
+        schedule_image_label = QLabel(schedule_image_path["value"] or "بدون تصویر (فقط متن ارسال می‌شود)")
+        schedule_image_label.setStyleSheet("color:#64748b; font-size:10px;")
+        schedule_image_label.setWordWrap(True)
+        schedule_image_row.addWidget(schedule_image_label, 1)
+
+        def _pick_schedule_image():
+            path, _ = QFileDialog.getOpenFileName(
+                self, f"انتخاب تصویر محصول {sku}", "", "Images (*.jpg *.jpeg *.png *.webp)"
+            )
+            if path:
+                schedule_image_path["value"] = path
+                schedule_image_label.setText(path)
+
+        schedule_image_btn = QPushButton("📁 انتخاب تصویر")
+        schedule_image_btn.clicked.connect(_pick_schedule_image)
+        schedule_image_row.addWidget(schedule_image_btn)
+        schedule_layout.addLayout(schedule_image_row)
+
+        schedule_layout.addWidget(QLabel("زمانِ ارسال (تاریخِ شمسی):"))
+        from sync_app.core.jalali_date_utils import jalali_now, jalali_to_gregorian
+
+        jy_now, jm_now, jd_now = jalali_now()
+        date_row = QHBoxLayout()
+        schedule_year_spin = QSpinBox()
+        schedule_year_spin.setRange(1403, 1420)
+        schedule_year_spin.setValue(jy_now)
+        schedule_month_spin = QSpinBox()
+        schedule_month_spin.setRange(1, 12)
+        schedule_month_spin.setValue(jm_now)
+        schedule_day_spin = QSpinBox()
+        schedule_day_spin.setRange(1, 31)
+        schedule_day_spin.setValue(jd_now)
+        schedule_hour_spin = QSpinBox()
+        schedule_hour_spin.setRange(0, 23)
+        schedule_hour_spin.setValue(10)
+        schedule_minute_spin = QSpinBox()
+        schedule_minute_spin.setRange(0, 59)
+        schedule_minute_spin.setSingleStep(5)
+        schedule_minute_spin.setValue(0)
+        for lbl, w in (
+            ("سال", schedule_year_spin), ("ماه", schedule_month_spin), ("روز", schedule_day_spin),
+            ("ساعت", schedule_hour_spin), ("دقیقه", schedule_minute_spin),
+        ):
+            date_row.addWidget(QLabel(lbl))
+            date_row.addWidget(w)
+        schedule_layout.addLayout(date_row)
+
+        schedule_status_label = QLabel("")
+        schedule_status_label.setStyleSheet("color:#166534; font-weight:700;")
+        schedule_layout.addWidget(schedule_status_label)
+
+        def _add_to_calendar():
+            from datetime import datetime
+
+            from sync_app.core.content_calendar_store import add_scheduled_post
+
+            try:
+                gy, gm, gd = jalali_to_gregorian(
+                    schedule_year_spin.value(), schedule_month_spin.value(), schedule_day_spin.value()
+                )
+                scheduled_dt = datetime(gy, gm, gd, schedule_hour_spin.value(), schedule_minute_spin.value())
+            except ValueError as exc:
+                QMessageBox.critical(self, "خطا", f"تاریخِ واردشده معتبر نیست:\n{exc}")
+                return
+
+            add_scheduled_post(
+                sku=sku,
+                product_name=product.get("name") or sku,
+                platform="telegram",
+                text=schedule_text_edit.toPlainText(),
+                scheduled_at=scheduled_dt.isoformat(timespec="seconds"),
+                image_path=schedule_image_path["value"],
+            )
+            schedule_status_label.setText(
+                f"✅ به تقویمِ محتوا اضافه شد — {schedule_year_spin.value()}/{schedule_month_spin.value():02d}/"
+                f"{schedule_day_spin.value():02d} {schedule_hour_spin.value():02d}:{schedule_minute_spin.value():02d}"
+            )
+
+        add_to_calendar_btn = QPushButton("📅 افزودن به تقویم محتوا")
+        add_to_calendar_btn.clicked.connect(_add_to_calendar)
+        schedule_layout.addWidget(add_to_calendar_btn)
+
+        schedule_hint = QLabel(
+            "پست در زمانِ تعیین‌شده خودکار به کانال/گروهِ تلگرامِ تنظیم‌شده در «تنظیمات → تلگرام» ارسال می‌شود. "
+            "برای مدیریتِ همه‌ی پست‌های زمان‌بندی‌شده، به زیرتبِ «📅 تقویم محتوا» (در دستیار هوشمند) بروید."
+        )
+        schedule_hint.setWordWrap(True)
+        schedule_hint.setStyleSheet("color:#64748b; font-size:10px;")
+        schedule_layout.addWidget(schedule_hint)
+        schedule_layout.addStretch()
+        sub_tabs.addTab(schedule_tab, "📅 زمان‌بندی تلگرام")
 
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
         buttons.rejected.connect(dialog.reject)
