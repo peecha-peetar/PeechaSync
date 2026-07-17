@@ -844,6 +844,53 @@ class SettingsTab(QWidget):
         subtitle.setAlignment(Qt.AlignCenter)
         outer_layout.addWidget(subtitle)
 
+        # ── پریست‌های نام‌دارِ کلِ تنظیمات — چند مجموعه تنظیماتِ کامل (دیتابیس
+        # + پلتفرم + فروشگاه + تم) زیرِ یک عنوان، قابلِ سوییچِ آنی بدونِ نیاز
+        # به تعویضِ پروفایل/راه‌اندازیِ مجددِ برنامه ──────────────────────
+        preset_bar = QWidget()
+        preset_bar.setObjectName("presetBar")
+        preset_bar.setStyleSheet(
+            "QWidget#presetBar { background: #eef2ff; border: 1px solid #c7d2fe;"
+            " border-radius: 10px; }"
+        )
+        preset_bar_layout = QHBoxLayout(preset_bar)
+        preset_bar_layout.setContentsMargins(12, 8, 12, 8)
+        preset_bar_layout.setSpacing(8)
+
+        preset_label = QLabel("پریست تنظیمات:")
+        preset_label.setStyleSheet("font-weight:700; color:#3730a3;")
+        preset_bar_layout.addWidget(preset_label)
+
+        self.preset_combo = QComboBox()
+        self.preset_combo.setMinimumHeight(36)
+        self.preset_combo.setMinimumWidth(220)
+        preset_bar_layout.addWidget(self.preset_combo, 1)
+
+        self.preset_save_btn = QPushButton("💾 ذخیره به‌عنوان...")
+        self.preset_save_btn.setMinimumHeight(36)
+        self.preset_save_btn.clicked.connect(self._on_save_config_preset)
+        preset_bar_layout.addWidget(self.preset_save_btn)
+
+        self.preset_delete_btn = QPushButton("🗑 حذف")
+        self.preset_delete_btn.setMinimumHeight(36)
+        self.preset_delete_btn.clicked.connect(self._on_delete_config_preset)
+        preset_bar_layout.addWidget(self.preset_delete_btn)
+
+        outer_layout.addWidget(preset_bar)
+
+        preset_hint = QLabel(
+            "هر پریست کل تنظیمات این تب (دیتابیس، پلتفرم، فروشگاه، تم و بقیه) را زیر یک "
+            "عنوان ذخیره می‌کند — با انتخاب یک پریست، همه‌ی این تنظیمات جایگزین تنظیمات "
+            "فعلی و بلافاصله اعمال می‌شود."
+        )
+        preset_hint.setWordWrap(True)
+        preset_hint.setStyleSheet("color:#64748b; font-size:10px; padding: 0 4px;")
+        outer_layout.addWidget(preset_hint)
+
+        self._config_presets_switching = False
+        self._refresh_preset_combo()
+        self.preset_combo.currentIndexChanged.connect(self._on_preset_combo_changed)
+
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
         # در حالت ریسپانسیو اسکرول افقی نباید ظاهر شود
@@ -3398,6 +3445,160 @@ class SettingsTab(QWidget):
         self._ps_sites = list(updated.get("PS_SITES") or self._ps_sites)
         self._active_ps_site_id = str(updated.get("ACTIVE_PS_SITE_ID") or self._active_ps_site_id)
         return updated
+
+    # ------------------------------------------------------------------
+    # پریست‌های نام‌دارِ کلِ تنظیمات
+    # ------------------------------------------------------------------
+
+    def _refresh_preset_combo(self):
+        from sync_app.core.config_presets import ACTIVE_CONFIG_PRESET_ID_KEY, list_presets
+
+        presets = list_presets(self.config)
+        self._config_presets_switching = True
+        try:
+            self.preset_combo.blockSignals(True)
+            self.preset_combo.clear()
+            self.preset_combo.addItem("— بدون پریست (تنظیمات فعلی) —", "")
+            for p in presets:
+                self.preset_combo.addItem(str(p.get("title") or "بدون عنوان"), str(p.get("id") or ""))
+            active_id = str((self.config or {}).get(ACTIVE_CONFIG_PRESET_ID_KEY) or "")
+            idx = self.preset_combo.findData(active_id) if active_id else 0
+            self.preset_combo.setCurrentIndex(idx if idx >= 0 else 0)
+            self.preset_delete_btn.setEnabled(bool(presets) and self.preset_combo.currentIndex() > 0)
+        finally:
+            self.preset_combo.blockSignals(False)
+            self._config_presets_switching = False
+
+    def _on_preset_combo_changed(self, _index):
+        if self._config_presets_switching:
+            return
+        from sync_app.core.config_presets import find_preset, list_presets
+
+        new_id = str(self.preset_combo.currentData() or "")
+        self.preset_delete_btn.setEnabled(bool(new_id))
+        if not new_id:
+            return
+
+        presets = list_presets(self.config)
+        preset = find_preset(presets, new_id)
+        if preset is None:
+            return
+
+        answer = QMessageBox.question(
+            self,
+            "تعویض پریست تنظیمات",
+            f"همه‌ی فیلدهای این تب با تنظیماتِ پریستِ «{preset.get('title')}» جایگزین می‌شود — "
+            "تغییرات ذخیره‌نشده‌ی فعلی از دست می‌روند. ادامه می‌دهید؟",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            self._refresh_preset_combo()
+            return
+
+        QTimer.singleShot(0, lambda: self._apply_config_preset(preset))
+
+    def _apply_config_preset(self, preset):
+        from sync_app.core.config_presets import ACTIVE_CONFIG_PRESET_ID_KEY, apply_preset
+
+        new_cfg = apply_preset(self.config, preset)
+        new_cfg[ACTIVE_CONFIG_PRESET_ID_KEY] = str(preset.get("id") or "")
+        save_secure_config(new_cfg)
+        self.config = dict(new_cfg)
+        self._ui_built = False
+        self._deferred_build_ui()
+
+        from sync_app.core.connectivity_guard import find_peecha_launcher
+
+        launcher = find_peecha_launcher(self)
+        if launcher is not None:
+            if hasattr(launcher, "reload_wc_dependent_tabs"):
+                launcher.reload_wc_dependent_tabs()
+            if hasattr(launcher, "refresh_sql_connectivity"):
+                launcher.refresh_sql_connectivity(show_pending=False)
+
+    def _on_save_config_preset(self):
+        from PyQt5.QtWidgets import QInputDialog
+
+        from sync_app.core.config_presets import (
+            ACTIVE_CONFIG_PRESET_ID_KEY,
+            find_preset,
+            list_presets,
+            save_preset,
+        )
+
+        presets = list_presets(self.config)
+        current_id = str(self.preset_combo.currentData() or "")
+        current_preset = find_preset(presets, current_id) if current_id else None
+
+        title, ok = QInputDialog.getText(
+            self,
+            "ذخیره پریست تنظیمات",
+            "یک عنوان برای این مجموعه‌ی تنظیمات وارد کنید:",
+            text=str((current_preset or {}).get("title") or ""),
+        )
+        if not ok:
+            return
+        title = (title or "").strip()
+        if not title:
+            QMessageBox.warning(self, "پریست تنظیمات", "عنوان نمی‌تواند خالی باشد.")
+            return
+
+        # اگه عنوانِ واردشده همونِ عنوانِ پریستِ فعلاً انتخاب‌شده باشه، یعنی
+        # کاربر می‌خواد همونو آپدیت کنه. وگرنه (چه پریستی انتخاب نشده باشه، چه
+        # عنوان فرق کنه) پیش‌فرض ساختنِ پریستِ جدیده — مگر اینکه عنوان دقیقاً
+        # مالِ یه پریستِ دیگه باشه که اون موقع با تاییدِ صریح بازنویسی می‌شه.
+        by_title = next((p for p in presets if str(p.get("title") or "").strip() == title), None)
+        if current_preset and str(current_preset.get("title") or "").strip() == title:
+            target_id = current_id
+        elif by_title:
+            answer = QMessageBox.question(
+                self,
+                "بازنویسی پریست",
+                f"پریستی با عنوان «{title}» از قبل وجود دارد. بازنویسی شود؟",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
+            target_id = str(by_title.get("id"))
+        else:
+            target_id = ""
+
+        self.save_config()  # فیلدهای فعلیِ فرم را ذخیره و self.config را به‌روز می‌کند
+
+        updated_cfg = save_preset(self.config, title, preset_id=target_id)
+        saved = next((p for p in list_presets(updated_cfg) if str(p.get("title")) == title), None)
+        updated_cfg[ACTIVE_CONFIG_PRESET_ID_KEY] = str(saved.get("id")) if saved else ""
+        save_secure_config(updated_cfg)
+        self.config = dict(updated_cfg)
+        self._refresh_preset_combo()
+        QMessageBox.information(self, "پریست تنظیمات", f"تنظیمات با عنوان «{title}» ذخیره شد.")
+
+    def _on_delete_config_preset(self):
+        from sync_app.core.config_presets import ACTIVE_CONFIG_PRESET_ID_KEY, delete_preset, list_presets
+
+        current_id = str(self.preset_combo.currentData() or "")
+        if not current_id:
+            return
+        presets = list_presets(self.config)
+        preset = next((p for p in presets if str(p.get("id")) == current_id), None)
+        title = str((preset or {}).get("title") or "این پریست")
+        answer = QMessageBox.question(
+            self,
+            "حذف پریست",
+            f"پریستِ «{title}» حذف شود؟ (تنظیمات فعلیِ برنامه تغییری نمی‌کند، فقط از لیست حذف می‌شود.)",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        updated_cfg = delete_preset(self.config, current_id)
+        if str(updated_cfg.get(ACTIVE_CONFIG_PRESET_ID_KEY) or "") == current_id:
+            updated_cfg[ACTIVE_CONFIG_PRESET_ID_KEY] = ""
+        save_secure_config(updated_cfg)
+        self.config = dict(updated_cfg)
+        self._refresh_preset_combo()
 
     def _wc_config_from_form(self):
         timeout_sec = self.get_optimized_timeout()
