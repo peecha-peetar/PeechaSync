@@ -10,7 +10,7 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QFrame,
 )
-from PyQt5.QtGui import QPixmap, QPainter, QFont, QColor, QLinearGradient, QIcon
+from PyQt5.QtGui import QPixmap, QPainter, QFont, QColor, QLinearGradient, QIcon, QPainterPath
 from sync_app.core.password_line_edit import PasswordLineEdit
 
 
@@ -232,14 +232,21 @@ class LoginWindow(QDialog):
         brand_row.setSpacing(12)
         brand_row.setAlignment(Qt.AlignCenter)
 
+        LOGO_SIZE = 80
         logo_container = QLabel()
         logo_container.setAlignment(Qt.AlignCenter)
-        logo_container.setFixedSize(56, 56)
+        logo_container.setFixedSize(LOGO_SIZE, LOGO_SIZE)
         logo_container.setContentsMargins(0, 0, 0, 0)
         logo_container.setStyleSheet("background: transparent;")
-        from sync_app.core.brand_assets import brand_logo_pixmap
 
-        pixmap = brand_logo_pixmap(56, light_background=True)
+        # عکسِ واقعیِ گربه‌ی «پیچا» (اگه sync_app/core/Peecha.png موجود باشه)
+        # برای صفحه‌ی ورود به‌جایِ لوگوی انتزاعی استفاده می‌شه — در غیرِ این
+        # صورت، مثلِ قبل به لوگوی برند/گرادیانِ رزرو برمی‌گرده.
+        pixmap = self._load_peecha_photo_pixmap(LOGO_SIZE)
+        if pixmap.isNull():
+            from sync_app.core.brand_assets import brand_logo_pixmap
+
+            pixmap = brand_logo_pixmap(LOGO_SIZE, light_background=True)
         if not pixmap.isNull():
             logo_container.setPixmap(pixmap)
         else:
@@ -358,6 +365,35 @@ class LoginWindow(QDialog):
         card_layout.addWidget(self.refresh_btn)
 
         root.addWidget(card)
+
+    def _load_peecha_photo_pixmap(self, size: int) -> QPixmap:
+        """عکسِ واقعیِ گربه‌ی «پیچا» (sync_app/core/Peecha.png، اگه موجود
+        باشه) — به‌صورتِ دایره‌ای (هم‌شکل با فالبکِ گرادیانی) برای نمایش در
+        صفحه‌ی ورود. اگه فایل نباشه، QPixmap خالی برمی‌گرده تا فراخوان به
+        لوگوی برند/گرادیان برگرده."""
+        path = _login_resource_path("Peecha.png")
+        if not path or not os.path.isfile(path):
+            return QPixmap()
+        src = QPixmap(path)
+        if src.isNull():
+            return QPixmap()
+
+        src = src.scaled(size, size, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+        if src.width() != size or src.height() != size:
+            x = max(0, (src.width() - size) // 2)
+            y = max(0, (src.height() - size) // 2)
+            src = src.copy(x, y, size, size)
+
+        rounded = QPixmap(size, size)
+        rounded.fill(Qt.transparent)
+        painter = QPainter(rounded)
+        painter.setRenderHint(QPainter.Antialiasing)
+        clip_path = QPainterPath()
+        clip_path.addEllipse(0, 0, size, size)
+        painter.setClipPath(clip_path)
+        painter.drawPixmap(0, 0, src)
+        painter.end()
+        return rounded
 
     def _generate_gradient_logo(self):
         """تولید لوگو رنگی gradient"""
