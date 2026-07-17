@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import ast
 import html
 import os
 import re
@@ -22,6 +23,24 @@ def _strip_html(raw: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _extract_plain_description(raw) -> str:
+    """بعضی افزونه‌های چندزبانه (مثلاً WPML)، فیلدِ توضیح رو به‌جای متنِ ساده،
+    به‌صورتِ یک لیست از دیکشنری‌هایِ {'id': N, 'value': 'متن به هر زبان'}
+    ذخیره می‌کنن که در REST API به‌شکلِ یک رشته (نه JSON استاندارد، با
+    کوتیشنِ تک) برمی‌گرده — نتیجه این‌که سایت متنِ درست رو نشون می‌ده ولی
+    API رشته‌ی خام و به‌هم‌ریخته برمی‌گردونه. اینجا این الگو تشخیص داده و
+    فقط اولین مقدارِ واقعی ازش استخراج می‌شه."""
+    text = _strip_html(str(raw or ""))
+    if text.startswith("[{") and "'value'" in text:
+        try:
+            parsed = ast.literal_eval(text)
+            if isinstance(parsed, list) and parsed and isinstance(parsed[0], dict) and parsed[0].get("value"):
+                return str(parsed[0]["value"]).strip()
+        except (ValueError, SyntaxError):
+            pass
+    return text
+
+
 def fetch_wc_product_content(config: dict, wc_id: int) -> dict:
     """{'permalink', 'image_url', 'image_urls', 'description'} — از خودِ پاسخِ WooCommerce API."""
     from sync_app.core.wc_sync_helper import build_wcapi, wc_call
@@ -36,7 +55,7 @@ def fetch_wc_product_content(config: dict, wc_id: int) -> dict:
     image_urls = [str((img or {}).get("src") or "").strip() for img in images]
     image_urls = [u for u in image_urls if u]
     image_url = image_urls[0] if image_urls else ""
-    description = _strip_html(data.get("short_description") or data.get("description") or "")
+    description = _extract_plain_description(data.get("short_description") or data.get("description") or "")
     return {"permalink": permalink, "image_url": image_url, "image_urls": image_urls, "description": description}
 
 
@@ -76,7 +95,7 @@ def fetch_ps_product_content(config: dict, wc_id: int) -> dict:
         raw_desc = entry.get("description_short") or entry.get("description") or ""
         if isinstance(raw_desc, dict):
             raw_desc = raw_desc.get("value") or next(iter(raw_desc.values()), "")
-        description = _strip_html(str(raw_desc))
+        description = _extract_plain_description(raw_desc)
     except Exception:
         description = ""
 
