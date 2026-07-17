@@ -1,7 +1,7 @@
 from PyQt5.QtWidgets import (
     QWidget, QFormLayout, QLineEdit, QLabel, QPushButton,
     QHBoxLayout, QMessageBox, QComboBox, QVBoxLayout, QGroupBox, QScrollArea, QPlainTextEdit, QGridLayout, QCheckBox,
-    QApplication, QFileDialog, QSpinBox, QDoubleSpinBox, QListWidget, QListWidgetItem, QLayout,
+    QApplication, QFileDialog, QSpinBox, QDoubleSpinBox, QListWidget, QListWidgetItem, QLayout, QDialog,
 )
 from PyQt5.QtCore import Qt, QObject, QThread, pyqtSignal, QPropertyAnimation, QEasingCurve, QTimer, QUrl
 from PyQt5.QtGui import QDesktopServices
@@ -1174,6 +1174,23 @@ class SettingsTab(QWidget):
         app_layout.addRow(QLabel("نام کاربری ورود:"), self.app_login_username_input)
         app_layout.addRow(QLabel("رمز عبور ورود:"), self.app_login_password_input)
         app_layout.addRow(QLabel("صفحه لاگین:"), self.login_screen_enabled_checkbox)
+
+        from sync_app.core.user_profile import get_current_profile_id
+
+        self.profile_switch_button = QPushButton("🔄 تعویض پروفایل...")
+        self.profile_switch_button.setToolTip(
+            "هر پروفایل دیتابیس، پلتفرم فروشگاه، آدرس/کلید فروشگاه، تم و بقیه‌ی تنظیمات "
+            "را کاملاً جدا نگه می‌دارد — برای مثال یک پروفایل برای فروشگاه ووکامرس و یک "
+            "پروفایل دیگر برای فروشگاه پرستاشاپ."
+        )
+        self.profile_switch_button.clicked.connect(self._open_profile_switcher)
+        profile_row = QWidget()
+        profile_row_layout = QHBoxLayout(profile_row)
+        profile_row_layout.setContentsMargins(0, 0, 0, 0)
+        profile_row_layout.addWidget(QLabel(get_current_profile_id() or "—"))
+        profile_row_layout.addWidget(self.profile_switch_button)
+        profile_row_layout.addStretch()
+        app_layout.addRow(QLabel("پروفایل فعال:"), profile_row)
         app_layout.addRow(QLabel("بروزرسانی:"), self.auto_update_enabled_checkbox)
         app_layout.addRow(QLabel("راهنما:"), self.provider_hint_label)
         self.update_provider_hint()
@@ -2599,6 +2616,15 @@ class SettingsTab(QWidget):
 
     def _open_license_api_settings_page(self):
         self._open_external_url(self._wp_admin_url("wp-admin/admin.php?page=peecha-licenses"))
+
+    def _open_profile_switcher(self):
+        from sync_app.core.profile_switcher_dialog import ProfileSwitcherDialog
+
+        dialog = ProfileSwitcherDialog(self)
+        if dialog.exec_() == QDialog.Accepted and dialog.selected_profile_id:
+            from sync_app.core.app_restart import restart_application
+
+            restart_application()
 
     def _wc_error_category(self, error_message: str) -> str:
         from sync_app.core.connectivity_service import classify_network_error
