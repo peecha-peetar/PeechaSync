@@ -8,6 +8,7 @@ contextِ نمونه — دقیقاً همون HTML‌ی که به تلگرام/
 from __future__ import annotations
 
 from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QCursor
 from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -17,6 +18,7 @@ from PyQt5.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
+    QMenu,
     QMessageBox,
     QPushButton,
     QTextEdit,
@@ -25,10 +27,18 @@ from PyQt5.QtWidgets import (
 
 from sync_app.core.post_template_renderer import (
     FIELD_TYPE_LABELS,
+    TEXT_ALIGN_LABELS,
     normalize_field,
     normalize_template,
     render_post_text,
 )
+
+_EMOJI_CHOICES = [
+    "🔥", "✅", "❌", "⭐", "🎉", "🎁", "📦", "🚚", "💯", "💰", "🏷️", "🛍️",
+    "📱", "📸", "✨", "👍", "❤️", "😍", "🆕", "⚡", "🔔", "📢", "💬", "🔗",
+    "🕒", "📍", "🎯", "✔️", "➡️", "⬅️", "👇", "👉", "🌟", "💎", "🥇",
+    "🔵", "🟢", "🟡", "🔴", "⚠️",
+]
 
 _SAMPLE_CONTEXT = {
     "name": "نمونه محصول شما",
@@ -52,6 +62,8 @@ def _field_summary(field: dict) -> str:
         extras.append("Bold")
     if field.get("italic"):
         extras.append("Italic")
+    if field.get("align") and field.get("align") != "right":
+        extras.append(TEXT_ALIGN_LABELS.get(field["align"], field["align"]))
     if field.get("blank_line_before"):
         extras.append("فاصله")
     extras_text = "، ".join(extras)
@@ -75,12 +87,19 @@ class PostTemplateDesignerDialog(QDialog):
 
         # --- پیش‌نمایش ---
         preview_col = QVBoxLayout()
-        preview_col.addWidget(QLabel("پیش‌نمایشِ متنِ نهایی (همون‌طور که در تلگرام/بله دیده می‌شه):"))
+        preview_col.addWidget(QLabel("پیش‌نمایشِ متنِ نهایی:"))
         self.preview_edit = QTextEdit()
         self.preview_edit.setReadOnly(True)
         self.preview_edit.setLayoutDirection(Qt.RightToLeft)
         self.preview_edit.setStyleSheet("background:#f1f5f9;")
         preview_col.addWidget(self.preview_edit, 1)
+        preview_hint = QLabel(
+            "این پیش‌نمایش برای تلگرام است (Bold/Italic واقعاً اعمال می‌شه). "
+            "بله فرمت‌بندی (Bold/Italic) رو رندر نمی‌کنه — همون قالب برای بله به‌صورتِ متنِ کاملاً ساده ارسال می‌شه."
+        )
+        preview_hint.setWordWrap(True)
+        preview_hint.setStyleSheet("color:#64748b; font-size:10px;")
+        preview_col.addWidget(preview_hint)
         root.addLayout(preview_col, 1)
 
         # --- ستونِ میانی: عنوان + لیستِ فیلدها ---
@@ -125,10 +144,16 @@ class PostTemplateDesignerDialog(QDialog):
         self.field_type_combo.currentIndexChanged.connect(self._on_panel_changed)
         panel_form.addRow("نوعِ فیلد:", self.field_type_combo)
 
+        text_row = QHBoxLayout()
         self.field_text_input = QLineEdit()
         self.field_text_input.setPlaceholderText("فقط برای «متنِ دلخواه» استفاده می‌شه")
         self.field_text_input.textChanged.connect(self._on_panel_changed)
-        panel_form.addRow("متن (برای متنِ دلخواه):", self.field_text_input)
+        text_row.addWidget(self.field_text_input, 1)
+        self.field_emoji_btn = QPushButton("😀")
+        self.field_emoji_btn.setFixedWidth(40)
+        self.field_emoji_btn.clicked.connect(self._open_emoji_menu)
+        text_row.addWidget(self.field_emoji_btn)
+        panel_form.addRow("متن (برای متنِ دلخواه):", text_row)
 
         self.field_bold_check = QCheckBox("ضخیم (Bold)")
         self.field_bold_check.stateChanged.connect(self._on_panel_changed)
@@ -137,6 +162,20 @@ class PostTemplateDesignerDialog(QDialog):
         self.field_italic_check = QCheckBox("کج (Italic)")
         self.field_italic_check.stateChanged.connect(self._on_panel_changed)
         panel_form.addRow("", self.field_italic_check)
+
+        self.field_align_combo = QComboBox()
+        for key, label in TEXT_ALIGN_LABELS.items():
+            self.field_align_combo.addItem(label, key)
+        self.field_align_combo.currentIndexChanged.connect(self._on_panel_changed)
+        panel_form.addRow("چیدمان:", self.field_align_combo)
+
+        align_hint = QLabel(
+            "«راست»/«چپ» جهتِ واقعیِ متن رو کنترل می‌کنن (مفید برای لینک/تلفنِ لاتین وسطِ متنِ فارسی)؛ "
+            "«وسط» چون هیچ اپِ پیام‌رسانی (نه تلگرام، نه بله) وسط‌چینیِ واقعی نداره، فقط یک تلاشِ تقریبیه."
+        )
+        align_hint.setWordWrap(True)
+        align_hint.setStyleSheet("color:#94a3b8; font-size:9px;")
+        panel_form.addRow("", align_hint)
 
         self.field_blank_line_check = QCheckBox("یک خطِ خالی قبل از این فیلد")
         self.field_blank_line_check.stateChanged.connect(self._on_panel_changed)
@@ -185,8 +224,9 @@ class PostTemplateDesignerDialog(QDialog):
         try:
             enabled = field is not None
             for w in (
-                self.field_type_combo, self.field_text_input,
-                self.field_bold_check, self.field_italic_check, self.field_blank_line_check,
+                self.field_type_combo, self.field_text_input, self.field_emoji_btn,
+                self.field_bold_check, self.field_italic_check,
+                self.field_align_combo, self.field_blank_line_check,
             ):
                 w.setEnabled(enabled)
             if not field:
@@ -196,6 +236,8 @@ class PostTemplateDesignerDialog(QDialog):
             self.field_text_input.setText(str(field.get("text") or ""))
             self.field_bold_check.setChecked(bool(field.get("bold")))
             self.field_italic_check.setChecked(bool(field.get("italic")))
+            align_idx = self.field_align_combo.findData(field.get("align", "right"))
+            self.field_align_combo.setCurrentIndex(align_idx if align_idx >= 0 else 0)
             self.field_blank_line_check.setChecked(bool(field.get("blank_line_before")))
         finally:
             self._updating_panel = False
@@ -208,9 +250,20 @@ class PostTemplateDesignerDialog(QDialog):
         field["text"] = self.field_text_input.text()
         field["bold"] = self.field_bold_check.isChecked()
         field["italic"] = self.field_italic_check.isChecked()
+        field["align"] = self.field_align_combo.currentData()
         field["blank_line_before"] = self.field_blank_line_check.isChecked()
         self.field_list.item(self._current_index).setText(_field_summary(field))
         self._refresh_preview()
+
+    def _open_emoji_menu(self):
+        menu = QMenu(self)
+        for emoji in _EMOJI_CHOICES:
+            action = menu.addAction(emoji)
+            action.triggered.connect(lambda _=False, e=emoji: self._insert_emoji(e))
+        menu.exec_(QCursor.pos())
+
+    def _insert_emoji(self, emoji: str):
+        self.field_text_input.insert(emoji)
 
     def _add_field(self):
         new_field = normalize_field({"type": "custom_text", "text": "متنِ جدید"})

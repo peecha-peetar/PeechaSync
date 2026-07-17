@@ -3,10 +3,19 @@
 فقط ساختارِ متنِ همراهِ پست رو تعیین می‌کنه، نه ظاهرِ عکس).
 
 هر فیلد (نامِ محصول/قیمت/توضیح/لینک/آدرسِ سایت/تلفن/شبکه‌های اجتماعی/
-متنِ دلخواه) می‌تونه Bold/Italic باشه و قبلش یک خطِ خالی داشته باشه.
-چون تلگرام/بله رنگ و اندازه‌فونتِ دلخواه رو توی متن/کپشن پشتیبانی
-نمی‌کنن، خروجی یک متنِ HTMLِ ساده (فقط <b>/<i>/<a>، سازگار با
-parse_mode=HTML) است — همونی که واقعاً در پیام دیده می‌شه."""
+متنِ دلخواه) می‌تونه Bold/Italic باشه، چیدمانِ راست/وسط/چپ داشته باشه،
+و قبلش یک خطِ خالی بیاد.
+
+⚠️ نکته‌ی مهم: تلگرام از parse_mode=HTML پشتیبانی می‌کنه، ولی بله این
+کار رو نمی‌کنه — تگ‌های HTML رو به‌جای رندر کردن، عیناً به‌صورتِ متنِ خام
+نشون می‌ده (تأییدشده با تستِ واقعی). برای همین render_post_text با آرگومانِ
+as_html مشخص می‌کنه خروجی HTMLِ ساده (تلگرام) باشه یا متنِ کاملاً ساده
+(بله) — در حالتِ متنِ ساده نه تگی اضافه می‌شه و نه escape انجام می‌شه.
+
+برای چیدمان: «راست»/«چپ» با نشانه‌های جهتِ یونیکد (RLM/LRM) واقعاً جهتِ
+خواندنِ متن رو کنترل می‌کنن (مفید برای مخلوطِ فارسی/لینک/شماره)، ولی
+«وسط» در هیچ اپِ پیام‌رسانی (نه تلگرام، نه بله) واقعاً پشتیبانی نمی‌شه —
+اینجا فقط یک تلاشِ نرم (padding) برای نزدیک‌شدنه، نه وسط‌چینیِ واقعی."""
 
 from __future__ import annotations
 
@@ -27,11 +36,18 @@ FIELD_TYPE_LABELS = {
     "custom_text": "متنِ دلخواه",
 }
 
+TEXT_ALIGN_LABELS = {"right": "راست", "center": "وسط (تقریبی)", "left": "چپ"}
+
+_RLM = "‏"  # Right-to-Left Mark
+_LRM = "‎"  # Left-to-Right Mark
+_CENTER_PAD = "    "  # فاصله‌ی رقمی — تلاشِ نرم برای نزدیک‌شدن به وسط
+
 DEFAULT_FIELD = {
     "type": "custom_text",
     "text": "",
     "bold": False,
     "italic": False,
+    "align": "right",
     "blank_line_before": False,
 }
 
@@ -39,10 +55,10 @@ DEFAULT_TEMPLATE = {
     "id": "",
     "title": "پیش‌فرض",
     "fields": [
-        {"type": "product_name", "bold": True, "italic": False, "blank_line_before": False},
-        {"type": "price", "bold": True, "italic": False, "blank_line_before": False},
-        {"type": "description", "bold": False, "italic": False, "blank_line_before": True},
-        {"type": "link", "bold": False, "italic": False, "blank_line_before": True},
+        {"type": "product_name", "bold": True, "italic": False, "align": "right", "blank_line_before": False},
+        {"type": "price", "bold": True, "italic": False, "align": "right", "blank_line_before": False},
+        {"type": "description", "bold": False, "italic": False, "align": "right", "blank_line_before": True},
+        {"type": "link", "bold": False, "italic": False, "align": "left", "blank_line_before": True},
     ],
 }
 
@@ -53,6 +69,8 @@ def normalize_field(raw: dict | None) -> dict:
     merged.update({k: v for k, v in (raw or {}).items() if v is not None})
     if merged.get("type") not in FIELD_TYPE_LABELS:
         merged["type"] = "custom_text"
+    if merged.get("align") not in TEXT_ALIGN_LABELS:
+        merged["align"] = "right"
     return merged
 
 
@@ -100,11 +118,24 @@ def _field_value(field: dict, context: dict) -> str:
     return ""
 
 
-def render_post_text(context: dict, template: dict) -> str:
-    """خروجی: متنِ HTMLِ ساده (سازگار با parse_mode=HTML تلگرام/بله) —
-    آماده برای ارسالِ مستقیم به‌عنوانِ متن/کپشنِ پست. context شاملِ
-    name/price/description/permalink/site_address/phone/social_instagram/
-    social_telegram/social_whatsapp می‌شه."""
+def _apply_align(text: str, align: str) -> str:
+    if align == "left":
+        return _LRM + text
+    if align == "center":
+        return _CENTER_PAD + text
+    return _RLM + text  # right (پیش‌فرض)
+
+
+def render_post_text(context: dict, template: dict, *, as_html: bool = True) -> str:
+    """خروجی: متنِ آماده برای ارسال به‌عنوانِ متن/کپشنِ پست.
+
+    as_html=True: متنِ HTMLِ ساده (فقط <b>/<i>/<a>) — فقط برای پلتفرم‌هایی
+    که parse_mode=HTML رو واقعاً رندر می‌کنن (تلگرام). as_html=False:
+    متنِ کاملاً ساده، بدونِ هیچ تگ یا escape (لازم برای بله، چون HTML رو
+    رندر نمی‌کنه و اگه تگ بفرستیم عیناً به‌صورتِ متنِ خام دیده می‌شه).
+
+    context شاملِ name/price/description/permalink/site_address/phone/
+    social_instagram/social_telegram/social_whatsapp می‌شه."""
     tpl = normalize_template(template)
     lines: list[str] = []
     for field in tpl["fields"]:
@@ -113,14 +144,20 @@ def render_post_text(context: dict, template: dict) -> str:
             continue
         if field.get("blank_line_before") and lines:
             lines.append("")
-        if field.get("type") == "link":
-            escaped_url = _html.escape(value, quote=True)
-            text = f'<a href="{escaped_url}">{_html.escape(value)}</a>'
+
+        if as_html:
+            if field.get("type") == "link":
+                escaped_url = _html.escape(value, quote=True)
+                text = f'<a href="{escaped_url}">{_html.escape(value)}</a>'
+            else:
+                text = _html.escape(value)
+            if field.get("bold"):
+                text = f"<b>{text}</b>"
+            if field.get("italic"):
+                text = f"<i>{text}</i>"
         else:
-            text = _html.escape(value)
-        if field.get("bold"):
-            text = f"<b>{text}</b>"
-        if field.get("italic"):
-            text = f"<i>{text}</i>"
+            text = value
+
+        text = _apply_align(text, field.get("align", "right"))
         lines.append(text)
     return "\n".join(lines)

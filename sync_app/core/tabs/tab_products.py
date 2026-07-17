@@ -1873,7 +1873,7 @@ class ProductTab(QWidget):
         # تماس/شبکه‌های اجتماعی) + متنِ دلخواه؛ روی خودِ عکسِ محصول هیچ اثری
         # نداره، فقط متنِ پست رو می‌سازه ---
         from sync_app.core.post_template_renderer import render_post_text
-        from sync_app.core.post_template_store import find_template, list_templates, save_template
+        from sync_app.core.post_template_store import delete_template, find_template, list_templates, save_template
 
         schedule_template_row = QHBoxLayout()
         schedule_template_row.addWidget(QLabel("قالبِ متنِ پست (اختیاری):"))
@@ -1904,9 +1904,12 @@ class ProductTab(QWidget):
             if not tpl:
                 return
             context = _build_template_context(product, schedule_fetched, cfg_now, short_link)
-            schedule_text_edit.setPlainText(render_post_text(context, tpl))
+            # بله برخلافِ تلگرام، parse_mode=HTML رو رندر نمی‌کنه — پس فقط برای تلگرام از تگ‌های HTML استفاده می‌شه
+            as_html = (schedule_platform_combo.currentData() or "telegram") == "telegram"
+            schedule_text_edit.setPlainText(render_post_text(context, tpl, as_html=as_html))
 
         schedule_template_combo.currentIndexChanged.connect(_apply_template_to_text)
+        schedule_platform_combo.currentIndexChanged.connect(_apply_template_to_text)
 
         def _design_new_template():
             from sync_app.core.post_template_designer_dialog import PostTemplateDesignerDialog
@@ -1925,9 +1928,55 @@ class ProductTab(QWidget):
             _apply_template_to_text()
             QMessageBox.information(self, "قالبِ پست", "قالب ذخیره و برای این پست اعمال شد.")
 
-        schedule_design_btn = QPushButton("🧩 طراحِ قالبِ جدید")
+        schedule_design_btn = QPushButton("🧩 قالبِ جدید")
         schedule_design_btn.clicked.connect(_design_new_template)
         schedule_template_row.addWidget(schedule_design_btn)
+
+        def _edit_selected_template():
+            template_id = schedule_template_combo.currentData()
+            if not template_id:
+                QMessageBox.information(self, "ویرایشِ قالب", "ابتدا یک قالب را از لیست انتخاب کنید.")
+                return
+            from sync_app.core.post_template_designer_dialog import PostTemplateDesignerDialog
+
+            cfg_now = load_secure_config(None) or {}
+            tpl = find_template(list_templates(cfg_now), template_id)
+            if not tpl:
+                return
+            designer = PostTemplateDesignerDialog(self, template=tpl)
+            if designer.exec_() != QDialog.Accepted or not designer.saved_template:
+                return
+            saved = designer.saved_template
+            cfg_new = save_template(cfg_now, saved.get("title") or "بدون‌عنوان", saved, template_id=template_id)
+            save_secure_config(cfg_new)
+            _reload_template_combo(select_id=template_id)
+            _apply_template_to_text()
+            QMessageBox.information(self, "قالبِ پست", "قالب ویرایش و ذخیره شد.")
+
+        schedule_edit_template_btn = QPushButton("✏️ ویرایش")
+        schedule_edit_template_btn.clicked.connect(_edit_selected_template)
+        schedule_template_row.addWidget(schedule_edit_template_btn)
+
+        def _delete_selected_template():
+            template_id = schedule_template_combo.currentData()
+            if not template_id:
+                QMessageBox.information(self, "حذفِ قالب", "ابتدا یک قالب را از لیست انتخاب کنید.")
+                return
+            title = schedule_template_combo.currentText()
+            answer = QMessageBox.question(
+                self, "حذفِ قالب", f"قالبِ «{title}» حذف شود؟",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
+            cfg_now = load_secure_config(None) or {}
+            cfg_new = delete_template(cfg_now, template_id)
+            save_secure_config(cfg_new)
+            _reload_template_combo()
+
+        schedule_delete_template_btn = QPushButton("🗑 حذف")
+        schedule_delete_template_btn.clicked.connect(_delete_selected_template)
+        schedule_template_row.addWidget(schedule_delete_template_btn)
         schedule_layout.addLayout(schedule_template_row)
 
         schedule_template_hint = QLabel(
@@ -2205,7 +2254,8 @@ class ProductTab(QWidget):
 
                     if tpl:
                         context = _build_template_context(product_data, fetched, cfg)
-                        text = render_post_text(context, tpl)
+                        # بله parse_mode=HTML رو رندر نمی‌کنه — فقط برای تلگرام از تگ‌های HTML استفاده می‌شه
+                        text = render_post_text(context, tpl, as_html=(platform == "telegram"))
                     else:
                         text = generate_telegram_text(product_data)
                         permalink = fetched.get("permalink") or ""

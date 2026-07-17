@@ -1,7 +1,12 @@
 """ارسالِ پیام/عکس به کانال/گروهِ «بله» (Bale) از طریقِ Bot API رسمی —
 دقیقاً هم‌ساختار با telegram_poster.py (چون Bale API خودش عیناً از شکلِ
 Telegram Bot API الگو گرفته: tapi.bale.ai/bot<token>/METHOD). برخلافِ
-تلگرام، بله در ایران فیلتر نیست — نیازی به پراکسی نداره."""
+تلگرام، بله در ایران فیلتر نیست — نیازی به پراکسی نداره.
+
+⚠️ برخلافِ تلگرام، بله parse_mode=HTML رو رندر نمی‌کنه (با تستِ واقعی
+تأیید شد: تگ‌ها عیناً به‌صورتِ متنِ خام نمایش داده می‌شن) — برای همین
+اینجا عمداً parse_mode ارسال نمی‌شه؛ متنِ ورودی باید از قبل کاملاً ساده
+باشه (بدونِ HTML)، مثلِ خروجیِ render_post_text(..., as_html=False)."""
 
 from __future__ import annotations
 
@@ -59,7 +64,7 @@ def send_text_message(bot_token: str, chat_id: str, text: str, *, timeout: int =
     try:
         resp = requests.post(
             _API_BASE.format(token=token) + "/sendMessage",
-            data={"chat_id": chat, "text": text or "", "parse_mode": "HTML"},
+            data={"chat_id": chat, "text": text or ""},
             timeout=timeout,
         )
     except requests.RequestException as exc:
@@ -85,7 +90,7 @@ def send_photo_message(
         with open(photo_path, "rb") as f:
             resp = requests.post(
                 _API_BASE.format(token=token) + "/sendPhoto",
-                data={"chat_id": chat, "caption": caption or "", "parse_mode": "HTML"},
+                data={"chat_id": chat, "caption": caption or ""},
                 files={"photo": f},
                 timeout=timeout,
             )
@@ -124,7 +129,6 @@ def send_media_group(
             item = {"type": "photo", "media": f"attach://{key}"}
             if idx == 0 and caption:
                 item["caption"] = caption
-                item["parse_mode"] = "HTML"
             media.append(item)
             fh = open(path, "rb")
             opened.append(fh)
