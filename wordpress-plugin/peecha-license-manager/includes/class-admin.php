@@ -434,9 +434,15 @@ class Peecha_LM_Admin
                 return;
             }
             $updates_until = Peecha_LM_License::cap_updates_until($license_expires, $updates_until);
+            $max_sites = Peecha_LM_License::normalize_max_sites($_POST['max_sites'] ?? 0);
+            $platform_scope = Peecha_LM_License::normalize_platform_scope($_POST['platform_scope'] ?? 'both');
 
             if ($hwid !== '') {
-                $license_key = Peecha_LM_License::generate_key($hwid, $license_expires, $updates_until);
+                $license_key = Peecha_LM_License::generate_key($hwid, $license_expires, $updates_until, $max_sites, $platform_scope);
+                if (is_wp_error($license_key)) {
+                    add_settings_error('peecha_lm', 'license_sign_failed', $license_key->get_error_message(), 'error');
+                    return;
+                }
             } else {
                 $license_key = 'PLM-' . strtoupper(wp_generate_password(20, false, false));
             }
@@ -450,6 +456,8 @@ class Peecha_LM_Admin
                 'license_expires' => $license_expires,
                 'updates_until' => $updates_until ?: $license_expires,
                 'notes' => sanitize_textarea_field((string) ($_POST['notes'] ?? '')),
+                'max_sites' => $max_sites,
+                'platform_scope' => $platform_scope,
             ));
             if ($hwid !== '') {
                 Peecha_LM_DB::unblock_hwid($hwid);
@@ -580,8 +588,14 @@ class Peecha_LM_Admin
             $new_key = Peecha_LM_License::generate_key(
                 $hwid,
                 $row['license_expires'],
-                $row['updates_until']
+                $row['updates_until'],
+                (int) ($row['max_sites'] ?? 0),
+                (string) ($row['platform_scope'] ?? 'both')
             );
+            if (is_wp_error($new_key)) {
+                add_settings_error('peecha_lm', 'license_sign_failed', $new_key->get_error_message(), 'error');
+                return;
+            }
             Peecha_LM_DB::update_license($id, array('license_key' => $new_key));
             add_settings_error('peecha_lm', 'key_regenerated', self::t('License key regenerated.', 'کلید لایسنس دوباره ساخته شد.'), 'updated');
         }
@@ -875,6 +889,53 @@ class Peecha_LM_Admin
                                 'بروزرسانی تا این تاریخ مجاز است. نمی‌تواند از تاریخ انقضای لایسنس بیشتر باشد.'
                             ); ?>
                         </div>
+                        <?php if (!$edit_row) : ?>
+                            <div class="peecha-lm-field">
+                                <label><?php echo esc_html(self::t('Sites allowed', 'تعداد سایت مجاز')); ?></label>
+                                <select name="max_sites">
+                                    <option value="1"><?php echo esc_html(self::t('Single site', 'تک‌سایتی')); ?></option>
+                                    <option value="0"><?php echo esc_html(self::t('Unlimited sites', 'چندسایتی (نامحدود)')); ?></option>
+                                </select>
+                                <?php self::hint(
+                                    'Single-site: license locks to the first store URL the app connects to. Unlimited: no site limit.',
+                                    'تک‌سایتی: لایسنس با اولین آدرسِ فروشگاهی که برنامه به آن وصل شود قفل می‌شود. نامحدود: هیچ محدودیتی روی تعداد سایت نیست.'
+                                ); ?>
+                            </div>
+                            <div class="peecha-lm-field">
+                                <label><?php echo esc_html(self::t('Platform', 'پلتفرم')); ?></label>
+                                <select name="platform_scope">
+                                    <option value="both"><?php echo esc_html(self::t('WooCommerce + PrestaShop', 'ووکامرس + پرستاشاپ')); ?></option>
+                                    <option value="wc"><?php echo esc_html(self::t('WooCommerce only', 'فقط ووکامرس')); ?></option>
+                                    <option value="ps"><?php echo esc_html(self::t('PrestaShop only', 'فقط پرستاشاپ')); ?></option>
+                                </select>
+                                <?php self::hint(
+                                    'Which store platform(s) this license may be used with.',
+                                    'این لایسنس روی کدام پلتفرمِ فروشگاهی قابلِ استفاده باشد.'
+                                ); ?>
+                            </div>
+                        <?php else : ?>
+                            <div class="peecha-lm-field peecha-lm-field--full">
+                                <label><?php echo esc_html(self::t('Sites / Platform scope', 'محدودیتِ سایت / پلتفرم')); ?></label>
+                                <p class="description">
+                                    <?php
+                                    $scope_sites = ((int) ($edit_row['max_sites'] ?? 0)) > 0
+                                        ? self::t('Single site', 'تک‌سایتی')
+                                        : self::t('Unlimited sites', 'چندسایتی (نامحدود)');
+                                    $scope_platform_map = array(
+                                        'wc' => self::t('WooCommerce only', 'فقط ووکامرس'),
+                                        'ps' => self::t('PrestaShop only', 'فقط پرستاشاپ'),
+                                        'both' => self::t('WooCommerce + PrestaShop', 'ووکامرس + پرستاشاپ'),
+                                    );
+                                    $scope_platform = $scope_platform_map[$edit_row['platform_scope'] ?? 'both'] ?? $scope_platform_map['both'];
+                                    echo esc_html($scope_sites . ' — ' . $scope_platform);
+                                    ?>
+                                </p>
+                                <?php self::hint(
+                                    'Baked into the signed key at creation — cannot be changed by editing. Issue a new license to change it.',
+                                    'این مقدار داخلِ کلیدِ امضاشده در لحظه‌ی ساخت ثبت شده — با ویرایش تغییر نمی‌کند؛ برای تغییرش باید لایسنسِ جدید صادر شود.'
+                                ); ?>
+                            </div>
+                        <?php endif; ?>
                         <div class="peecha-lm-field peecha-lm-field--full">
                             <label><?php echo esc_html(self::t('Notes', 'یادداشت')); ?></label>
                             <textarea name="notes" rows="3"><?php echo esc_textarea($edit_row['notes'] ?? ''); ?></textarea>

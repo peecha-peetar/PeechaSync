@@ -38,6 +38,16 @@ class Peecha_LM_DB
         if (!$site_col) {
             $wpdb->query("ALTER TABLE {$table} ADD COLUMN site_url VARCHAR(255) NULL DEFAULT NULL");
         }
+
+        $max_sites_col = $wpdb->get_row("SHOW COLUMNS FROM {$table} LIKE 'max_sites'", ARRAY_A);
+        if (!$max_sites_col) {
+            $wpdb->query("ALTER TABLE {$table} ADD COLUMN max_sites SMALLINT UNSIGNED NOT NULL DEFAULT 0");
+        }
+
+        $platform_col = $wpdb->get_row("SHOW COLUMNS FROM {$table} LIKE 'platform_scope'", ARRAY_A);
+        if (!$platform_col) {
+            $wpdb->query("ALTER TABLE {$table} ADD COLUMN platform_scope VARCHAR(8) NOT NULL DEFAULT 'both'");
+        }
     }
 
     public static function deactivate()
@@ -65,6 +75,8 @@ class Peecha_LM_DB
             last_seen_at DATETIME NULL DEFAULT NULL,
             last_app_version VARCHAR(32) NULL DEFAULT NULL,
             site_url VARCHAR(255) NULL DEFAULT NULL,
+            max_sites SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+            platform_scope VARCHAR(8) NOT NULL DEFAULT 'both',
             created_at DATETIME NOT NULL,
             updated_at DATETIME NOT NULL,
             PRIMARY KEY (id),
@@ -186,6 +198,8 @@ class Peecha_LM_DB
             'license_expires' => $data['license_expires'] ?? null,
             'updates_until' => $data['updates_until'] ?? null,
             'notes' => $data['notes'] ?? '',
+            'max_sites' => (int) ($data['max_sites'] ?? 0),
+            'platform_scope' => $data['platform_scope'] ?? 'both',
             'created_at' => $now,
             'updated_at' => $now,
         );

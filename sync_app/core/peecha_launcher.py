@@ -3440,7 +3440,18 @@ def main(existing_app=None):
         login_win = LoginWindow(config=bootstrap, on_login_success=show_main_launcher)
         _present_startup_window(login_win, "Login window")
 
+    def _block_on_license_scope(message):
+        from PyQt5.QtWidgets import QMessageBox
+
+        _startup_log.info("License scope violation - blocking launch: %s", message)
+        QMessageBox.critical(None, "محدودیت لایسنس", message)
+        instance_manager.cleanup()
+        sys.exit(1)
+
     if LicenseTab.is_license_valid_for_launch():
+        scope_ok, scope_msg = LicenseTab.check_license_scope(cfg)
+        if not scope_ok:
+            _block_on_license_scope(scope_msg)
         _startup_log.info("License OK - opening app...")
         show_login = cfg.get("APP_SHOW_LOGIN_SCREEN", True)
         _startup_log.info("Login screen: %s", "on" if show_login else "off")

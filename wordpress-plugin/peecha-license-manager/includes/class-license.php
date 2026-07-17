@@ -65,7 +65,21 @@ class Peecha_LM_License
         return base64_encode(sodium_crypto_sign_publickey($kp));
     }
 
-    public static function generate_key($hwid, $license_expires, $updates_until = null)
+    /** 'wc' | 'ps' | 'both' — پلتفرمِ مجاز برای این لایسنس. */
+    public static function normalize_platform_scope($value)
+    {
+        $value = strtolower(trim((string) $value));
+        return in_array($value, array('wc', 'ps'), true) ? $value : 'both';
+    }
+
+    /** 0 = نامحدود، وگرنه حداکثر تعدادِ سایتِ مجاز. */
+    public static function normalize_max_sites($value)
+    {
+        $n = (int) $value;
+        return $n > 0 ? $n : 0;
+    }
+
+    public static function generate_key($hwid, $license_expires, $updates_until = null, $max_sites = 0, $platform = 'both')
     {
         $hwid = sanitize_text_field($hwid);
         $license_expires = self::normalize_date($license_expires);
@@ -93,6 +107,8 @@ class Peecha_LM_License
             'e' => $license_expires,
             'u' => $updates_until,
             'i' => $issued,
+            's' => self::normalize_max_sites($max_sites),
+            'p' => self::normalize_platform_scope($platform),
         );
 
         $payload_json = wp_json_encode($payload, JSON_UNESCAPED_UNICODE);

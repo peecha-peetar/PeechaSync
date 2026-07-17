@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Peecha License Manager
  * Description: License CRUD, activation/validation API, and update mirror for PeechaSync desktop app.
- * Version: 1.0.40
+ * Version: 1.0.41
  * Author: Peecha
  * Text Domain: peecha-license-manager
  * Domain Path: /languages
@@ -12,7 +12,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('PEECHA_LM_VERSION', '1.0.40');
+define('PEECHA_LM_VERSION', '1.0.41');
 define('PEECHA_LM_DEFAULT_GITHUB_REPO', 'peecha-peetar/PeechaSync');
 define('PEECHA_LM_PLUGIN_FILE', __FILE__);
 define('PEECHA_LM_PLUGIN_DIR', plugin_dir_path(__FILE__));
