@@ -12,3 +12,4 @@ arabic-reshaper==3.0.1
 python-bidi==0.6.11
 openpyxl==3.1.5
 qrcode==8.2
+PySocks==1.7.1

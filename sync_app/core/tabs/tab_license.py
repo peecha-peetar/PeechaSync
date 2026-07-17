@@ -314,6 +314,105 @@ class LicenseTab(QWidget):
             return ""
 
     @staticmethod
+    def _normalize_site_url(url: str) -> str:
+        return (url or "").strip().rstrip("/").lower()
+
+    @staticmethod
+    def _site_fingerprint(url: str) -> str:
+        import hashlib
+
+        normalized = LicenseTab._normalize_site_url(url)
+        return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
+
+    @staticmethod
+    def _current_site_url(config: dict) -> str:
+        from sync_app.core.integrations.commerce_provider import is_prestashop
+
+        if is_prestashop(config):
+            return str(config.get("PS_URL") or "").strip()
+        return str(config.get("WC_URL") or "").strip()
+
+    @staticmethod
+    def _load_sites_seen() -> list:
+        try:
+            with open(license_file_path(), "r", encoding="utf-8") as f:
+                data = json.load(f)
+            seen = data.get("sites_seen")
+            return list(seen) if isinstance(seen, list) else []
+        except Exception:
+            return []
+
+    @staticmethod
+    def _save_sites_seen(sites_seen: list) -> None:
+        try:
+            path = license_file_path()
+            data = {}
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            data["sites_seen"] = sites_seen
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    @staticmethod
+    def check_license_scope(config: dict | None = None) -> tuple:
+        """چکِ محدودیتِ «تعدادِ سایت» و «پلتفرمِ مجاز» — جدا از اعتبارِ خودِ
+        امضا/انقضای لایسنس (که validate_key چک می‌کنه). این مقادیر داخلِ
+        payloadِ امضاشده هستن، پس قابلِ دستکاری از بیرون نیستن. خروجی:
+        (ok, پیامِ فارسیِ توضیح در صورتِ رد شدن)."""
+        if LICENSE_BYPASS:
+            return True, ""
+
+        key = LicenseTab._load_license_key()
+        if not key:
+            return True, ""
+
+        payload = LicenseTab.parse_license_payload(key)
+        if not payload:
+            return True, ""
+
+        config = config if config is not None else (load_secure_config(None) or {})
+
+        allowed_platform = str(payload.get("p") or "both").strip().lower()
+        if allowed_platform in ("wc", "ps"):
+            from sync_app.core.integrations.commerce_provider import (
+                is_prestashop,
+                store_platform_label,
+            )
+
+            current_is_ps = is_prestashop(config)
+            if allowed_platform == "wc" and current_is_ps:
+                return False, (
+                    "لایسنسِ شما فقط برای ووکامرس صادر شده — برای استفاده با "
+                    f"{store_platform_label(config)} باید لایسنسِ «هر دو پلتفرم» تهیه کنید."
+                )
+            if allowed_platform == "ps" and not current_is_ps:
+                return False, (
+                    "لایسنسِ شما فقط برای پرستاشاپ صادر شده — برای استفاده با "
+                    f"{store_platform_label(config)} باید لایسنسِ «هر دو پلتفرم» تهیه کنید."
+                )
+
+        max_sites = int(payload.get("s") or 0)
+        if max_sites > 0:
+            site_url = LicenseTab._current_site_url(config)
+            if site_url:
+                fingerprint = LicenseTab._site_fingerprint(site_url)
+                sites_seen = LicenseTab._load_sites_seen()
+                if fingerprint not in sites_seen:
+                    if len(sites_seen) >= max_sites:
+                        return False, (
+                            f"لایسنسِ شما فقط برای {max_sites} سایت معتبر است و سهمیه‌اش قبلاً "
+                            "برای سایت‌های دیگری استفاده شده — برای این سایتِ جدید به لایسنسِ "
+                            "چندسایتی نیاز دارید."
+                        )
+                    sites_seen.append(fingerprint)
+                    LicenseTab._save_sites_seen(sites_seen)
+
+        return True, ""
+
+    @staticmethod
     def parse_license_payload(key: str) -> dict:
         if not key:
             return {}

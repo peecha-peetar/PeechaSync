@@ -1,7 +1,7 @@
 from PyQt5.QtWidgets import (
     QWidget, QFormLayout, QLineEdit, QLabel, QPushButton,
     QHBoxLayout, QMessageBox, QComboBox, QVBoxLayout, QGroupBox, QScrollArea, QPlainTextEdit, QGridLayout, QCheckBox,
-    QApplication, QFileDialog, QSpinBox, QDoubleSpinBox, QListWidget, QListWidgetItem, QLayout,
+    QApplication, QFileDialog, QSpinBox, QDoubleSpinBox, QListWidget, QListWidgetItem, QLayout, QDialog,
 )
 from PyQt5.QtCore import Qt, QObject, QThread, pyqtSignal, QPropertyAnimation, QEasingCurve, QTimer, QUrl
 from PyQt5.QtGui import QDesktopServices
@@ -587,6 +587,11 @@ class SettingsTab(QWidget):
         self._wc_site_switching = False
         self._wc_active_site_baseline = {}
         self._wc_guard_busy = False
+        self._ps_sites = []
+        self._active_ps_site_id = ""
+        self._ps_site_switching = False
+        self._ps_active_site_baseline = {}
+        self._ps_guard_busy = False
         self._last_success_sql_auth_mode = (self.config or {}).get("SQL_AUTH_MODE", "auto")
         self._dirty = False
         self._field_baselines = {}
@@ -838,6 +843,53 @@ class SettingsTab(QWidget):
         subtitle.setProperty("role", "caption")
         subtitle.setAlignment(Qt.AlignCenter)
         outer_layout.addWidget(subtitle)
+
+        # ── پیش‌تنظیم‌های نام‌دارِ کلِ تنظیمات — چند مجموعه تنظیماتِ کامل (دیتابیس
+        # + پلتفرم + فروشگاه + تم) زیرِ یک عنوان، قابلِ سوییچِ آنی بدونِ نیاز
+        # به تعویضِ پروفایل/راه‌اندازیِ مجددِ برنامه ──────────────────────
+        preset_bar = QWidget()
+        preset_bar.setObjectName("presetBar")
+        preset_bar.setStyleSheet(
+            "QWidget#presetBar { background: #eef2ff; border: 1px solid #c7d2fe;"
+            " border-radius: 10px; }"
+        )
+        preset_bar_layout = QHBoxLayout(preset_bar)
+        preset_bar_layout.setContentsMargins(12, 8, 12, 8)
+        preset_bar_layout.setSpacing(8)
+
+        preset_label = QLabel("پیش‌تنظیم:")
+        preset_label.setStyleSheet("font-weight:700; color:#3730a3;")
+        preset_bar_layout.addWidget(preset_label)
+
+        self.preset_combo = QComboBox()
+        self.preset_combo.setMinimumHeight(36)
+        self.preset_combo.setMinimumWidth(220)
+        preset_bar_layout.addWidget(self.preset_combo, 1)
+
+        self.preset_save_btn = QPushButton("💾 ذخیره به‌عنوان...")
+        self.preset_save_btn.setMinimumHeight(36)
+        self.preset_save_btn.clicked.connect(self._on_save_config_preset)
+        preset_bar_layout.addWidget(self.preset_save_btn)
+
+        self.preset_delete_btn = QPushButton("🗑 حذف")
+        self.preset_delete_btn.setMinimumHeight(36)
+        self.preset_delete_btn.clicked.connect(self._on_delete_config_preset)
+        preset_bar_layout.addWidget(self.preset_delete_btn)
+
+        outer_layout.addWidget(preset_bar)
+
+        preset_hint = QLabel(
+            "هر پیش‌تنظیم کل تنظیمات این تب (دیتابیس، پلتفرم، فروشگاه، تم و بقیه) را زیر یک "
+            "عنوان ذخیره می‌کند — با انتخاب یک پیش‌تنظیم، همه‌ی این تنظیمات جایگزین تنظیمات "
+            "فعلی و بلافاصله اعمال می‌شود."
+        )
+        preset_hint.setWordWrap(True)
+        preset_hint.setStyleSheet("color:#64748b; font-size:10px; padding: 0 4px;")
+        outer_layout.addWidget(preset_hint)
+
+        self._config_presets_switching = False
+        self._refresh_preset_combo()
+        self.preset_combo.currentIndexChanged.connect(self._on_preset_combo_changed)
 
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
@@ -1174,6 +1226,23 @@ class SettingsTab(QWidget):
         app_layout.addRow(QLabel("نام کاربری ورود:"), self.app_login_username_input)
         app_layout.addRow(QLabel("رمز عبور ورود:"), self.app_login_password_input)
         app_layout.addRow(QLabel("صفحه لاگین:"), self.login_screen_enabled_checkbox)
+
+        from sync_app.core.user_profile import get_current_profile_id
+
+        self.profile_switch_button = QPushButton("🔄 تعویض پروفایل...")
+        self.profile_switch_button.setToolTip(
+            "هر پروفایل دیتابیس، پلتفرم فروشگاه، آدرس/کلید فروشگاه، تم و بقیه‌ی تنظیمات "
+            "را کاملاً جدا نگه می‌دارد — برای مثال یک پروفایل برای فروشگاه ووکامرس و یک "
+            "پروفایل دیگر برای فروشگاه پرستاشاپ."
+        )
+        self.profile_switch_button.clicked.connect(self._open_profile_switcher)
+        profile_row = QWidget()
+        profile_row_layout = QHBoxLayout(profile_row)
+        profile_row_layout.setContentsMargins(0, 0, 0, 0)
+        profile_row_layout.addWidget(QLabel(get_current_profile_id() or "—"))
+        profile_row_layout.addWidget(self.profile_switch_button)
+        profile_row_layout.addStretch()
+        app_layout.addRow(QLabel("پروفایل فعال:"), profile_row)
         app_layout.addRow(QLabel("بروزرسانی:"), self.auto_update_enabled_checkbox)
         app_layout.addRow(QLabel("راهنما:"), self.provider_hint_label)
         self.update_provider_hint()
@@ -1419,6 +1488,57 @@ class SettingsTab(QWidget):
         ps_section_label.setStyleSheet("font-weight:700; margin-top:10px;")
         wc_form_layout.addRow(QLabel(""), ps_section_label)
 
+        from sync_app.core.ps_site_profiles import (
+            copy_sites as ps_copy_sites,
+            create_empty_site as ps_create_empty_site,
+            find_ps_site,
+            get_active_site_id as ps_get_active_site_id,
+            get_ps_sites,
+            site_display_label as ps_site_display_label,
+        )
+
+        self._ps_sites = ps_copy_sites(get_ps_sites(self.config))
+        self._active_ps_site_id = ps_get_active_site_id(self.config)
+        if not self._ps_sites:
+            self._ps_sites = [ps_create_empty_site(label="سایت ۱")]
+            self._active_ps_site_id = str(self._ps_sites[0].get("id") or "")
+
+        self.ps_site_combo = QComboBox()
+        self.ps_site_combo.setMinimumHeight(38)
+        self.ps_site_combo.setLayoutDirection(Qt.LeftToRight)
+        self.ps_add_site_btn = QPushButton("➕ سایت جدید")
+        self.ps_add_site_btn.setMinimumHeight(38)
+        self.ps_delete_site_btn = QPushButton("🗑 حذف")
+        self.ps_delete_site_btn.setMinimumHeight(38)
+        self.ps_add_site_btn.clicked.connect(self._on_add_ps_site)
+        self.ps_delete_site_btn.clicked.connect(self._on_delete_ps_site)
+        self.ps_site_combo.currentIndexChanged.connect(self._on_ps_site_combo_changed)
+
+        self.ps_site_name_input = QLineEdit()
+        self.ps_site_name_input.setMinimumHeight(38)
+        self.ps_site_name_input.setPlaceholderText("نام دلخواه فروشگاه (مثلاً فروشگاه اصلی)")
+        self.ps_site_name_input.editingFinished.connect(self._on_ps_site_name_changed)
+
+        ps_site_row = QWidget()
+        ps_site_row_layout = QHBoxLayout(ps_site_row)
+        ps_site_row_layout.setContentsMargins(0, 0, 0, 0)
+        ps_site_row_layout.setSpacing(8)
+        ps_site_row_layout.addWidget(self.ps_site_combo, 1)
+        ps_site_row_layout.addWidget(self.ps_add_site_btn)
+        ps_site_row_layout.addWidget(self.ps_delete_site_btn)
+
+        ps_sites_help = QLabel(
+            "هر فروشگاه با URL و کلید Webservice جدا ذخیره می‌شود.\n"
+            "اگر تنظیمات مربوط به فروشگاه دیگری است، «سایت جدید +» بزنید — "
+            "ویرایش پروفایل موجود، اطلاعات همان سایت را بازنویسی می‌کند."
+        )
+        ps_sites_help.setStyleSheet("color:#64748b; font-size:10px;")
+        ps_sites_help.setWordWrap(True)
+
+        wc_form_layout.addRow(QLabel("فروشگاه پرستاشاپ:"), ps_site_row)
+        wc_form_layout.addRow(QLabel("نام سایت:"), self.ps_site_name_input)
+        wc_form_layout.addRow(QLabel(""), ps_sites_help)
+
         self.ps_url_input = QLineEdit(self.config.get("PS_URL", ""))
         self.ps_url_input.setPlaceholderText("https://your-prestashop-store.com")
         self.ps_api_key_input = PasswordLineEdit(self.config.get("PS_API_KEY", ""))
@@ -1447,6 +1567,14 @@ class SettingsTab(QWidget):
         wc_form_layout.addRow(QLabel(""), ps_api_help)
         wc_form_layout.addRow(QLabel(""), self.ps_test_button)
 
+        self._refresh_ps_site_combo(select_id=self._active_ps_site_id)
+        active_ps_site = find_ps_site(self._ps_sites, self._active_ps_site_id)
+        if active_ps_site:
+            self.ps_url_input.setText(str(active_ps_site.get("url") or self.ps_url_input.text()))
+            self.ps_api_key_input.setText(str(active_ps_site.get("api_key") or self.ps_api_key_input.text()))
+            self.ps_site_name_input.setText(str(active_ps_site.get("label") or ""))
+        self._snapshot_ps_site_baseline()
+
         # --- نمایش/مخفی‌کردن فیلدهای مخصوص هر پلتفرم بر اساس store_platform_combo ---
         # currency_combo/product_mode_combo عمداً اینجا نیستن — این دو مشترک بین هر
         # دو پلتفرمن (تبدیل قیمت ERP و نوع محصول)، نه مخصوص ووکامرس.
@@ -1463,6 +1591,7 @@ class SettingsTab(QWidget):
         ]
         self._ps_only_fields = [
             ps_section_label,
+            ps_site_row, self.ps_site_name_input, ps_sites_help,
             self.ps_url_input, self.ps_api_key_input,
             ps_api_help, self.ps_test_button,
         ]
@@ -1470,6 +1599,135 @@ class SettingsTab(QWidget):
             lambda _idx: self._apply_platform_field_visibility()
         )
         self._apply_platform_field_visibility()
+
+        # --- تلگرام (برای تقویم محتوا) — مستقل از پلتفرم فروشگاه، همیشه نمایان ---
+        from sync_app.core.telegram_poster import (
+            TELEGRAM_BOT_TOKEN_KEY,
+            TELEGRAM_CHAT_ID_KEY,
+            TELEGRAM_PROXY_URL_KEY,
+        )
+
+        self.telegram_group = QGroupBox("تلگرام (برای تقویم محتوا)")
+        self.telegram_group.setLayoutDirection(Qt.LeftToRight)
+        telegram_layout = QFormLayout()
+        telegram_layout.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        telegram_layout.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        telegram_layout.setFormAlignment(Qt.AlignTop)
+        telegram_layout.setHorizontalSpacing(14)
+        telegram_layout.setVerticalSpacing(10)
+
+        self.telegram_bot_token_input = PasswordLineEdit(str(self.config.get(TELEGRAM_BOT_TOKEN_KEY) or ""))
+        self.telegram_bot_token_input.setPlaceholderText("123456:ABC-DEF...")
+        self.telegram_chat_id_input = QLineEdit(str(self.config.get(TELEGRAM_CHAT_ID_KEY) or ""))
+        self.telegram_chat_id_input.setPlaceholderText("@channel_username یا -1001234567890")
+        self.telegram_proxy_url_input = QLineEdit(str(self.config.get(TELEGRAM_PROXY_URL_KEY) or ""))
+        self.telegram_proxy_url_input.setPlaceholderText("مثلاً socks5://127.0.0.1:1080 (اختیاری)")
+        for field in (self.telegram_bot_token_input, self.telegram_chat_id_input, self.telegram_proxy_url_input):
+            field.setLayoutDirection(Qt.LeftToRight)
+            field.setAlignment(Qt.AlignLeft)
+            field.setMinimumHeight(38)
+
+        telegram_help = QLabel(
+            "توکنِ بات: با @BotFather بسازید. شناسه‌ی چت: نامِ کاربریِ کانال (با @) یا آیدیِ عددیِ آن — "
+            "ربات باید ادمینِ کانال/گروه باشد.\n"
+            "⚠️ api.telegram.org معمولاً در ایران فیلتر است — اگه اتصال با خطای "
+            "«Connection refused» ناموفق شد، آدرسِ یک پراکسی (VPNِ محلی یا socks5) را در فیلدِ پراکسی وارد کنید."
+        )
+        telegram_help.setStyleSheet("color:#64748b; font-size:10px;")
+        telegram_help.setWordWrap(True)
+
+        self.telegram_test_button = QPushButton("تست اتصال تلگرام")
+        self.telegram_test_button.setMinimumHeight(38)
+        self.telegram_test_button.clicked.connect(self._test_telegram_connection)
+
+        telegram_layout.addRow(english_caption("Bot Token:"), self.telegram_bot_token_input)
+        telegram_layout.addRow(english_caption("Chat ID:"), self.telegram_chat_id_input)
+        telegram_layout.addRow(english_caption("Proxy URL:"), self.telegram_proxy_url_input)
+        telegram_layout.addRow(QLabel(""), telegram_help)
+        telegram_layout.addRow(QLabel(""), self.telegram_test_button)
+        self.telegram_group.setLayout(telegram_layout)
+
+        # --- بله (Bale) — برای تقویمِ محتوا، فیلتر نیست، نیازی به پراکسی نداره ---
+        from sync_app.core.bale_poster import BALE_BOT_TOKEN_KEY, BALE_CHAT_ID_KEY
+
+        self.bale_group = QGroupBox("بله — Bale (برای تقویم محتوا)")
+        self.bale_group.setLayoutDirection(Qt.LeftToRight)
+        bale_layout = QFormLayout()
+        bale_layout.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        bale_layout.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        bale_layout.setFormAlignment(Qt.AlignTop)
+        bale_layout.setHorizontalSpacing(14)
+        bale_layout.setVerticalSpacing(10)
+
+        self.bale_bot_token_input = PasswordLineEdit(str(self.config.get(BALE_BOT_TOKEN_KEY) or ""))
+        self.bale_bot_token_input.setPlaceholderText("123456:AAHdq...")
+        self.bale_chat_id_input = QLineEdit(str(self.config.get(BALE_CHAT_ID_KEY) or ""))
+        self.bale_chat_id_input.setPlaceholderText("@channel_username یا -1001234567890")
+        for field in (self.bale_bot_token_input, self.bale_chat_id_input):
+            field.setLayoutDirection(Qt.LeftToRight)
+            field.setAlignment(Qt.AlignLeft)
+            field.setMinimumHeight(38)
+
+        bale_help = QLabel(
+            "ساختِ بات: در برنامه‌ی بله سرچ کنید «BotFather» و مراحلِ مشابهِ تلگرام را طی کنید. "
+            "بله در ایران فیلتر نیست — نیازی به پراکسی/VPN ندارد."
+        )
+        bale_help.setStyleSheet("color:#64748b; font-size:10px;")
+        bale_help.setWordWrap(True)
+
+        self.bale_test_button = QPushButton("تست اتصال بله")
+        self.bale_test_button.setMinimumHeight(38)
+        self.bale_test_button.clicked.connect(self._test_bale_connection)
+
+        bale_layout.addRow(english_caption("Bot Token:"), self.bale_bot_token_input)
+        bale_layout.addRow(english_caption("Chat ID:"), self.bale_chat_id_input)
+        bale_layout.addRow(QLabel(""), bale_help)
+        bale_layout.addRow(QLabel(""), self.bale_test_button)
+        self.bale_group.setLayout(bale_layout)
+
+        # --- اطلاعاتِ تماس/برندینگ — برای فیلدهای «تلفن»/«آدرسِ سایت»/
+        # شبکه‌های اجتماعی در قالبِ پست (تا یک‌بار وارد بشه و همه‌جا استفاده بشه) ---
+        self.brand_group = QGroupBox("اطلاعاتِ تماس و برندینگ (برای قالبِ پست)")
+        self.brand_group.setLayoutDirection(Qt.LeftToRight)
+        brand_layout = QFormLayout()
+        brand_layout.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        brand_layout.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        brand_layout.setFormAlignment(Qt.AlignTop)
+        brand_layout.setHorizontalSpacing(14)
+        brand_layout.setVerticalSpacing(10)
+
+        self.contact_phone_input = QLineEdit(str(self.config.get("CONTACT_PHONE") or ""))
+        self.contact_phone_input.setPlaceholderText("021-12345678")
+        self.site_address_display_input = QLineEdit(str(self.config.get("SITE_ADDRESS_DISPLAY") or ""))
+        self.site_address_display_input.setPlaceholderText("خالی = خودکار از آدرسِ فروشگاه")
+        self.social_instagram_input = QLineEdit(str(self.config.get("SOCIAL_INSTAGRAM") or ""))
+        self.social_instagram_input.setPlaceholderText("@yourshop")
+        self.social_telegram_input = QLineEdit(str(self.config.get("SOCIAL_TELEGRAM") or ""))
+        self.social_telegram_input.setPlaceholderText("@yourshop_channel")
+        self.social_whatsapp_input = QLineEdit(str(self.config.get("SOCIAL_WHATSAPP") or ""))
+        self.social_whatsapp_input.setPlaceholderText("0912-000-0000")
+        for field in (
+            self.contact_phone_input, self.site_address_display_input,
+            self.social_instagram_input, self.social_telegram_input, self.social_whatsapp_input,
+        ):
+            field.setLayoutDirection(Qt.LeftToRight)
+            field.setAlignment(Qt.AlignLeft)
+            field.setMinimumHeight(38)
+
+        brand_help = QLabel(
+            "این اطلاعات فقط برای فیلدهای «تلفن»/«آدرسِ سایت»/شبکه‌های اجتماعی در «طراحِ قالبِ پست» استفاده می‌شه — "
+            "یک‌بار اینجا وارد کنید تا در همه‌ی قالب‌ها قابلِ استفاده باشه."
+        )
+        brand_help.setStyleSheet("color:#64748b; font-size:10px;")
+        brand_help.setWordWrap(True)
+
+        brand_layout.addRow(english_caption("تلفنِ تماس:"), self.contact_phone_input)
+        brand_layout.addRow(english_caption("آدرسِ سایت:"), self.site_address_display_input)
+        brand_layout.addRow(english_caption("اینستاگرام:"), self.social_instagram_input)
+        brand_layout.addRow(english_caption("تلگرام:"), self.social_telegram_input)
+        brand_layout.addRow(english_caption("واتساپ:"), self.social_whatsapp_input)
+        brand_layout.addRow(QLabel(""), brand_help)
+        self.brand_group.setLayout(brand_layout)
 
         self.monitor_group = QGroupBox("مانیتورینگ عملیات اتصال")
         monitor_layout = QVBoxLayout()
@@ -1717,6 +1975,11 @@ class SettingsTab(QWidget):
             self.font_size_combo, self.erp_provider_combo, self.currency_combo,
             self.default_customer_mode_combo, self.login_screen_enabled_checkbox,
             self.auto_update_enabled_checkbox,
+            self.ps_url_input, self.ps_api_key_input, self.ps_site_combo, self.ps_site_name_input,
+            self.telegram_bot_token_input, self.telegram_chat_id_input, self.telegram_proxy_url_input,
+            self.bale_bot_token_input, self.bale_chat_id_input,
+            self.contact_phone_input, self.site_address_display_input,
+            self.social_instagram_input, self.social_telegram_input, self.social_whatsapp_input,
         ] + list(self._field_sync_checkboxes.values()) + list(self._force_full_sync_checkboxes.values())
 
         _text_inputs = [
@@ -1726,6 +1989,11 @@ class SettingsTab(QWidget):
             self.timeout_input, self.wc_site_name_input,
             self.app_login_username_input, self.app_login_password_input, self.license_server_url_input,
             self.license_api_key_input, self.default_customer_code_input,
+            self.ps_url_input, self.ps_api_key_input, self.ps_site_name_input,
+            self.telegram_bot_token_input, self.telegram_chat_id_input, self.telegram_proxy_url_input,
+            self.bale_bot_token_input, self.bale_chat_id_input,
+            self.contact_phone_input, self.site_address_display_input,
+            self.social_instagram_input, self.social_telegram_input, self.social_whatsapp_input,
         ]
         for w in _text_inputs:
             w.textChanged.connect(self._on_settings_field_changed)
@@ -1779,20 +2047,26 @@ class SettingsTab(QWidget):
             grid.addWidget(self.sql_group, 0, 0)
             grid.addWidget(self.app_group, 1, 0)
             grid.addWidget(self.wc_group, 2, 0)
-            grid.addWidget(self.customer_group, 3, 0)
-            grid.addWidget(self.fields_group, 4, 0)
-            grid.addWidget(self.license_group, 5, 0)
-            grid.addWidget(self.monitor_group, 6, 0)
-            grid.addWidget(self.backup_group, 7, 0)
+            grid.addWidget(self.telegram_group, 3, 0)
+            grid.addWidget(self.bale_group, 4, 0)
+            grid.addWidget(self.brand_group, 5, 0)
+            grid.addWidget(self.customer_group, 6, 0)
+            grid.addWidget(self.fields_group, 7, 0)
+            grid.addWidget(self.license_group, 8, 0)
+            grid.addWidget(self.monitor_group, 9, 0)
+            grid.addWidget(self.backup_group, 10, 0)
         else:
             grid.addWidget(self.sql_group, 0, 0)
             grid.addWidget(self.app_group, 0, 1)
             grid.addWidget(self.wc_group, 1, 0)
             grid.addWidget(self.monitor_group, 1, 1)
-            grid.addWidget(self.customer_group, 2, 0)
-            grid.addWidget(self.license_group, 2, 1)
-            grid.addWidget(self.fields_group, 3, 0, 1, 2)
-            grid.addWidget(self.backup_group, 4, 0, 1, 2)
+            grid.addWidget(self.telegram_group, 2, 0)
+            grid.addWidget(self.bale_group, 2, 1)
+            grid.addWidget(self.brand_group, 3, 0, 1, 2)
+            grid.addWidget(self.customer_group, 4, 0)
+            grid.addWidget(self.license_group, 4, 1)
+            grid.addWidget(self.fields_group, 5, 0, 1, 2)
+            grid.addWidget(self.backup_group, 6, 0, 1, 2)
             grid.setColumnStretch(0, 1)
             grid.setColumnStretch(1, 1)
 
@@ -2600,6 +2874,15 @@ class SettingsTab(QWidget):
     def _open_license_api_settings_page(self):
         self._open_external_url(self._wp_admin_url("wp-admin/admin.php?page=peecha-licenses"))
 
+    def _open_profile_switcher(self):
+        from sync_app.core.profile_switcher_dialog import ProfileSwitcherDialog
+
+        dialog = ProfileSwitcherDialog(self)
+        if dialog.exec_() == QDialog.Accepted and dialog.selected_profile_id:
+            from sync_app.core.app_restart import restart_application
+
+            restart_application()
+
     def _wc_error_category(self, error_message: str) -> str:
         from sync_app.core.connectivity_service import classify_network_error
 
@@ -2988,6 +3271,484 @@ class SettingsTab(QWidget):
         self._active_wc_site_id = str(updated.get("ACTIVE_WC_SITE_ID") or self._active_wc_site_id)
         return updated
 
+    # ------------------------------------------------------------------
+    # چند سایتِ پرستاشاپ — هم‌ساختار با متدهای چندسایتیِ ووکامرسِ بالا
+    # ------------------------------------------------------------------
+
+    def _ps_form_values(self):
+        cfg = self.config or {}
+        return {
+            "url": self.ps_url_input.text().strip(),
+            "api_key": self.ps_api_key_input.text().strip(),
+            "verify_ssl": bool(cfg.get("PS_VERIFY_SSL", False)),
+            "lang_id": int(cfg.get("PS_LANG_ID") or 1),
+            "root_category_id": int(cfg.get("PS_ROOT_CATEGORY_ID") or 2),
+            "currency_is_toman": bool(self.currency_combo.currentData()),
+        }
+
+    def _current_ps_form_site(self) -> dict:
+        from sync_app.core.ps_site_profiles import find_ps_site, site_display_label, site_from_form
+
+        active = find_ps_site(self._ps_sites, self._active_ps_site_id) or {}
+        merged = {**active, **self._ps_form_values()}
+        label = (self.ps_site_name_input.text() or "").strip() or site_display_label(merged)
+        return site_from_form(
+            site_id=self._active_ps_site_id,
+            label=label,
+            **self._ps_form_values(),
+        )
+
+    def _snapshot_ps_site_baseline(self):
+        from sync_app.core.ps_site_profiles import find_ps_site
+
+        site = find_ps_site(self._ps_sites, self._active_ps_site_id)
+        self._ps_active_site_baseline = copy.deepcopy(site) if site else {}
+
+    def _needs_ps_site_guard(self) -> bool:
+        from sync_app.core.ps_site_edit_guard import ps_site_credentials_changed, ps_site_is_saved_profile
+
+        if self._ps_guard_busy or self._ps_site_switching:
+            return False
+        baseline = self._ps_active_site_baseline or {}
+        if not ps_site_is_saved_profile(baseline):
+            return False
+        return ps_site_credentials_changed(baseline, self._current_ps_form_site())
+
+    def _guard_ps_site_save(self) -> str:
+        from sync_app.core.ps_site_edit_guard import (
+            ACTION_CANCEL,
+            ACTION_NEW_SITE,
+            ACTION_PROCEED,
+            confirm_ps_site_edit,
+        )
+
+        if not self._needs_ps_site_guard():
+            return ACTION_PROCEED
+
+        self._ps_guard_busy = True
+        try:
+            action = confirm_ps_site_edit(
+                self,
+                baseline_site=self._ps_active_site_baseline,
+                form_site=self._current_ps_form_site(),
+            )
+            if action == ACTION_CANCEL:
+                self._revert_ps_form_to_baseline()
+            elif action == ACTION_NEW_SITE:
+                self._promote_ps_form_to_new_site()
+            return action
+        finally:
+            self._ps_guard_busy = False
+
+    def _revert_ps_form_to_baseline(self):
+        if not self._ps_active_site_baseline:
+            return
+        self._load_ps_site_into_form(self._ps_active_site_baseline, refresh_baseline=False)
+
+    def _promote_ps_form_to_new_site(self):
+        from sync_app.core.ps_site_profiles import (
+            find_ps_site,
+            site_display_label,
+            site_from_form,
+        )
+        from sync_app.core.ps_site_edit_guard import restore_site_in_list
+
+        active_id = (self._active_ps_site_id or "").strip()
+        form_site = self._current_ps_form_site()
+        baseline = self._ps_active_site_baseline or find_ps_site(self._ps_sites, active_id) or {}
+
+        self._ps_sites = restore_site_in_list(self._ps_sites, active_id, baseline)
+
+        label = (form_site.get("label") or "").strip() or site_display_label(form_site)
+        new_site = site_from_form(
+            url=form_site.get("url") or "",
+            api_key=form_site.get("api_key") or "",
+            verify_ssl=bool(form_site.get("verify_ssl", False)),
+            lang_id=int(form_site.get("lang_id") or 1),
+            root_category_id=int(form_site.get("root_category_id") or 2),
+            currency_is_toman=bool(form_site.get("currency_is_toman", True)),
+            label=label,
+        )
+        self._ps_sites.append(new_site)
+        self._active_ps_site_id = str(new_site.get("id") or "")
+        self._refresh_ps_site_combo(select_id=self._active_ps_site_id)
+        self._load_ps_site_into_form(new_site)
+        self._apply_active_ps_site_to_runtime_config()
+        self._refresh_dirty_state()
+        append_system_log(
+            "settings",
+            f"تنظیمات PrestaShop به‌عنوان سایت جدید «{label}» ذخیره شد — پروفایل قبلی بازگردانده شد.",
+        )
+
+    def _stash_ps_form_to_active_site(self):
+        active_id = (self._active_ps_site_id or "").strip()
+        if not active_id:
+            return
+        from sync_app.core.ps_site_profiles import find_ps_site, merge_form_into_site, site_display_label
+
+        site = find_ps_site(self._ps_sites, active_id)
+        if site is None:
+            return
+        merged = merge_form_into_site(site, preserve_secrets=True, **self._ps_form_values())
+        custom = (self.ps_site_name_input.text() or "").strip()
+        merged["label"] = custom or site_display_label(merged)
+        for idx, item in enumerate(self._ps_sites):
+            if str(item.get("id")) == active_id:
+                self._ps_sites[idx] = merged
+                break
+
+    def _quick_save_ps_sites(self, *, broadcast: bool = True, skip_guard: bool = False) -> bool:
+        """ذخیره فوری پروفایل‌های PrestaShop — بدون انتظار «ذخیره تنظیمات» کامل."""
+        from sync_app.core.ps_site_edit_guard import ACTION_CANCEL, ACTION_NEW_SITE, ACTION_PROCEED
+
+        action = ACTION_PROCEED
+        if not skip_guard:
+            action = self._guard_ps_site_save()
+            if action == ACTION_CANCEL:
+                return False
+
+        try:
+            self._stash_ps_form_to_active_site()
+            config = load_secure_config(None) or {}
+            config = self._apply_ps_sites_to_config_dict(config)
+            save_secure_config(config)
+            self.config = dict(config)
+            self._snapshot_ps_site_baseline()
+            if broadcast:
+                self._broadcast_wc_config_reload()
+            if action == ACTION_NEW_SITE:
+                self.status_label.setText("✅ به‌عنوان سایت جدید ذخیره شد")
+                self.status_label.setStyleSheet(
+                    "color: #166534; font-weight: 700; font-size: 12px; "
+                    "padding: 6px 14px; background: #dcfce7; border-radius: 8px;"
+                )
+            return True
+        except Exception as exc:
+            append_system_log("settings", f"ذخیره سایت PrestaShop: {exc}", level="ERROR")
+            return False
+
+    def _on_ps_site_name_changed(self):
+        if self._ps_site_switching:
+            return
+        from sync_app.core.ps_site_profiles import find_ps_site, site_display_label
+
+        site = find_ps_site(self._ps_sites, self._active_ps_site_id)
+        if site is None:
+            return
+        custom = (self.ps_site_name_input.text() or "").strip()
+        site["label"] = custom or site_display_label({**site, "url": self.ps_url_input.text().strip()})
+        self._refresh_ps_site_combo(select_id=self._active_ps_site_id)
+        self._quick_save_ps_sites(broadcast=False)
+        self._on_settings_field_changed()
+
+    def _load_ps_site_into_form(self, site, *, refresh_baseline: bool = True):
+        self._ps_site_switching = True
+        try:
+            site = site or {}
+            self.ps_url_input.setText(str(site.get("url") or ""))
+            self.ps_api_key_input.setText(str(site.get("api_key") or ""))
+            self.ps_site_name_input.setText(str(site.get("label") or ""))
+        finally:
+            self._ps_site_switching = False
+        if refresh_baseline:
+            self._snapshot_ps_site_baseline()
+
+    def _refresh_ps_site_combo(self, *, select_id=None):
+        from sync_app.core.ps_site_profiles import site_display_label
+
+        self._ps_site_switching = True
+        try:
+            self.ps_site_combo.blockSignals(True)
+            self.ps_site_combo.clear()
+            for site in self._ps_sites:
+                sid = str(site.get("id") or "")
+                self.ps_site_combo.addItem(site_display_label(site), sid)
+            target = (select_id or self._active_ps_site_id or "").strip()
+            idx = self.ps_site_combo.findData(target)
+            if idx >= 0:
+                self.ps_site_combo.setCurrentIndex(idx)
+            elif self.ps_site_combo.count():
+                self.ps_site_combo.setCurrentIndex(0)
+                self._active_ps_site_id = str(self.ps_site_combo.currentData() or "")
+            self.ps_delete_site_btn.setEnabled(len(self._ps_sites) > 1)
+        finally:
+            self.ps_site_combo.blockSignals(False)
+            self._ps_site_switching = False
+
+    def _apply_active_ps_site_to_runtime_config(self):
+        from sync_app.core.ps_site_profiles import apply_site_to_flat_keys, find_ps_site
+
+        site = find_ps_site(self._ps_sites, self._active_ps_site_id)
+        if site:
+            apply_site_to_flat_keys(self.config, site)
+
+    def _on_ps_site_combo_changed(self, _index):
+        if self._ps_site_switching:
+            return
+        from sync_app.core.ps_site_profiles import find_ps_site
+        from sync_app.core.ps_site_edit_guard import ACTION_CANCEL, ACTION_NEW_SITE, ACTION_PROCEED
+
+        new_id = str(self.ps_site_combo.currentData() or "").strip()
+        if not new_id or new_id == self._active_ps_site_id:
+            return
+
+        prev_id = (self._active_ps_site_id or "").strip()
+        action = ACTION_PROCEED
+        if self._needs_ps_site_guard():
+            action = self._guard_ps_site_save()
+            if action == ACTION_CANCEL:
+                self._ps_site_switching = True
+                try:
+                    self.ps_site_combo.blockSignals(True)
+                    idx = self.ps_site_combo.findData(prev_id)
+                    if idx >= 0:
+                        self.ps_site_combo.setCurrentIndex(idx)
+                finally:
+                    self.ps_site_combo.blockSignals(False)
+                    self._ps_site_switching = False
+                return
+
+        if action == ACTION_NEW_SITE:
+            self._quick_save_ps_sites(broadcast=True, skip_guard=True)
+            self._on_settings_field_changed()
+            return
+
+        self._stash_ps_form_to_active_site()
+        self._active_ps_site_id = new_id
+        site = find_ps_site(self._ps_sites, new_id)
+        self._load_ps_site_into_form(site)
+        self._apply_active_ps_site_to_runtime_config()
+        self._quick_save_ps_sites(broadcast=True, skip_guard=True)
+        self._on_settings_field_changed()
+
+    def _on_add_ps_site(self):
+        from sync_app.core.ps_site_profiles import create_empty_site, find_ps_site
+
+        self._stash_ps_form_to_active_site()
+        site = create_empty_site(label=f"سایت {len(self._ps_sites) + 1}")
+        self._ps_sites.append(site)
+        self._active_ps_site_id = str(site.get("id") or "")
+        self._refresh_ps_site_combo(select_id=self._active_ps_site_id)
+        self._load_ps_site_into_form(site)
+        self._apply_active_ps_site_to_runtime_config()
+        self._quick_save_ps_sites(broadcast=True)
+        self.ps_url_input.setFocus()
+        self._on_settings_field_changed()
+
+    def _on_delete_ps_site(self):
+        from sync_app.core.ps_site_profiles import find_ps_site, site_display_label
+
+        if len(self._ps_sites) <= 1:
+            QMessageBox.information(
+                self,
+                "حذف سایت",
+                "حداقل یک سایت باید باقی بماند.\nبرای قطع اتصال، فیلدهای آن را خالی کنید.",
+            )
+            return
+        active_id = (self._active_ps_site_id or "").strip()
+        label = site_display_label(find_ps_site(self._ps_sites, active_id))
+        answer = QMessageBox.question(
+            self,
+            "حذف سایت",
+            f"سایت «{label}» حذف شود؟",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        self._ps_sites = [s for s in self._ps_sites if str(s.get("id")) != active_id]
+        self._active_ps_site_id = str(self._ps_sites[0].get("id") or "")
+        self._refresh_ps_site_combo(select_id=self._active_ps_site_id)
+        self._load_ps_site_into_form(find_ps_site(self._ps_sites, self._active_ps_site_id))
+        self._apply_active_ps_site_to_runtime_config()
+        self._quick_save_ps_sites(broadcast=True)
+        self._on_settings_field_changed()
+
+    def _apply_ps_sites_to_config_dict(self, config):
+        from sync_app.core.ps_site_profiles import (
+            find_ps_site,
+            site_display_label,
+            site_from_form,
+            sync_sites_to_config,
+        )
+
+        self._stash_ps_form_to_active_site()
+        active = find_ps_site(self._ps_sites, self._active_ps_site_id) or {}
+        form_site = site_from_form(
+            site_id=self._active_ps_site_id,
+            label=(self.ps_site_name_input.text() or "").strip() or site_display_label(active),
+            **self._ps_form_values(),
+        )
+        updated = sync_sites_to_config(
+            config,
+            self._ps_sites,
+            self._active_ps_site_id,
+            form_site=form_site,
+        )
+        self._ps_sites = list(updated.get("PS_SITES") or self._ps_sites)
+        self._active_ps_site_id = str(updated.get("ACTIVE_PS_SITE_ID") or self._active_ps_site_id)
+        return updated
+
+    # ------------------------------------------------------------------
+    # پیش‌تنظیم‌های نام‌دارِ کلِ تنظیمات
+    # ------------------------------------------------------------------
+
+    def _refresh_preset_combo(self):
+        from sync_app.core.config_presets import ACTIVE_CONFIG_PRESET_ID_KEY, list_presets
+
+        presets = list_presets(self.config)
+        self._config_presets_switching = True
+        try:
+            self.preset_combo.blockSignals(True)
+            self.preset_combo.clear()
+            self.preset_combo.addItem("— بدون پیش‌تنظیم (تنظیمات فعلی) —", "")
+            for p in presets:
+                self.preset_combo.addItem(str(p.get("title") or "بدون عنوان"), str(p.get("id") or ""))
+            active_id = str((self.config or {}).get(ACTIVE_CONFIG_PRESET_ID_KEY) or "")
+            idx = self.preset_combo.findData(active_id) if active_id else 0
+            self.preset_combo.setCurrentIndex(idx if idx >= 0 else 0)
+            self.preset_delete_btn.setEnabled(bool(presets) and self.preset_combo.currentIndex() > 0)
+        finally:
+            self.preset_combo.blockSignals(False)
+            self._config_presets_switching = False
+
+    def _on_preset_combo_changed(self, _index):
+        if self._config_presets_switching:
+            return
+        from sync_app.core.config_presets import find_preset, list_presets
+
+        new_id = str(self.preset_combo.currentData() or "")
+        self.preset_delete_btn.setEnabled(bool(new_id))
+        if not new_id:
+            return
+
+        presets = list_presets(self.config)
+        preset = find_preset(presets, new_id)
+        if preset is None:
+            return
+
+        answer = QMessageBox.question(
+            self,
+            "تعویض پیش‌تنظیم",
+            f"همه‌ی فیلدهای این تب با تنظیماتِ پیش‌تنظیمِ «{preset.get('title')}» جایگزین می‌شود — "
+            "تغییرات ذخیره‌نشده‌ی فعلی از دست می‌روند. ادامه می‌دهید؟",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            self._refresh_preset_combo()
+            return
+
+        QTimer.singleShot(0, lambda: self._apply_config_preset(preset))
+
+    def _apply_config_preset(self, preset):
+        from sync_app.core.config_presets import ACTIVE_CONFIG_PRESET_ID_KEY, apply_preset
+
+        new_cfg = apply_preset(self.config, preset)
+        new_cfg[ACTIVE_CONFIG_PRESET_ID_KEY] = str(preset.get("id") or "")
+        save_secure_config(new_cfg)
+        self.config = dict(new_cfg)
+        self._ui_built = False
+        # _update_responsive_layout (که init_ui صداش می‌زنه) اگه compact/wide با
+        # دفعه‌ی قبل فرق نکنه، زودتر برمی‌گرده و main_grid رو پر نمی‌کنه — چون
+        # این تب همین الان هم دیده می‌شه (نه در حالِ نمایشِ اولیه)، showEvent هم
+        # دوباره شلیک نمی‌شه تا این حالتِ خالی رو خودش تشخیص بده. با ریست‌کردنِ
+        # این پرچم قبل از بازسازی، مطمئن می‌شیم گرید همیشه واقعاً پر بشه.
+        self._settings_compact = None
+        self._deferred_build_ui()
+
+        from sync_app.core.connectivity_guard import find_peecha_launcher
+
+        launcher = find_peecha_launcher(self)
+        if launcher is not None:
+            if hasattr(launcher, "reload_wc_dependent_tabs"):
+                launcher.reload_wc_dependent_tabs()
+            if hasattr(launcher, "refresh_sql_connectivity"):
+                launcher.refresh_sql_connectivity(show_pending=False)
+
+    def _on_save_config_preset(self):
+        from PyQt5.QtWidgets import QInputDialog
+
+        from sync_app.core.config_presets import (
+            ACTIVE_CONFIG_PRESET_ID_KEY,
+            find_preset,
+            list_presets,
+            save_preset,
+        )
+
+        presets = list_presets(self.config)
+        current_id = str(self.preset_combo.currentData() or "")
+        current_preset = find_preset(presets, current_id) if current_id else None
+
+        title, ok = QInputDialog.getText(
+            self,
+            "ذخیره پیش‌تنظیم",
+            "یک عنوان برای این مجموعه‌ی تنظیمات وارد کنید:",
+            text=str((current_preset or {}).get("title") or ""),
+        )
+        if not ok:
+            return
+        title = (title or "").strip()
+        if not title:
+            QMessageBox.warning(self, "پیش‌تنظیم", "عنوان نمی‌تواند خالی باشد.")
+            return
+
+        # اگه عنوانِ واردشده همونِ عنوانِ پیش‌تنظیمِ فعلاً انتخاب‌شده باشه، یعنی
+        # کاربر می‌خواد همونو آپدیت کنه. وگرنه (چه پیش‌تنظیمی انتخاب نشده باشه، چه
+        # عنوان فرق کنه) پیش‌فرض ساختنِ پیش‌تنظیمِ جدیده — مگر اینکه عنوان دقیقاً
+        # مالِ یه پیش‌تنظیمِ دیگه باشه که اون موقع با تاییدِ صریح بازنویسی می‌شه.
+        by_title = next((p for p in presets if str(p.get("title") or "").strip() == title), None)
+        if current_preset and str(current_preset.get("title") or "").strip() == title:
+            target_id = current_id
+        elif by_title:
+            answer = QMessageBox.question(
+                self,
+                "بازنویسی پیش‌تنظیم",
+                f"پیش‌تنظیمی با عنوان «{title}» از قبل وجود دارد. بازنویسی شود؟",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
+            target_id = str(by_title.get("id"))
+        else:
+            target_id = ""
+
+        self.save_config()  # فیلدهای فعلیِ فرم را ذخیره و self.config را به‌روز می‌کند
+
+        updated_cfg = save_preset(self.config, title, preset_id=target_id)
+        saved = next((p for p in list_presets(updated_cfg) if str(p.get("title")) == title), None)
+        updated_cfg[ACTIVE_CONFIG_PRESET_ID_KEY] = str(saved.get("id")) if saved else ""
+        save_secure_config(updated_cfg)
+        self.config = dict(updated_cfg)
+        self._refresh_preset_combo()
+        QMessageBox.information(self, "پیش‌تنظیم", f"تنظیمات با عنوان «{title}» ذخیره شد.")
+
+    def _on_delete_config_preset(self):
+        from sync_app.core.config_presets import ACTIVE_CONFIG_PRESET_ID_KEY, delete_preset, list_presets
+
+        current_id = str(self.preset_combo.currentData() or "")
+        if not current_id:
+            return
+        presets = list_presets(self.config)
+        preset = next((p for p in presets if str(p.get("id")) == current_id), None)
+        title = str((preset or {}).get("title") or "این پیش‌تنظیم")
+        answer = QMessageBox.question(
+            self,
+            "حذف پیش‌تنظیم",
+            f"پیش‌تنظیمِ «{title}» حذف شود؟ (تنظیمات فعلیِ برنامه تغییری نمی‌کند، فقط از لیست حذف می‌شود.)",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        updated_cfg = delete_preset(self.config, current_id)
+        if str(updated_cfg.get(ACTIVE_CONFIG_PRESET_ID_KEY) or "") == current_id:
+            updated_cfg[ACTIVE_CONFIG_PRESET_ID_KEY] = ""
+        save_secure_config(updated_cfg)
+        self.config = dict(updated_cfg)
+        self._refresh_preset_combo()
+
     def _wc_config_from_form(self):
         timeout_sec = self.get_optimized_timeout()
         return {
@@ -3034,6 +3795,65 @@ class SettingsTab(QWidget):
             "PS_LANG_ID": (self.config or {}).get("PS_LANG_ID", 1),
             "PS_ROOT_CATEGORY_ID": (self.config or {}).get("PS_ROOT_CATEGORY_ID", 2),
         }
+
+    def _test_bale_connection(self):
+        from sync_app.core.threading_helper import run_in_thread
+        from sync_app.core.bale_poster import test_connection as bale_test_connection
+
+        token = self.bale_bot_token_input.text().strip()
+        if not token:
+            QMessageBox.warning(self, "بله", "ابتدا توکنِ بات را وارد کنید.")
+            return
+
+        self.bale_test_button.setEnabled(False)
+        self.bale_test_button.setText("در حال تست اتصال...")
+
+        def on_complete(result):
+            ok, msg = result
+            self.bale_test_button.setEnabled(True)
+            self.bale_test_button.setText("تست اتصال بله")
+            if ok:
+                QMessageBox.information(self, "بله", msg)
+            else:
+                QMessageBox.critical(self, "بله", f"اتصال ناموفق بود:\n{msg}")
+
+        def on_error(err):
+            self.bale_test_button.setEnabled(True)
+            self.bale_test_button.setText("تست اتصال بله")
+            QMessageBox.critical(self, "بله", f"خطا: {err}")
+
+        run_in_thread(bale_test_connection, token, on_complete=on_complete, on_error=on_error)
+
+    def _test_telegram_connection(self):
+        from sync_app.core.threading_helper import run_in_thread
+        from sync_app.core.telegram_poster import test_connection as telegram_test_connection
+
+        token = self.telegram_bot_token_input.text().strip()
+        proxy_url = self.telegram_proxy_url_input.text().strip()
+        if not token:
+            QMessageBox.warning(self, "تلگرام", "ابتدا توکنِ بات را وارد کنید.")
+            return
+
+        self.telegram_test_button.setEnabled(False)
+        self.telegram_test_button.setText("در حال تست اتصال...")
+
+        def on_complete(result):
+            ok, msg = result
+            self.telegram_test_button.setEnabled(True)
+            self.telegram_test_button.setText("تست اتصال تلگرام")
+            if ok:
+                QMessageBox.information(self, "تلگرام", msg)
+            else:
+                QMessageBox.critical(self, "تلگرام", f"اتصال ناموفق بود:\n{msg}")
+
+        def on_error(err):
+            self.telegram_test_button.setEnabled(True)
+            self.telegram_test_button.setText("تست اتصال تلگرام")
+            QMessageBox.critical(self, "تلگرام", f"خطا: {err}")
+
+        run_in_thread(
+            telegram_test_connection, token, proxy_url=proxy_url, on_complete=on_complete, on_error=on_error
+        )
 
     def test_ps_connection(self):
         if self._ps_thread is not None and self._ps_thread.isRunning():
@@ -3655,6 +4475,11 @@ class SettingsTab(QWidget):
         self._refresh_dirty_state()
 
     def _refresh_dirty_state(self):
+        if not hasattr(self, "status_label"):
+            # ممکنه در حینِ ساختِ init_ui، هایدشدن/دیده‌شدنِ یک فیلدِ ووکامرس/پرستاشاپ
+            # (در _apply_platform_field_visibility) سیگنالِ editingFinished رو زودتر
+            # از تکمیلِ کاملِ UI شلیک کنه — تا اون موقع چیزی برای رفرش نیست.
+            return
         any_modified = False
         for widget in self._tracked_widgets:
             baseline = self._field_baselines.get(id(widget))
@@ -4075,6 +4900,16 @@ class SettingsTab(QWidget):
                 "STORE_PLATFORM": self.store_platform_combo.currentData() or "woocommerce",
                 "PS_URL": self.ps_url_input.text().strip(),
                 "PS_API_KEY": self.ps_api_key_input.text().strip(),
+                "TELEGRAM_BOT_TOKEN": self.telegram_bot_token_input.text().strip(),
+                "TELEGRAM_CHAT_ID": self.telegram_chat_id_input.text().strip(),
+                "TELEGRAM_PROXY_URL": self.telegram_proxy_url_input.text().strip(),
+                "BALE_BOT_TOKEN": self.bale_bot_token_input.text().strip(),
+                "BALE_CHAT_ID": self.bale_chat_id_input.text().strip(),
+                "CONTACT_PHONE": self.contact_phone_input.text().strip(),
+                "SITE_ADDRESS_DISPLAY": self.site_address_display_input.text().strip(),
+                "SOCIAL_INSTAGRAM": self.social_instagram_input.text().strip(),
+                "SOCIAL_TELEGRAM": self.social_telegram_input.text().strip(),
+                "SOCIAL_WHATSAPP": self.social_whatsapp_input.text().strip(),
             })
             for _cfg_key, _cb in self._field_sync_checkboxes.items():
                 config_to_save[_cfg_key] = _cb.isChecked()
@@ -4093,7 +4928,20 @@ class SettingsTab(QWidget):
                     )
                     return
 
+            from sync_app.core.ps_site_edit_guard import ACTION_CANCEL as PS_ACTION_CANCEL
+
+            if self._needs_ps_site_guard():
+                ps_guard_action = self._guard_ps_site_save()
+                if ps_guard_action == PS_ACTION_CANCEL:
+                    self.status_label.setText("● ذخیره لغو شد — تغییرات PrestaShop برگردانده شد")
+                    self.status_label.setStyleSheet(
+                        "color: #92400e; font-weight: 700; font-size: 12px; "
+                        "padding: 6px 14px; background: #fef3c7; border-radius: 8px;"
+                    )
+                    return
+
             config_to_save = self._apply_wc_sites_to_config_dict(config_to_save)
+            config_to_save = self._apply_ps_sites_to_config_dict(config_to_save)
             config_to_save["WC_PARALLEL_WORKERS"] = int(self.parallel_workers_spin.value())
             old_product_mode = str(self.config.get("PRODUCT_MODE", "with_variants"))
             new_product_mode = self.product_mode_combo.currentData()

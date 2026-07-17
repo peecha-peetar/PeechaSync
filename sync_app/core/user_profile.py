@@ -246,8 +246,11 @@ def initialize_new_profile_config(username: str, password: str) -> dict:
 def load_secure_config_after_profile(log=None):
     from sync_app.core.secure_config_loader import load_secure_config
     from sync_app.core.wc_site_profiles import ensure_wc_sites
+    from sync_app.core.ps_site_profiles import ensure_ps_sites
 
     cfg = load_secure_config(log) or {}
     if cfg:
-        return ensure_wc_sites(cfg)
+        cfg = ensure_wc_sites(cfg)
+        cfg = ensure_ps_sites(cfg)
+        return cfg
     return cfg

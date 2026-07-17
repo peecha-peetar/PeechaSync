@@ -1209,6 +1209,11 @@ class PeechaLauncher(QWidget):
         QTimer.singleShot(120000, self._update_check_timer.start)
         QTimer.singleShot(200, self._setup_tray_icon)
 
+        self._content_calendar_timer = QTimer(self)
+        self._content_calendar_timer.setInterval(60000)
+        self._content_calendar_timer.timeout.connect(self._send_due_content_calendar_posts)
+        QTimer.singleShot(15000, self._content_calendar_timer.start)
+
     def _refresh_header_update_ui(self) -> None:
         from sync_app.core.app_version import app_version_label
 
@@ -2699,6 +2704,61 @@ class PeechaLauncher(QWidget):
         self.header_autosync_badge.setText(text)
         self.header_autosync_badge.setVisible(True)
 
+    def _send_due_content_calendar_posts(self):
+        """چکِ پس‌زمینه‌ی پست‌های زمان‌بندی‌شده‌ی سررسیده (همه‌ی پلتفرم‌ها) —
+        هر ارسالِ واقعی در Threadِ جدا انجام می‌شه تا UI هیچ‌وقت قفل نشه."""
+        from sync_app.core.content_calendar_store import (
+            due_posts, post_image_paths, update_post_status, STATUS_SENT, STATUS_FAILED,
+        )
+
+        try:
+            posts = due_posts()
+        except Exception:
+            return
+        if not posts:
+            return
+
+        try:
+            cfg = load_secure_config(None) or {}
+        except Exception:
+            return
+
+        from sync_app.core.social_poster import PLATFORM_LABELS, is_platform_configured, send_post_for_platform
+        from sync_app.core.threading_helper import run_in_thread
+
+        sendable_posts = []
+        for post in posts:
+            platform = str(post.get("platform") or "telegram")
+            chat_id_override = str(post.get("chat_id_override") or "").strip()
+            if is_platform_configured(platform, cfg, chat_id_override=chat_id_override):
+                sendable_posts.append(post)
+            else:
+                label = PLATFORM_LABELS.get(platform, platform)
+                update_post_status(
+                    post.get("id"), STATUS_FAILED,
+                    error=f"توکن بات یا شناسه‌ی چتِ {label} در تنظیمات وارد نشده.",
+                )
+        if not sendable_posts:
+            return
+
+        def _worker(posts_to_send):
+            results = []
+            for post in posts_to_send:
+                platform = str(post.get("platform") or "telegram")
+                ok, msg = send_post_for_platform(
+                    platform, cfg, post.get("text") or "",
+                    photo_paths=post_image_paths(post),
+                    chat_id_override=str(post.get("chat_id_override") or "").strip(),
+                )
+                results.append((post.get("id"), ok, msg))
+            return results
+
+        def on_complete(results):
+            for post_id, ok, msg in results:
+                update_post_status(post_id, STATUS_SENT if ok else STATUS_FAILED, error=None if ok else msg)
+
+        run_in_thread(_worker, sendable_posts, on_complete=on_complete)
+
     def _refresh_link_warning(self):
         """محاسبه‌ی تعداد موارد لینک‌نشده در پس‌زمینه — فقط خواندنی، UI را قفل نمی‌کند."""
         try:
@@ -3440,7 +3500,18 @@ def main(existing_app=None):
         login_win = LoginWindow(config=bootstrap, on_login_success=show_main_launcher)
         _present_startup_window(login_win, "Login window")
 
+    def _block_on_license_scope(message):
+        from PyQt5.QtWidgets import QMessageBox
+
+        _startup_log.info("License scope violation - blocking launch: %s", message)
+        QMessageBox.critical(None, "محدودیت لایسنس", message)
+        instance_manager.cleanup()
+        sys.exit(1)
+
     if LicenseTab.is_license_valid_for_launch():
+        scope_ok, scope_msg = LicenseTab.check_license_scope(cfg)
+        if not scope_ok:
+            _block_on_license_scope(scope_msg)
         _startup_log.info("License OK - opening app...")
         show_login = cfg.get("APP_SHOW_LOGIN_SCREEN", True)
         _startup_log.info("Login screen: %s", "on" if show_login else "off")

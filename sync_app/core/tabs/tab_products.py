@@ -11,7 +11,7 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QPushButton,
     QListWidget, QMessageBox, QHBoxLayout, QTextEdit, QListWidgetItem, QToolTip, QSplitter,
     QLineEdit, QCheckBox, QFileDialog, QProgressBar, QToolButton, QDialog, QDialogButtonBox,
-    QComboBox, QApplication, QTabWidget, QInputDialog
+    QComboBox, QApplication, QTabWidget, QInputDialog, QSpinBox
 )
 from PyQt5.QtCore import Qt, QTimer, QPoint, QEvent, QSize
 from PyQt5.QtGui import QColor, QCursor, QFont, QGuiApplication, QPainter, QPixmap
@@ -85,6 +85,33 @@ def _guess_mime(filename):
         '.png': 'image/png', '.webp': 'image/webp',
         '.gif': 'image/gif', '.bmp': 'image/bmp',
     }.get(ext, 'image/jpeg')
+
+
+def _derive_site_address_display(cfg: dict) -> str:
+    """آدرسِ نمایشیِ سایت برای فیلدِ «آدرسِ سایت» در قالبِ پست — یا از
+    SITE_ADDRESS_DISPLAYِ تنظیمات (اگه واردشده)، یا خودکار از آدرسِ فروشگاه."""
+    override = str((cfg or {}).get("SITE_ADDRESS_DISPLAY") or "").strip()
+    if override:
+        return override
+    from sync_app.core.integrations.commerce_provider import is_prestashop
+
+    url = (cfg or {}).get("PS_URL") if is_prestashop(cfg) else (cfg or {}).get("WC_URL")
+    return re.sub(r"^https?://", "", str(url or "").strip()).rstrip("/")
+
+
+def _build_template_context(product: dict, fetched: dict, cfg: dict, fallback_link: str = "") -> dict:
+    """context برای render_post_text — فیلدهای واقعیِ محصول + تماس/برندینگِ تنظیمات."""
+    return {
+        "name": product.get("name") or "",
+        "price": product.get("price"),
+        "description": (fetched or {}).get("description") or "",
+        "permalink": (fetched or {}).get("permalink") or fallback_link,
+        "site_address": _derive_site_address_display(cfg),
+        "phone": (cfg or {}).get("CONTACT_PHONE") or "",
+        "social_instagram": (cfg or {}).get("SOCIAL_INSTAGRAM") or "",
+        "social_telegram": (cfg or {}).get("SOCIAL_TELEGRAM") or "",
+        "social_whatsapp": (cfg or {}).get("SOCIAL_WHATSAPP") or "",
+    }
 
 
 class ProductRowWidget(QWidget):
@@ -517,6 +544,13 @@ class ProductTab(QWidget):
         )
         self.check_wc_images_button.clicked.connect(self._check_wc_image_counts)
 
+        self.batch_schedule_button = CompactCaptionButton("📅 زمان‌بندیِ گروهی")
+        self.batch_schedule_button.setToolTip(
+            "برای محصولاتی که با چک‌باکسِ کنارشون انتخاب کرده‌اید، برای هرکدام "
+            "یک پستِ جداگانه (با متن/عکسِ اختصاصی) در یک زمانِ مشخص به تقویمِ محتوا اضافه می‌کند."
+        )
+        self.batch_schedule_button.clicked.connect(self._open_batch_schedule_dialog)
+
         self._action_ops = TabActionController(self)
         self._action_ops.register(
             "refresh",
@@ -557,7 +591,7 @@ class ProductTab(QWidget):
         layout.addWidget(
             build_responsive_action_row(
                 [self.refresh_button, self.sync_button, self.upload_images_button,
-                 self.check_wc_images_button, self.wc_admin_button],
+                 self.check_wc_images_button, self.batch_schedule_button, self.wc_admin_button],
                 parent=right_panel,
             )
         )
@@ -1619,6 +1653,7 @@ class ProductTab(QWidget):
         # کوتاه خودِ وردپرس (?p=ID) استفاده می‌شه، نه یه سرویس کوتاه‌کننده‌ی
         # بیرونی — چون نه وابستگی جدید لازم داره نه اتصال اینترنت اضافه.
         short_link = ""
+        wc_id = None
         try:
             from sync_app.core.integrations.commerce_provider import is_prestashop
 
@@ -1727,10 +1762,571 @@ class ProductTab(QWidget):
         banner_layout.addStretch()
         sub_tabs.addTab(banner_tab, "🎨 بنر / پست / استوری")
 
+        # --- زیرتب زمان‌بندیِ شبکه‌ی اجتماعی (تقویمِ محتوا) ---
+        from sync_app.core.social_poster import PLATFORM_LABELS
+
+        schedule_tab = QWidget()
+        schedule_layout = QVBoxLayout(schedule_tab)
+
+        schedule_platform_row = QHBoxLayout()
+        schedule_platform_row.addWidget(QLabel("پلتفرم:"))
+        schedule_platform_combo = QComboBox()
+        for platform_key, platform_label in PLATFORM_LABELS.items():
+            schedule_platform_combo.addItem(platform_label, platform_key)
+        schedule_platform_row.addWidget(schedule_platform_combo)
+        schedule_platform_row.addStretch()
+        schedule_layout.addLayout(schedule_platform_row)
+
+        schedule_recipient_row = QHBoxLayout()
+        schedule_recipient_row.addWidget(QLabel("مقصدِ سفارشی (اختیاری):"))
+        schedule_recipient_input = QLineEdit()
+        schedule_recipient_input.setPlaceholderText("خالی = همون مقصدِ پیش‌فرضِ Settings؛ تلگرام: آیدیِ عددی یا @username؛ بله: فقط آیدیِ عددی")
+        schedule_recipient_row.addWidget(schedule_recipient_input, 1)
+        schedule_layout.addLayout(schedule_recipient_row)
+
+        schedule_recipient_hint = QLabel(
+            "برای ارسال به یک شخصِ خاص (نه کانالِ تنظیم‌شده)، اون شخص باید قبلاً یک پیام به باتِ شما "
+            "فرستاده باشه (/start) — بات نمی‌تونه اول‌به‌اول به کسی که هنوز باهاش چت نکرده پیام بده. "
+            "⚠️ بله (برخلافِ تلگرام) فقط آیدیِ عددی رو قبول می‌کنه، @username کار نمی‌کنه — با پیام‌دادنِ اون "
+            "شخص به یک باتِ «نمایشِ آیدی» (مثلِ ble.ir/showchatdbot)، آیدیِ عددیِ خودش رو می‌گیره و به شما می‌ده."
+        )
+        schedule_recipient_hint.setWordWrap(True)
+        schedule_recipient_hint.setStyleSheet("color:#64748b; font-size:10px;")
+        schedule_layout.addWidget(schedule_recipient_hint)
+
+        schedule_layout.addWidget(QLabel("متنِ پست:"))
+        schedule_text_edit = QTextEdit(texts["متن تلگرام"])
+        schedule_text_edit.setMinimumHeight(100)
+        schedule_layout.addWidget(schedule_text_edit)
+
+        schedule_image_row = QHBoxLayout()
+        schedule_image_path = {"value": ""}
+        manual_paths = self._existing_manual_image_paths(sku)
+        if manual_paths:
+            schedule_image_path["value"] = manual_paths[0]
+        schedule_image_label = QLabel(schedule_image_path["value"] or "بدون تصویر (فقط متن ارسال می‌شود)")
+        schedule_image_label.setStyleSheet("color:#64748b; font-size:10px;")
+        schedule_image_label.setWordWrap(True)
+        schedule_image_row.addWidget(schedule_image_label, 1)
+
+        def _pick_schedule_image():
+            path, _ = QFileDialog.getOpenFileName(
+                self, f"انتخاب تصویر محصول {sku}", "", "Images (*.jpg *.jpeg *.png *.webp)"
+            )
+            if path:
+                schedule_image_path["value"] = path
+                schedule_image_label.setText(path)
+
+        schedule_image_btn = QPushButton("📁 انتخاب تصویر")
+        schedule_image_btn.clicked.connect(_pick_schedule_image)
+        schedule_image_row.addWidget(schedule_image_btn)
+        schedule_layout.addLayout(schedule_image_row)
+
+        schedule_send_all_images_check = QCheckBox("همه‌ی عکس‌های این محصول از سایت هم ارسال شود (آلبوم)")
+        schedule_send_all_images_check.setEnabled(False)
+        schedule_layout.addWidget(schedule_send_all_images_check)
+
+        # لینک/عکس(ها)/توضیحِ واقعیِ محصول از خودِ سایت (نه فرمتِ حدسی قدیمی) —
+        # به‌صورتِ ناهمزمان دریافت می‌شه تا دیالوگ فوراً باز بشه
+        schedule_fetched = {"permalink": "", "description": "", "image_urls": []}
+        schedule_fetch_status = QLabel(
+            "🔄 در حالِ دریافتِ لینک/عکس(ها)ی واقعیِ محصول از سایت..." if wc_id else ""
+        )
+        schedule_fetch_status.setStyleSheet("color:#2563eb; font-size:10px;")
+        schedule_fetch_status.setWordWrap(True)
+        schedule_layout.addWidget(schedule_fetch_status)
+
+        def _fetch_real_content_worker():
+            from sync_app.core.product_content_fetcher import (
+                download_image_to_temp, fetch_product_content,
+            )
+            cfg_fetch = load_secure_config(None) or {}
+            fetched = fetch_product_content(cfg_fetch, wc_id)
+            image_local = ""
+            if fetched.get("image_url"):
+                image_local = download_image_to_temp(fetched["image_url"])
+            return {
+                "permalink": fetched.get("permalink") or "",
+                "description": fetched.get("description") or "",
+                "image_urls": fetched.get("image_urls") or [],
+                "image_local": image_local,
+            }
+
+        def _apply_fetched_content(fetched):
+            schedule_fetched["permalink"] = fetched.get("permalink") or ""
+            schedule_fetched["description"] = fetched.get("description") or ""
+            schedule_fetched["image_urls"] = fetched.get("image_urls") or []
+            permalink = schedule_fetched["permalink"]
+            image_local = fetched.get("image_local") or ""
+            if schedule_template_combo.currentData():
+                # یه قالب انتخاب شده — متن با دادهٔ واقعیِ تازه‌رسیده دوباره ساخته می‌شه
+                _apply_template_to_text()
+            elif permalink:
+                current = schedule_text_edit.toPlainText()
+                if short_link and short_link in current:
+                    current = current.replace(short_link, permalink)
+                elif current.strip():
+                    current = f"{current}\n\n🔗 {permalink}"
+                else:
+                    current = f"🔗 {permalink}"
+                schedule_text_edit.setPlainText(current)
+            if image_local and not manual_paths:
+                # فقط اگه کاربر از قبل عکسِ دستی انتخاب نکرده، عکسِ سایت جایگزین می‌شه
+                schedule_image_path["value"] = image_local
+                schedule_image_label.setText(f"(از روی سایت) {image_local}")
+            n_images = len(schedule_fetched["image_urls"])
+            if n_images > 1:
+                schedule_send_all_images_check.setText(f"همه‌ی {n_images} عکسِ این محصول از سایت هم ارسال شود (آلبوم)")
+                schedule_send_all_images_check.setEnabled(True)
+            if permalink or image_local:
+                schedule_fetch_status.setText("✅ لینک/عکس/توضیحِ واقعیِ محصول از سایت دریافت شد.")
+            else:
+                schedule_fetch_status.setText("⚠️ دریافتِ اطلاعاتِ سایت ناموفق بود؛ متن/عکسِ قبلی حفظ شد.")
+
+        def _fetch_real_content_error(_msg):
+            schedule_fetch_status.setText("⚠️ دریافتِ اطلاعاتِ سایت ناموفق بود؛ متن/عکسِ قبلی حفظ شد.")
+
+        # --- قالبِ متنِ پست (اختیاری) — فیلدهای ثابت (نام/قیمت/توضیح/لینک/
+        # تماس/شبکه‌های اجتماعی) + متنِ دلخواه؛ روی خودِ عکسِ محصول هیچ اثری
+        # نداره، فقط متنِ پست رو می‌سازه ---
+        from sync_app.core.post_template_renderer import render_post_text
+        from sync_app.core.post_template_store import delete_template, find_template, list_templates, save_template
+
+        schedule_template_row = QHBoxLayout()
+        schedule_template_row.addWidget(QLabel("قالبِ متنِ پست (اختیاری):"))
+        schedule_template_combo = QComboBox()
+
+        def _reload_template_combo(select_id=""):
+            schedule_template_combo.blockSignals(True)
+            schedule_template_combo.clear()
+            schedule_template_combo.addItem("بدونِ قالب (متنِ پیش‌فرض/دستی)", "")
+            cfg_now = load_secure_config(None) or {}
+            for tpl in list_templates(cfg_now):
+                schedule_template_combo.addItem(tpl.get("title") or "بدون‌عنوان", tpl.get("id"))
+            if select_id:
+                found_idx = schedule_template_combo.findData(select_id)
+                if found_idx >= 0:
+                    schedule_template_combo.setCurrentIndex(found_idx)
+            schedule_template_combo.blockSignals(False)
+
+        _reload_template_combo()
+        schedule_template_row.addWidget(schedule_template_combo, 1)
+
+        def _apply_template_to_text(*_args):
+            template_id = schedule_template_combo.currentData()
+            if not template_id:
+                return
+            cfg_now = load_secure_config(None) or {}
+            tpl = find_template(list_templates(cfg_now), template_id)
+            if not tpl:
+                return
+            context = _build_template_context(product, schedule_fetched, cfg_now, short_link)
+            # بله برخلافِ تلگرام، parse_mode=HTML رو رندر نمی‌کنه — پس فقط برای تلگرام از تگ‌های HTML استفاده می‌شه
+            as_html = (schedule_platform_combo.currentData() or "telegram") == "telegram"
+            schedule_text_edit.setPlainText(render_post_text(context, tpl, as_html=as_html))
+
+        schedule_template_combo.currentIndexChanged.connect(_apply_template_to_text)
+        schedule_platform_combo.currentIndexChanged.connect(_apply_template_to_text)
+
+        def _design_new_template():
+            from sync_app.core.post_template_designer_dialog import PostTemplateDesignerDialog
+
+            designer = PostTemplateDesignerDialog(self)
+            if designer.exec_() != QDialog.Accepted or not designer.saved_template:
+                return
+            import uuid as _uuid
+
+            saved = designer.saved_template
+            tid = saved.get("id") or _uuid.uuid4().hex[:12]
+            cfg_now = load_secure_config(None) or {}
+            cfg_new = save_template(cfg_now, saved.get("title") or "بدون‌عنوان", saved, template_id=tid)
+            save_secure_config(cfg_new)
+            _reload_template_combo(select_id=tid)
+            _apply_template_to_text()
+            QMessageBox.information(self, "قالبِ پست", "قالب ذخیره و برای این پست اعمال شد.")
+
+        schedule_design_btn = QPushButton("🧩 قالبِ جدید")
+        schedule_design_btn.clicked.connect(_design_new_template)
+        schedule_template_row.addWidget(schedule_design_btn)
+
+        def _edit_selected_template():
+            template_id = schedule_template_combo.currentData()
+            if not template_id:
+                QMessageBox.information(self, "ویرایشِ قالب", "ابتدا یک قالب را از لیست انتخاب کنید.")
+                return
+            from sync_app.core.post_template_designer_dialog import PostTemplateDesignerDialog
+
+            cfg_now = load_secure_config(None) or {}
+            tpl = find_template(list_templates(cfg_now), template_id)
+            if not tpl:
+                return
+            designer = PostTemplateDesignerDialog(self, template=tpl)
+            if designer.exec_() != QDialog.Accepted or not designer.saved_template:
+                return
+            saved = designer.saved_template
+            cfg_new = save_template(cfg_now, saved.get("title") or "بدون‌عنوان", saved, template_id=template_id)
+            save_secure_config(cfg_new)
+            _reload_template_combo(select_id=template_id)
+            _apply_template_to_text()
+            QMessageBox.information(self, "قالبِ پست", "قالب ویرایش و ذخیره شد.")
+
+        schedule_edit_template_btn = QPushButton("✏️ ویرایش")
+        schedule_edit_template_btn.clicked.connect(_edit_selected_template)
+        schedule_template_row.addWidget(schedule_edit_template_btn)
+
+        def _delete_selected_template():
+            template_id = schedule_template_combo.currentData()
+            if not template_id:
+                QMessageBox.information(self, "حذفِ قالب", "ابتدا یک قالب را از لیست انتخاب کنید.")
+                return
+            title = schedule_template_combo.currentText()
+            answer = QMessageBox.question(
+                self, "حذفِ قالب", f"قالبِ «{title}» حذف شود؟",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
+            cfg_now = load_secure_config(None) or {}
+            cfg_new = delete_template(cfg_now, template_id)
+            save_secure_config(cfg_new)
+            _reload_template_combo()
+
+        schedule_delete_template_btn = QPushButton("🗑 حذف")
+        schedule_delete_template_btn.clicked.connect(_delete_selected_template)
+        schedule_template_row.addWidget(schedule_delete_template_btn)
+        schedule_layout.addLayout(schedule_template_row)
+
+        schedule_template_hint = QLabel(
+            "با انتخابِ یک قالب، متنِ پست بر اساسِ فیلدهای انتخابی (نام/قیمت/توضیح/لینک/تماس/شبکه‌های اجتماعی/"
+            "متنِ دلخواه) دوباره ساخته می‌شه — می‌تونید بعدش دستی هم ویرایشش کنید. عکسِ محصول همیشه دست‌نخورده می‌مونه."
+        )
+        schedule_template_hint.setWordWrap(True)
+        schedule_template_hint.setStyleSheet("color:#64748b; font-size:10px;")
+        schedule_layout.addWidget(schedule_template_hint)
+
+        if wc_id:
+            run_in_thread(_fetch_real_content_worker, on_complete=_apply_fetched_content, on_error=_fetch_real_content_error)
+
+        schedule_layout.addWidget(QLabel("زمانِ ارسال (تاریخِ شمسی):"))
+        from sync_app.core.jalali_date_utils import jalali_now, jalali_to_gregorian
+
+        jy_now, jm_now, jd_now = jalali_now()
+        date_row = QHBoxLayout()
+        schedule_year_spin = QSpinBox()
+        schedule_year_spin.setRange(1403, 1420)
+        schedule_year_spin.setValue(jy_now)
+        schedule_month_spin = QSpinBox()
+        schedule_month_spin.setRange(1, 12)
+        schedule_month_spin.setValue(jm_now)
+        schedule_day_spin = QSpinBox()
+        schedule_day_spin.setRange(1, 31)
+        schedule_day_spin.setValue(jd_now)
+        schedule_hour_spin = QSpinBox()
+        schedule_hour_spin.setRange(0, 23)
+        schedule_hour_spin.setValue(10)
+        schedule_minute_spin = QSpinBox()
+        schedule_minute_spin.setRange(0, 59)
+        schedule_minute_spin.setSingleStep(5)
+        schedule_minute_spin.setValue(0)
+        for lbl, w in (
+            ("سال", schedule_year_spin), ("ماه", schedule_month_spin), ("روز", schedule_day_spin),
+            ("ساعت", schedule_hour_spin), ("دقیقه", schedule_minute_spin),
+        ):
+            date_row.addWidget(QLabel(lbl))
+            date_row.addWidget(w)
+        schedule_layout.addLayout(date_row)
+
+        schedule_status_label = QLabel("")
+        schedule_status_label.setStyleSheet("color:#166534; font-weight:700;")
+        schedule_layout.addWidget(schedule_status_label)
+
+        def _add_to_calendar():
+            from datetime import datetime
+
+            from sync_app.core.content_calendar_store import add_scheduled_post
+
+            try:
+                gy, gm, gd = jalali_to_gregorian(
+                    schedule_year_spin.value(), schedule_month_spin.value(), schedule_day_spin.value()
+                )
+                scheduled_dt = datetime(gy, gm, gd, schedule_hour_spin.value(), schedule_minute_spin.value())
+            except ValueError as exc:
+                QMessageBox.critical(self, "خطا", f"تاریخِ واردشده معتبر نیست:\n{exc}")
+                return
+
+            # عکس(ها)ی خام — کاملاً دست‌نخورده (یا فقط عکسِ اصلی، یا آلبومِ همه‌ی عکس‌های سایط)
+            if schedule_send_all_images_check.isChecked() and schedule_fetched["image_urls"]:
+                from sync_app.core.product_content_fetcher import download_images_to_temp
+
+                final_image_paths = download_images_to_temp(schedule_fetched["image_urls"])
+                if not final_image_paths and schedule_image_path["value"]:
+                    final_image_paths = [schedule_image_path["value"]]
+            elif schedule_image_path["value"]:
+                final_image_paths = [schedule_image_path["value"]]
+            else:
+                final_image_paths = []
+            final_image_paths = final_image_paths[:10]
+
+            add_scheduled_post(
+                sku=sku,
+                product_name=product.get("name") or sku,
+                platform=schedule_platform_combo.currentData() or "telegram",
+                text=schedule_text_edit.toPlainText(),
+                scheduled_at=scheduled_dt.isoformat(timespec="seconds"),
+                image_paths=final_image_paths,
+                chat_id_override=schedule_recipient_input.text().strip(),
+            )
+            schedule_status_label.setText(
+                f"✅ به تقویمِ محتوا اضافه شد — {schedule_year_spin.value()}/{schedule_month_spin.value():02d}/"
+                f"{schedule_day_spin.value():02d} {schedule_hour_spin.value():02d}:{schedule_minute_spin.value():02d}"
+            )
+
+        add_to_calendar_btn = QPushButton("📅 افزودن به تقویم محتوا")
+        add_to_calendar_btn.clicked.connect(_add_to_calendar)
+        schedule_layout.addWidget(add_to_calendar_btn)
+
+        schedule_hint = QLabel(
+            "پست در زمانِ تعیین‌شده خودکار به کانال/گروهِ همون پلتفرمی که بالا انتخاب کردید "
+            "(تنظیم‌شده در «تنظیمات → تلگرام» یا «تنظیمات → بله») ارسال می‌شود. "
+            "برای مدیریتِ همه‌ی پست‌های زمان‌بندی‌شده، به زیرتبِ «📅 تقویم محتوا» (در دستیار هوشمند) بروید."
+        )
+        schedule_hint.setWordWrap(True)
+        schedule_hint.setStyleSheet("color:#64748b; font-size:10px;")
+        schedule_layout.addWidget(schedule_hint)
+        schedule_layout.addStretch()
+        sub_tabs.addTab(schedule_tab, "📅 زمان‌بندی شبکه اجتماعی")
+
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
         buttons.rejected.connect(dialog.reject)
         buttons.accepted.connect(dialog.accept)
         outer.addWidget(buttons)
+
+        dialog.exec_()
+
+    # ------------------------------------------------------------------
+    # زمان‌بندیِ گروهی: انتخابِ چند محصول (با چک‌باکس) و افزودنِ یک پستِ
+    # جداگانه به تقویمِ محتوا برای هرکدام، همه در یک زمانِ مشخص.
+    # ------------------------------------------------------------------
+    def _open_batch_schedule_dialog(self):
+        from datetime import datetime
+
+        from sync_app.core.content_studio_helper import generate_telegram_text
+        from sync_app.core.jalali_date_utils import jalali_now, jalali_to_gregorian
+        from sync_app.core.post_template_store import find_template, list_templates
+        from sync_app.core.social_poster import PLATFORM_LABELS
+
+        selected = []
+        for i in range(self.product_list.count()):
+            item = self.product_list.item(i)
+            sku = item.data(Qt.UserRole)
+            if not sku:
+                continue
+            row_widget = self.product_list.itemWidget(item)
+            if not isinstance(row_widget, ProductRowWidget):
+                continue
+            if not row_widget.checkbox.isChecked():
+                continue
+            selected.append({
+                "sku": sku,
+                "name": item.data(Qt.UserRole + 4) or sku,
+                "price": item.data(Qt.UserRole + 11) or 0,
+            })
+
+        if not selected:
+            QMessageBox.information(
+                self, "زمان‌بندیِ گروهی",
+                "ابتدا با تیک‌زدنِ چک‌باکسِ کنارِ محصولات، چند محصول را انتخاب کنید.",
+            )
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"📅 زمان‌بندیِ گروهیِ پست — {len(selected)} محصول")
+        dialog.setLayoutDirection(Qt.RightToLeft)
+        dialog.resize(480, 440)
+        v = QVBoxLayout(dialog)
+
+        v.addWidget(QLabel(
+            f"{len(selected)} محصولِ انتخاب‌شده — برای هرکدام یک پستِ جداگانه (با متن/عکسِ اختصاصی) ساخته می‌شود:"
+        ))
+        names_preview = "، ".join(str(p["name"]) for p in selected[:6])
+        if len(selected) > 6:
+            names_preview += f" و {len(selected) - 6} موردِ دیگر"
+        preview_label = QLabel(names_preview)
+        preview_label.setWordWrap(True)
+        preview_label.setStyleSheet("color:#64748b; font-size:10px;")
+        v.addWidget(preview_label)
+
+        platform_row = QHBoxLayout()
+        platform_row.addWidget(QLabel("پلتفرم:"))
+        platform_combo = QComboBox()
+        for key, label in PLATFORM_LABELS.items():
+            platform_combo.addItem(label, key)
+        platform_row.addWidget(platform_combo)
+        platform_row.addStretch()
+        v.addLayout(platform_row)
+
+        recipient_row = QHBoxLayout()
+        recipient_row.addWidget(QLabel("مقصدِ سفارشی (اختیاری):"))
+        recipient_input = QLineEdit()
+        recipient_input.setPlaceholderText("خالی = مقصدِ پیش‌فرضِ Settings؛ تلگرام: آیدیِ عددی یا @username؛ بله: فقط آیدیِ عددی (برای همه‌ی این پست‌ها)")
+        recipient_row.addWidget(recipient_input, 1)
+        v.addLayout(recipient_row)
+
+        recipient_hint = QLabel(
+            "⚠️ بله (برخلافِ تلگرام) فقط آیدیِ عددی رو قبول می‌کنه؛ برای ارسال به شخص، اون شخص باید قبلاً به بات پیام داده باشه."
+        )
+        recipient_hint.setWordWrap(True)
+        recipient_hint.setStyleSheet("color:#64748b; font-size:10px;")
+        v.addWidget(recipient_hint)
+
+        template_row = QHBoxLayout()
+        template_row.addWidget(QLabel("قالبِ متنِ پست (اختیاری):"))
+        template_combo = QComboBox()
+        template_combo.addItem("بدونِ قالب (متنِ پیش‌فرض)", "")
+        cfg_now = load_secure_config(None) or {}
+        for tpl in list_templates(cfg_now):
+            template_combo.addItem(tpl.get("title") or "بدون‌عنوان", tpl.get("id"))
+        template_row.addWidget(template_combo, 1)
+        v.addLayout(template_row)
+
+        template_hint = QLabel(
+            "با انتخابِ یک قالب، متنِ هرکدوم از پست‌ها بر اساسِ فیلدهای انتخابی (نام/قیمت/توضیح/لینک/تماس/"
+            "شبکه‌های اجتماعی/متنِ دلخواه) و دادهٔ همون محصول ساخته می‌شه. عکسِ محصول همیشه دست‌نخورده می‌مونه."
+        )
+        template_hint.setStyleSheet("color:#64748b; font-size:10px;")
+        template_hint.setWordWrap(True)
+        v.addWidget(template_hint)
+
+        send_all_images_check = QCheckBox("همه‌ی عکس‌های هر محصول از سایت هم ارسال شود (آلبوم)")
+        v.addWidget(send_all_images_check)
+
+        v.addWidget(QLabel("زمانِ ارسالِ همه (تاریخِ شمسی) — یکسان برای همه‌ی پست‌ها:"))
+        jy_now, jm_now, jd_now = jalali_now()
+        date_row = QHBoxLayout()
+        year_spin = QSpinBox()
+        year_spin.setRange(1403, 1420)
+        year_spin.setValue(jy_now)
+        month_spin = QSpinBox()
+        month_spin.setRange(1, 12)
+        month_spin.setValue(jm_now)
+        day_spin = QSpinBox()
+        day_spin.setRange(1, 31)
+        day_spin.setValue(jd_now)
+        hour_spin = QSpinBox()
+        hour_spin.setRange(0, 23)
+        hour_spin.setValue(10)
+        minute_spin = QSpinBox()
+        minute_spin.setRange(0, 59)
+        minute_spin.setSingleStep(5)
+        minute_spin.setValue(0)
+        for lbl, w in (
+            ("سال", year_spin), ("ماه", month_spin), ("روز", day_spin),
+            ("ساعت", hour_spin), ("دقیقه", minute_spin),
+        ):
+            date_row.addWidget(QLabel(lbl))
+            date_row.addWidget(w)
+        v.addLayout(date_row)
+
+        status_label = QLabel("")
+        status_label.setStyleSheet("color:#166534; font-weight:700;")
+        status_label.setWordWrap(True)
+        v.addWidget(status_label)
+
+        confirm_btn = QPushButton(f"📅 افزودنِ {len(selected)} پستِ جداگانه به تقویم")
+        v.addWidget(confirm_btn)
+
+        close_btn = QPushButton("انصراف")
+        close_btn.clicked.connect(dialog.reject)
+        v.addWidget(close_btn)
+
+        def _run_batch():
+            try:
+                gy, gm, gd = jalali_to_gregorian(year_spin.value(), month_spin.value(), day_spin.value())
+                scheduled_dt = datetime(gy, gm, gd, hour_spin.value(), minute_spin.value())
+            except ValueError as exc:
+                QMessageBox.critical(dialog, "خطا", f"تاریخِ واردشده معتبر نیست:\n{exc}")
+                return
+
+            platform = platform_combo.currentData() or "telegram"
+            template_id = template_combo.currentData()
+            confirm_btn.setEnabled(False)
+            close_btn.setEnabled(False)
+            status_label.setText("🔄 در حالِ آماده‌سازیِ پست‌ها (دریافتِ لینک/عکسِ هر محصول از سایت)...")
+
+            send_all_images = send_all_images_check.isChecked()
+            chat_id_override = recipient_input.text().strip()
+
+            def _worker():
+                from sync_app.core.content_calendar_store import add_scheduled_post
+                from sync_app.core.post_template_renderer import render_post_text
+                from sync_app.core.product_content_fetcher import (
+                    download_image_to_temp, download_images_to_temp, fetch_product_content,
+                )
+
+                product_map = load_product_woo_map()
+                cfg = load_secure_config(None) or {}
+                tpl = find_template(list_templates(cfg), template_id) if template_id else None
+                done = 0
+                failed = []
+                for p in selected:
+                    sku = p["sku"]
+                    product_data = {"name": p["name"], "price": p["price"], "description": ""}
+                    fetched = {"permalink": "", "description": "", "image_urls": []}
+                    raw_photos = []
+                    wc_id = product_map.get(sku)
+                    if wc_id:
+                        try:
+                            fetched = fetch_product_content(cfg, wc_id)
+                            if send_all_images and fetched.get("image_urls"):
+                                raw_photos = download_images_to_temp(fetched["image_urls"])
+                            elif fetched.get("image_url"):
+                                single = download_image_to_temp(fetched["image_url"])
+                                raw_photos = [single] if single else []
+                        except Exception:
+                            pass
+
+                    if tpl:
+                        context = _build_template_context(product_data, fetched, cfg)
+                        # بله parse_mode=HTML رو رندر نمی‌کنه — فقط برای تلگرام از تگ‌های HTML استفاده می‌شه
+                        text = render_post_text(context, tpl, as_html=(platform == "telegram"))
+                    else:
+                        text = generate_telegram_text(product_data)
+                        permalink = fetched.get("permalink") or ""
+                        if permalink:
+                            text = f"{text}\n\n🔗 {permalink}"
+
+                    image_paths = raw_photos[:10]
+                    try:
+                        add_scheduled_post(
+                            sku=sku,
+                            product_name=p["name"],
+                            platform=platform,
+                            text=text,
+                            scheduled_at=scheduled_dt.isoformat(timespec="seconds"),
+                            image_paths=image_paths,
+                            chat_id_override=chat_id_override,
+                        )
+                        done += 1
+                    except Exception as exc:
+                        failed.append(f"{sku}: {exc}")
+                return {"done": done, "failed": failed}
+
+            def _on_done(result):
+                msg = f"✅ {result['done']} پست به تقویمِ محتوا اضافه شد."
+                if result["failed"]:
+                    msg += f"\n⚠️ {len(result['failed'])} موردِ ناموفق: " + "، ".join(result["failed"][:5])
+                status_label.setText(msg)
+                QMessageBox.information(dialog, "زمان‌بندیِ گروهی", msg)
+                dialog.accept()
+
+            def _on_error(err_msg):
+                confirm_btn.setEnabled(True)
+                close_btn.setEnabled(True)
+                status_label.setText(f"❌ خطا: {err_msg}")
+
+            run_in_thread(_worker, on_complete=_on_done, on_error=_on_error)
+
+        confirm_btn.clicked.connect(_run_batch)
 
         dialog.exec_()
 

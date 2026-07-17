@@ -38,6 +38,21 @@ class Peecha_LM_DB
         if (!$site_col) {
             $wpdb->query("ALTER TABLE {$table} ADD COLUMN site_url VARCHAR(255) NULL DEFAULT NULL");
         }
+
+        $max_sites_col = $wpdb->get_row("SHOW COLUMNS FROM {$table} LIKE 'max_sites'", ARRAY_A);
+        if (!$max_sites_col) {
+            $wpdb->query("ALTER TABLE {$table} ADD COLUMN max_sites SMALLINT UNSIGNED NOT NULL DEFAULT 0");
+        }
+
+        $platform_col = $wpdb->get_row("SHOW COLUMNS FROM {$table} LIKE 'platform_scope'", ARRAY_A);
+        if (!$platform_col) {
+            $wpdb->query("ALTER TABLE {$table} ADD COLUMN platform_scope VARCHAR(8) NOT NULL DEFAULT 'both'");
+        }
+
+        $sites_seen_col = $wpdb->get_row("SHOW COLUMNS FROM {$table} LIKE 'sites_seen'", ARRAY_A);
+        if (!$sites_seen_col) {
+            $wpdb->query("ALTER TABLE {$table} ADD COLUMN sites_seen TEXT NULL DEFAULT NULL");
+        }
     }
 
     public static function deactivate()
@@ -65,6 +80,9 @@ class Peecha_LM_DB
             last_seen_at DATETIME NULL DEFAULT NULL,
             last_app_version VARCHAR(32) NULL DEFAULT NULL,
             site_url VARCHAR(255) NULL DEFAULT NULL,
+            max_sites SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+            platform_scope VARCHAR(8) NOT NULL DEFAULT 'both',
+            sites_seen TEXT NULL DEFAULT NULL,
             created_at DATETIME NOT NULL,
             updated_at DATETIME NOT NULL,
             PRIMARY KEY (id),
@@ -158,8 +176,9 @@ class Peecha_LM_DB
             return $wpdb->get_results(
                 $wpdb->prepare(
                     "SELECT * FROM {$table}
-                     WHERE license_key LIKE %s OR customer_name LIKE %s OR customer_email LIKE %s OR hwid LIKE %s OR site_url LIKE %s
+                     WHERE license_key LIKE %s OR customer_name LIKE %s OR customer_email LIKE %s OR hwid LIKE %s OR site_url LIKE %s OR sites_seen LIKE %s
                      ORDER BY id DESC",
+                    $like,
                     $like,
                     $like,
                     $like,
@@ -186,6 +205,8 @@ class Peecha_LM_DB
             'license_expires' => $data['license_expires'] ?? null,
             'updates_until' => $data['updates_until'] ?? null,
             'notes' => $data['notes'] ?? '',
+            'max_sites' => (int) ($data['max_sites'] ?? 0),
+            'platform_scope' => $data['platform_scope'] ?? 'both',
             'created_at' => $now,
             'updated_at' => $now,
         );
@@ -274,8 +295,40 @@ class Peecha_LM_DB
         $site_url = trim((string) $site_url);
         if ($site_url !== '') {
             $data['site_url'] = $site_url;
+            $data['sites_seen'] = self::add_site_seen($id, $site_url);
         }
         return self::update_license($id, $data);
+    }
+
+    /** لیستِ سایت‌های متمایزی که این لایسنس ازشون دیده شده — فقط برای نمایشِ
+     * اطلاعاتی در پنلِ ادمین است؛ محدودیتِ واقعیِ تعدادِ سایت سمتِ کلاینت و
+     * بر اساسِ کلیدِ امضاشده اعمال می‌شود، نه این لیست. */
+    public static function add_site_seen($id, $site_url)
+    {
+        $existing = self::get_license((int) $id);
+        $seen = self::decode_sites_seen($existing);
+        $normalized = strtolower(untrailingslashit((string) $site_url));
+
+        foreach ($seen as $entry) {
+            if (strtolower(untrailingslashit((string) ($entry['url'] ?? ''))) === $normalized) {
+                return wp_json_encode($seen);
+            }
+        }
+
+        if (count($seen) < 50) {
+            $seen[] = array('url' => $site_url, 'first_seen' => current_time('mysql'));
+        }
+
+        return wp_json_encode($seen);
+    }
+
+    public static function decode_sites_seen($row)
+    {
+        if (!$row || empty($row['sites_seen'])) {
+            return array();
+        }
+        $decoded = json_decode((string) $row['sites_seen'], true);
+        return is_array($decoded) ? $decoded : array();
     }
 
     public static function upsert_license_row($data)
