@@ -28,6 +28,7 @@ a = Analysis(
         ('sync_app/core/style.qss', '.'),
         ('sync_app/core/IRANSans.ttf', '.'),
         ('sync_app/core/license.json.example', '.'),
+        ('sync_app/core/Peecha.mp4', '.'),
     ] + _image_datas,
     hiddenimports=[
         # تب‌ها
@@ -55,6 +56,8 @@ a = Analysis(
         "sync_app.core.tabs.tab_license",
         "sync_app.core.tabs.tab_auto_sync",
         "sync_app.core.login_window",
+        "PyQt5.QtMultimedia",
+        "PyQt5.QtMultimediaWidgets",
         "sync_app.core.user_profile",
         "sync_app.core.app_theme",
         "sync_app.core.reconciliation_service",
