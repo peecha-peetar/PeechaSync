@@ -249,7 +249,7 @@ class LoginWindow(QDialog):
         # سلامِ ساده کافیه.
         welcome_title = QLabel("خوش آمدید")
         welcome_title.setObjectName("welcomeTitle")
-        welcome_title.setAlignment(Qt.AlignRight)
+        welcome_title.setAlignment(Qt.AlignRight | Qt.AlignAbsolute)
         card_layout.addWidget(welcome_title)
         card_layout.addSpacing(4)
 
@@ -257,7 +257,7 @@ class LoginWindow(QDialog):
             "برای ادامه، وارد حساب کاربری خود شوید"
         )
         welcome_subtitle.setObjectName("welcomeSubtitle")
-        welcome_subtitle.setAlignment(Qt.AlignRight)
+        welcome_subtitle.setAlignment(Qt.AlignRight | Qt.AlignAbsolute)
         card_layout.addWidget(welcome_subtitle)
         card_layout.addSpacing(18)
 
@@ -271,7 +271,7 @@ class LoginWindow(QDialog):
         # نام کاربری
         lbl_user = QLabel("\u0646\u0627\u0645 \u06a9\u0627\u0631\u0628\u0631\u06cc")
         lbl_user.setObjectName("fieldLabel")
-        lbl_user.setAlignment(Qt.AlignRight)
+        lbl_user.setAlignment(Qt.AlignRight | Qt.AlignAbsolute)
         lbl_user.setStyleSheet("background: transparent; margin: 0; padding: 0;")
         card_layout.addWidget(lbl_user)
         card_layout.addSpacing(5)
@@ -294,7 +294,7 @@ class LoginWindow(QDialog):
         # رمز عبور
         lbl_pass = QLabel("\u0631\u0645\u0632 \u0639\u0628\u0648\u0631")
         lbl_pass.setObjectName("fieldLabel")
-        lbl_pass.setAlignment(Qt.AlignRight)
+        lbl_pass.setAlignment(Qt.AlignRight | Qt.AlignAbsolute)
         lbl_pass.setStyleSheet("background: transparent; margin: 0; padding: 0;")
         card_layout.addWidget(lbl_pass)
         card_layout.addSpacing(5)
@@ -440,7 +440,10 @@ class LoginWindow(QDialog):
 
         def _brand_label(text, bottom_margin, h, font_size, bold, color):
             lbl = QLabel(text, container)
-            lbl.setAlignment(Qt.AlignRight | Qt.AlignBottom)
+            # AlignAbsolute لازمه: بدونش، Qt.AlignRight برایِ متنِ فارسی
+            # (که خودش راست‌به‌چپه) به‌عنوانِ «trailing» تفسیر می‌شه و
+            # چپ‌چین می‌شه — صرف‌نظر از جهتِ خودِ ویجت.
+            lbl.setAlignment(Qt.AlignRight | Qt.AlignAbsolute | Qt.AlignBottom)
             weight = 800 if bold else 600
             lbl.setStyleSheet(
                 f"background: transparent; color: {color}; font-size: {font_size}px; font-weight: {weight};"
