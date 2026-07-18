@@ -1,5 +1,5 @@
 import os
-from PyQt5.QtCore import Qt, QObject, QThread, pyqtSignal, QTimer, QPoint, QRectF, QUrl
+from PyQt5.QtCore import Qt, QObject, QThread, pyqtSignal, QTimer, QPoint
 from PyQt5.QtWidgets import (
     QDialog,
     QVBoxLayout,
@@ -354,43 +354,43 @@ class LoginWindow(QDialog):
         root.addWidget(self.photo_panel, 0, Qt.AlignVCenter)
 
     def _build_video_panel(self, width: int, height: int, radius: int = 26):
-        """اگه sync_app/core/Peecha.mp4 موجود باشه، یه پنلِ ویدئوییِ زنده
-        (بی‌صدا، لوپ) به‌جایِ عکسِ ثابت می‌سازه — با همون گردیِ دو گوشه‌ی
-        بیرونی و متنِ برندِ رویِ پایینِ پنل (این‌بار به‌صورتِ لیبل‌های واقعی
-        روی یه سایه‌ی تیره، نه پیکسلِ نقاشی‌شده، چون رویِ ویدئوی زنده نمی‌شه
-        متن رو داخلِ فریم‌ها نقاشی کرد). اگه فایل نباشه، None برمی‌گرده تا
-        فراخوان به‌جاش عکسِ ثابت رو نشون بده."""
-        path = _login_resource_path("Peecha.mp4")
+        """اگه sync_app/core/Peecha.gif موجود باشه، یه پنلِ متحرکِ زنده
+        (لوپ‌شده) به‌جایِ عکسِ ثابت می‌سازه — با همون گردیِ دو گوشه‌ی بیرونی و
+        متنِ برندِ رویِ یه سایه‌ی تیره، بالایِ پنل.
+
+        چرا GIF به‌جایِ فایلِ ویدئوییِ mp4: پخشِ mp4 از طریقِ
+        QtMultimedia/QMediaPlayer به پلاگین‌های کدکِ سیستم‌عامل (GStreamer
+        روی لینوکس، WMF روی ویندوز) وابسته‌ست که ممکنه رویِ سیستمِ کاربر
+        نصب/کامل نباشه (دقیقاً همین اتفاق افتاد: هم تویِ محیطِ توسعه، هم رویِ
+        ویندوزِ کاربر، فریمِ ویدئو هیچ‌وقت نرسید). QMovie/GIF برعکس، بخشی از
+        خودِ Qt (بدونِ نیازِ به پلاگینِ جداگانه) هست و همیشه کار می‌کنه. اگه
+        فایل نباشه، None برمی‌گرده تا فراخوان به‌جاش عکسِ ثابت رو نشون بده."""
+        path = _login_resource_path("Peecha.gif")
         if not path or not os.path.isfile(path):
             return None
 
-        try:
-            from PyQt5.QtMultimedia import QMediaContent, QMediaPlayer
-            from PyQt5.QtMultimediaWidgets import QGraphicsVideoItem
-            from PyQt5.QtWidgets import QGraphicsScene, QGraphicsView
-        except ImportError:
+        from PyQt5.QtGui import QMovie
+
+        movie = QMovie(path)
+        if not movie.isValid():
             return None
 
         container = QWidget()
         container.setFixedSize(width, height)
         container.setStyleSheet("background: transparent;")
 
-        # لایه‌ی زمینه (عکسِ ثابت/گرادیان): اگه فریمِ ویدئو به هر دلیلی
-        # (کدکِ نصب‌نشده روی سیستمِ کاربر و مانندِ آن) نرسه، این پشتِ ویدئوی
-        # (بی‌رنگِ) شفاف دیده می‌شه، نه یه مستطیلِ سیاهِ خالی.
+        # لایه‌ی زمینه (عکسِ ثابت/گرادیان): اگه به هر دلیلی GIF لود نشه، این
+        # پشتِ صحنه دیده می‌شه، نه یه مستطیلِ خالی.
         background = QLabel(container)
         background.setFixedSize(width, height)
         background.setStyleSheet("background: transparent;")
         background.setPixmap(self._build_panel_base_pixmap(width, height, radius))
         background.move(0, 0)
 
-        view = QGraphicsView(container)
-        view.setFrameShape(QGraphicsView.NoFrame)
-        view.setStyleSheet("background: transparent; border: none;")
-        view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        view.setFixedSize(width, height)
-        view.move(0, 0)
+        movie_label = QLabel(container)
+        movie_label.setFixedSize(width, height)
+        movie_label.setStyleSheet("background: transparent;")
+        movie_label.move(0, 0)
 
         clip_path = QPainterPath()
         clip_path.moveTo(width, 0)
@@ -400,34 +400,16 @@ class LoginWindow(QDialog):
         clip_path.arcTo(0, height - radius * 2, radius * 2, radius * 2, 180, 90)
         clip_path.lineTo(width, height)
         clip_path.closeSubpath()
-        view.setMask(QRegion(clip_path.toFillPolygon().toPolygon()))
+        movie_label.setMask(QRegion(clip_path.toFillPolygon().toPolygon()))
 
-        scene = QGraphicsScene(view)
-        scene.setSceneRect(0, 0, width, height)
-        view.setScene(scene)
+        movie.setCacheMode(QMovie.CacheAll)
+        # GIF خودش loop=0 (بی‌نهایت) رو تویِ فایل داره، پس نیازی به مدیریتِ
+        # دستیِ لوپ (برخلافِ QMediaPlayer) نیست.
+        movie_label.setMovie(movie)
+        movie.start()
 
-        video_item = QGraphicsVideoItem()
-        video_item.setSize(QRectF(0, 0, width, height).size())
-        video_item.setAspectRatioMode(Qt.KeepAspectRatioByExpanding)
-        scene.addItem(video_item)
-
-        player = QMediaPlayer(container, QMediaPlayer.VideoSurface)
-        player.setVideoOutput(video_item)
-        player.setMuted(True)
-        player.setMedia(QMediaContent(QUrl.fromLocalFile(path)))
-
-        def _loop(status, _player=player):
-            if status == QMediaPlayer.EndOfMedia:
-                _player.setPosition(0)
-                _player.play()
-
-        player.mediaStatusChanged.connect(_loop)
-        player.play()
-
-        # ارجاع‌ها روی self نگه داشته می‌شن تا garbage-collect نشن
-        self._video_player = player
-        self._video_item = video_item
-        self._video_scene = scene
+        # ارجاع نگه داشته می‌شه تا garbage-collect نشه
+        self._gif_movie = movie
 
         # سایه‌ی تیره از پایین برای خواناییِ متنِ سفید
         scrim_h = 130
