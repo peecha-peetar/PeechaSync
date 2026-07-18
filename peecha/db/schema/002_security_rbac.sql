@@ -1,4 +1,5 @@
--- پیچا | سیستم دسترسی: کاربران، نقش‌ها، منو / فرم / فیلد
+-- پیچا | سیستم دسترسی: کاربران، نقش‌های درختی (با ارث‌بری از نقش والد)،
+-- تخصیص نقش به‌صورت سراسری یا به‌تفکیک ماژول، و دسترسی منو / فرم / فیلد
 -- سازگار با SQL Server 2016 — از System-Versioned Temporal Tables برای
 -- تاریخچه‌ی خودکار تغییرات دسترسی استفاده می‌شود (نیاز حسابرسی/کنترل داخلی)
 -- پیش‌نیاز: 001_core_i18n_and_tenancy.sql
@@ -97,16 +98,21 @@ INSERT INTO sec.PermissionActions (ActionID, Code) VALUES
 GO
 
 -- ---------------------------------------------------------------------
--- نقش‌ها (هر نقش متعلق به یک شرکت مشخص است)
+-- نقش‌ها (هر نقش متعلق به یک شرکت مشخص است) — به‌صورت درختی، هر نقش
+-- می‌تواند از یک نقش والد ارث‌بری کند و فقط تفاوت‌هایش را تعریف کند.
 -- ---------------------------------------------------------------------
 CREATE TABLE sec.Roles (
     RoleID       INT         NOT NULL IDENTITY(1,1) PRIMARY KEY,
     CompanyID    INT         NOT NULL REFERENCES core.Companies(CompanyID),
+    ParentRoleID INT         NULL REFERENCES sec.Roles(RoleID),   -- درخت نقش‌ها؛ باید هم‌شرکتِ خودِ نقش باشد (بررسی در لایه‌ی اپ/تریگر)
     Code         VARCHAR(50) NOT NULL,
     IsSystemRole BIT         NOT NULL CONSTRAINT DF_Roles_IsSystem DEFAULT (0), -- نقش‌های داخلی (مثلاً «مدیر شرکت»)، غیرقابل‌حذف
     IsActive     BIT         NOT NULL CONSTRAINT DF_Roles_IsActive DEFAULT (1),
-    CONSTRAINT UQ_Roles UNIQUE (CompanyID, Code)
+    CONSTRAINT UQ_Roles UNIQUE (CompanyID, Code),
+    CONSTRAINT CK_Roles_NotSelfParent CHECK (ParentRoleID IS NULL OR ParentRoleID <> RoleID)
 );
+GO
+CREATE INDEX IX_Roles_ParentRoleID ON sec.Roles(ParentRoleID);
 GO
 
 -- ---------------------------------------------------------------------
@@ -114,6 +120,7 @@ GO
 -- (چه کسی، چه زمانی، چه دسترسی‌ای را تغییر داده)
 -- ---------------------------------------------------------------------
 
+-- نقش عمومی سطح‌شرکت: روی همه‌ی ماژول‌هایی که خودِ نقش دسترسی برایشان تعریف کرده اعمال می‌شود
 CREATE TABLE sec.UserRoles (
     UserID       INT      NOT NULL REFERENCES sec.Users(UserID),
     RoleID       INT      NOT NULL REFERENCES sec.Roles(RoleID),
@@ -124,6 +131,22 @@ CREATE TABLE sec.UserRoles (
     CONSTRAINT PK_UserRoles PRIMARY KEY (UserID, RoleID, CompanyID)
 )
 WITH (SYSTEM_VERSIONING = ON (HISTORY_TABLE = sec.UserRoles_History));
+GO
+
+-- نقش اختصاصیِ یک ماژول: همان کاربر می‌تواند در ماژول‌های مختلف نقش‌های متفاوتی
+-- داشته باشد (مثلاً «مدیر فروش» در ماژول فروش + «فقط‌مشاهده» در ماژول انبار).
+-- در محاسبه‌ی دسترسیِ فرم‌های ماژول M، این جدول با UserRoles (سطح‌شرکت) جمع (اتحاد) می‌شود.
+CREATE TABLE sec.UserModuleRoles (
+    UserID       INT      NOT NULL REFERENCES sec.Users(UserID),
+    RoleID       INT      NOT NULL REFERENCES sec.Roles(RoleID),
+    CompanyID    INT      NOT NULL REFERENCES core.Companies(CompanyID),
+    ModuleID     SMALLINT NOT NULL REFERENCES sec.Modules(ModuleID),
+    SysStartTime DATETIME2 GENERATED ALWAYS AS ROW START NOT NULL,
+    SysEndTime   DATETIME2 GENERATED ALWAYS AS ROW END NOT NULL,
+    PERIOD FOR SYSTEM_TIME (SysStartTime, SysEndTime),
+    CONSTRAINT PK_UserModuleRoles PRIMARY KEY (UserID, RoleID, CompanyID, ModuleID)
+)
+WITH (SYSTEM_VERSIONING = ON (HISTORY_TABLE = sec.UserModuleRoles_History));
 GO
 
 -- دسترسی نمایش هر منو به ازای نقش
