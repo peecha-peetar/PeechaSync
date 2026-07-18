@@ -1707,6 +1707,17 @@ class PeechaLauncher(QWidget):
                 continue
             if hasattr(tab, "config"):
                 tab.config = dict(cfg)
+            # فایل‌هایِ وضعیتِ سینک (نگاشتِ عکس‌ها و مانندِ آن) حالا per-site
+            # namespaced هستن (site_scoped_path)، ولی بعضی تب‌ها این نگاشت‌ها
+            # رو فقط یک‌بار موقعِ ساخته‌شدنِ تب تویِ حافظه لود می‌کنن — بدونِ
+            # این reload، حتی با اینکه مسیرِ فایل درست عوض شده، تب همچنان
+            # دیتایِ سایتِ قبلی رو تویِ حافظه نگه می‌داشت.
+            reload_caches = getattr(tab, "reload_site_scoped_caches", None)
+            if callable(reload_caches):
+                try:
+                    reload_caches()
+                except Exception:
+                    pass
             host = store_name
             log(f"• {label}: سایت فعال → {host}")
 

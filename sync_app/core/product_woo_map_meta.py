@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
-from sync_app.core.sync_utils import app_path, log
+from sync_app.core.sync_utils import site_scoped_path, log
 
 META_FILE = "product_woo_map_meta.json"
 
@@ -16,7 +16,7 @@ def _empty_meta() -> dict:
 
 def load_product_woo_map_meta() -> dict:
     try:
-        with open(app_path(META_FILE), "r", encoding="utf-8") as f:
+        with open(site_scoped_path(META_FILE), "r", encoding="utf-8") as f:
             data = json.load(f)
             if isinstance(data, dict):
                 links = data.get("links")
@@ -37,7 +37,7 @@ def save_product_woo_map_meta(meta: dict) -> None:
                 if isinstance(v, dict) and v.get("wc_id")
             }
         }
-        with open(app_path(META_FILE), "w", encoding="utf-8") as f:
+        with open(site_scoped_path(META_FILE), "w", encoding="utf-8") as f:
             json.dump(clean, f, ensure_ascii=False, indent=2)
     except Exception as exc:
         log.warning(f"⚠️ ذخیره {META_FILE}: {exc}")

@@ -58,6 +58,60 @@ def app_path(*parts):
     return os.path.join(app_dir(), *parts)
 
 
+def _site_scope_key() -> str:
+    """شناسه‌ی یکتا برایِ «کدوم سایت/پلتفرمِ فروشگاهی الان فعاله» (پلتفرم +
+    آدرسِ سایت). برایِ namespace کردنِ فایل‌هایِ وضعیتِ سینک (نگاشتِ SKU↔ID،
+    نگاشتِ دسته‌بندی و مانندِ آن) که وگرنه وقتی یک پروفایل چند سایت/پلتفرمِ
+    مختلف داره (چند پریست یا چند WC_SITES/PS_SITES)، بینِ اونا به‌اشتباه به
+    اشتراک گذاشته می‌شن و دیتای یک سایت با سایتِ دیگه قاطی می‌شه."""
+    try:
+        from sync_app.core.secure_config_loader import load_secure_config
+        from sync_app.core.integrations.commerce_provider import store_platform
+
+        cfg = load_secure_config(None) or {}
+        platform = store_platform(cfg)
+        url_key = "PS_URL" if platform == "prestashop" else "WC_URL"
+        url = str(cfg.get(url_key) or "").strip().lower().rstrip("/")
+        for prefix in ("https://", "http://"):
+            if url.startswith(prefix):
+                url = url[len(prefix):]
+                break
+        raw = f"{platform}:{url}" if url else platform
+    except Exception:
+        raw = "default"
+
+    import hashlib
+
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def site_scoped_path(*parts):
+    """مسیرِ فایلِ وضعیتِ سینکِ مخصوصِ سایت/پلتفرمِ فعلی (namespaced) — برایِ
+    category_map.json، product_woo_map.json و مشابه.
+
+    مهاجرت از نسخه‌ی قدیمیِ مسطح (پیش از این تغییر، وقتی این فایل‌ها بینِ
+    همه‌ی سایت‌هایِ یک پروفایل مشترک بودن): اولین سایتی که بعد از این
+    آپدیت واقعاً درخواستِ این مسیر رو بده، فایلِ قدیمی رو به مسیرِ
+    scopedِ خودش منتقل می‌کنه (move، نه copy) — تا فقط همون یک سایت
+    (که تقریباً همیشه سایتِ فعلاً فعاله) دیتایِ قبلی رو به ارث ببره و
+    سایت‌هایِ دیگه با نگاشتِ خالی/تازه شروع کنن. یه بکاپ از فایلِ قدیمی
+    هم کنارِ مسیرِ پروفایل نگه داشته می‌شه، برایِ احتیاط."""
+    base = os.path.join(app_dir(), "sites", _site_scope_key())
+    os.makedirs(base, exist_ok=True)
+    target = os.path.join(base, *parts)
+    if not os.path.exists(target):
+        legacy = os.path.join(app_dir(), *parts)
+        if os.path.isfile(legacy):
+            try:
+                import shutil
+
+                shutil.copyfile(legacy, legacy + ".pre_site_scope_backup")
+                shutil.move(legacy, target)
+            except Exception:
+                pass
+    return target
+
+
 def reconfigure_app_logging():
     """بعد از تعویض پروفایل، مسیر sync.log به‌روز شود."""
     global LOG_FILE

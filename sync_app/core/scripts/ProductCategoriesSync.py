@@ -24,7 +24,7 @@ def resource_path(relative_path):
 # ---------------------------------------------------------
 try:
     from sync_app.core.secure_config_loader import load_secure_config
-    from sync_app.core.sync_utils import log, app_path
+    from sync_app.core.sync_utils import log, site_scoped_path
     from sync_app.core.wc_api_helper import wc_api_config_for_sdk
     from sync_app.core.category_resolver import dejavu_category_slug, extract_code_from_wc_slug, load_category_map
     from sync_app.core.category_rules import (
@@ -55,6 +55,9 @@ except ImportError:
         return {}
 
     def app_path(name):
+        return os.path.join(os.getcwd(), name)
+
+    def site_scoped_path(name):
         return os.path.join(os.getcwd(), name)
 
     def is_field_enabled(_config, _key):
@@ -293,7 +296,7 @@ def _save_category_map_payload(payload):
     if not payload:
         return False
     try:
-        map_path = app_path("category_map.json")
+        map_path = site_scoped_path("category_map.json")
         with open(map_path, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=4)
         log.info(f"✅ نقشه دسته‌بندی‌ها در {map_path} ذخیره شد ({len(payload)} مورد).")

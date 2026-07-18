@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from sync_app.core.sync_utils import app_path, log
+from sync_app.core.sync_utils import site_scoped_path, log
 from sync_app.core.wc_sync_helper import wc_call, wc_parse_json
 from sync_app.core.product_woo_map_meta import is_manual_product_link
 
@@ -25,7 +25,7 @@ def _current_platform() -> str:
 
 
 def _platform_marker_path() -> str:
-    return app_path("product_woo_map.platform")
+    return site_scoped_path("product_woo_map.platform")
 
 
 def load_product_woo_map() -> dict[str, int]:
@@ -52,13 +52,13 @@ def load_product_woo_map() -> dict[str, int]:
                 import shutil
                 import time as _time
 
-                src = app_path("product_woo_map.json")
-                backup = app_path(f"product_woo_map.backup_{saved_platform}_{int(_time.time())}.json")
+                src = site_scoped_path("product_woo_map.json")
+                backup = site_scoped_path(f"product_woo_map.backup_{saved_platform}_{int(_time.time())}.json")
                 shutil.copyfile(src, backup)
             except Exception:
                 pass
             try:
-                with open(app_path("product_woo_map.json"), "w", encoding="utf-8") as f:
+                with open(site_scoped_path("product_woo_map.json"), "w", encoding="utf-8") as f:
                     json.dump({}, f)
                 with open(_platform_marker_path(), "w", encoding="utf-8") as f:
                     f.write(current_platform)
@@ -71,7 +71,7 @@ def load_product_woo_map() -> dict[str, int]:
         pass
 
     try:
-        with open(app_path("product_woo_map.json"), "r", encoding="utf-8") as f:
+        with open(site_scoped_path("product_woo_map.json"), "r", encoding="utf-8") as f:
             data = json.load(f)
             if isinstance(data, dict):
                 return {str(k).strip(): int(v) for k, v in data.items() if v}
@@ -90,7 +90,7 @@ def save_product_woo_map(product_map: dict) -> None:
         # لاگ برجسته می‌کنیم تا قابل ردیابی باشه (بدون متوقف‌کردن ذخیره،
         # چون حذف عمدیِ تک‌SKU هم از همین تابع رد می‌شه).
         try:
-            with open(app_path("product_woo_map.json"), "r", encoding="utf-8") as f:
+            with open(site_scoped_path("product_woo_map.json"), "r", encoding="utf-8") as f:
                 existing = json.load(f) or {}
             with open(_platform_marker_path(), "r", encoding="utf-8") as f:
                 marker_platform = (f.read() or "").strip()
@@ -104,7 +104,7 @@ def save_product_woo_map(product_map: dict) -> None:
         except Exception:
             pass
 
-        with open(app_path("product_woo_map.json"), "w", encoding="utf-8") as f:
+        with open(site_scoped_path("product_woo_map.json"), "w", encoding="utf-8") as f:
             json.dump(clean, f, ensure_ascii=False, indent=2)
         with open(_platform_marker_path(), "w", encoding="utf-8") as f:
             f.write(_current_platform())
