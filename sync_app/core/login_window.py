@@ -10,7 +10,7 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QFrame,
 )
-from PyQt5.QtGui import QPixmap, QPainter, QFont, QColor, QLinearGradient, QIcon
+from PyQt5.QtGui import QPixmap, QPainter, QFont, QColor, QLinearGradient, QIcon, QPainterPath
 from sync_app.core.password_line_edit import PasswordLineEdit
 
 
@@ -86,7 +86,7 @@ class LoginWindow(QDialog):
 
         apply_brand_window_icon(self)
         self.setLayoutDirection(Qt.RightToLeft)
-        self.setFixedSize(460, 610)
+        self.setFixedSize(892, 600)
         # نوارِ عنوانِ نیتیوِ ویندوز همیشه چپ‌به‌راسته (کنترلِ برنامه روش
         # نیست) و با راست‌چینیِ داخلِ فرم هم‌خوانی نداشت — چون این کلاس از
         # قبل دکمه‌ی بستنِ اختصاصی (×) و درگ با ماوس (mousePressEvent/
@@ -109,24 +109,26 @@ class LoginWindow(QDialog):
             QDialog {
                 background: #0f0a1e;
             }
-            QFrame#card {
+            QFrame#formPanel {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                     stop:0 #1e1b4b, stop:0.5 #1a1035, stop:1 #0f0a1e);
                 border: 1.5px solid rgba(99, 102, 241, 0.6);
-                border-radius: 24px;
+                border-left: none;
+                border-top-right-radius: 26px;
+                border-bottom-right-radius: 26px;
             }
             QLabel {
                 background: transparent;
                 color: #d1d5db;
             }
-            QLabel#title {
+            QLabel#welcomeTitle {
                 color: #ffffff;
-                font-size: 20px;
+                font-size: 22px;
                 font-weight: 800;
             }
-            QLabel#subtitle {
-                color: #818cf8;
-                font-size: 11px;
+            QLabel#welcomeSubtitle {
+                color: #a5b4fc;
+                font-size: 11.5px;
                 font-weight: 500;
             }
             QLabel#fieldLabel {
@@ -199,16 +201,28 @@ class LoginWindow(QDialog):
             }
         """)
 
-        root = QVBoxLayout(self)
-        root.setContentsMargins(15, 15, 15, 15)
-        root.setSpacing(0)
-        root.setAlignment(Qt.AlignCenter)
+        PANEL_H = 568
+        PHOTO_W = 336
+        FORM_W = 524
 
-        card = QFrame()
-        card.setObjectName("card")
-        card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(32, 12, 32, 20)
+        root = QHBoxLayout(self)
+        root.setContentsMargins(16, 16, 16, 16)
+        root.setSpacing(0)
+
+        # پنلِ فرم و پنلِ عکس با هم یک کارتِ یکپارچه می‌سازن؛ چون Qt.RightToLeft
+        # هست، اولین آیتمِ افزوده‌شده به QHBoxLayout راست‌ترین می‌شه — پس فرم
+        # (که باید سمتِ راست باشه) اول اضافه می‌شه و پنلِ عکس (سمتِ چپ) دوم.
+        form_panel = QFrame()
+        form_panel.setObjectName("formPanel")
+        form_panel.setFixedSize(FORM_W, PANEL_H)
+        card_layout = QVBoxLayout(form_panel)
+        card_layout.setContentsMargins(30, 12, 30, 20)
         card_layout.setSpacing(0)
+
+        self.photo_label = QLabel()
+        self.photo_label.setFixedSize(PHOTO_W, PANEL_H)
+        self.photo_label.setStyleSheet("background: transparent;")
+        self.photo_label.setPixmap(self._build_photo_panel_pixmap(PHOTO_W, PANEL_H))
 
         # ردیف بالا: دکمه بستن
         top_row = QHBoxLayout()
@@ -221,52 +235,24 @@ class LoginWindow(QDialog):
         self.close_btn.clicked.connect(self.reject)
         top_row.addWidget(self.close_btn)
         card_layout.addLayout(top_row)
+        card_layout.addSpacing(10)
+
+        # سرتیترِ خوش‌آمدگویی — هویتِ برند («پیچا» + تگلاین) حالا رویِ پنلِ
+        # عکس نقاشی می‌شه (_build_photo_panel_pixmap)، پس اینجا فقط یک
+        # سلامِ ساده کافیه.
+        welcome_title = QLabel("خوش آمدید")
+        welcome_title.setObjectName("welcomeTitle")
+        welcome_title.setAlignment(Qt.AlignRight)
+        card_layout.addWidget(welcome_title)
         card_layout.addSpacing(4)
 
-        # بلوکِ برند: لوگو و «پیچا» کنارِ هم، هم‌راستا با هدرِ برنامه‌ی اصلی
-        # (که همیشه لوگو+عنوان رو تو یه ردیفِ افقی نشون می‌ده) — قبلاً این‌جا
-        # لوگو و متن جدا-جدا و وسط‌چین روی هم چیده می‌شدن که با ظاهرِ بقیه‌ی
-        # برنامه هم‌خوانی نداشت.
-        brand_row = QHBoxLayout()
-        brand_row.setContentsMargins(0, 0, 0, 0)
-        brand_row.setSpacing(12)
-        brand_row.setAlignment(Qt.AlignCenter)
-
-        logo_container = QLabel()
-        logo_container.setAlignment(Qt.AlignCenter)
-        logo_container.setFixedSize(56, 56)
-        logo_container.setContentsMargins(0, 0, 0, 0)
-        logo_container.setStyleSheet("background: transparent;")
-        from sync_app.core.brand_assets import brand_logo_pixmap
-
-        pixmap = brand_logo_pixmap(56, light_background=True)
-        if not pixmap.isNull():
-            logo_container.setPixmap(pixmap)
-        else:
-            logo_container.setPixmap(self._generate_gradient_logo())
-        brand_row.addWidget(logo_container, 0, Qt.AlignVCenter)
-
-        brand_text_col = QVBoxLayout()
-        brand_text_col.setContentsMargins(0, 0, 0, 0)
-        brand_text_col.setSpacing(2)
-
-        # عنوان
-        title = QLabel("\u067e\u06cc\u0686\u0627")
-        title.setObjectName("title")
-        title.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        title.setStyleSheet("background: transparent; margin: 0; padding: 0;")
-        brand_text_col.addWidget(title)
-
-        # زیرعنوان
-        subtitle = QLabel("\u0647\u0645\u06af\u0627\u0645\u200c\u0633\u0627\u0632\u06cc \u0647\u0648\u0634\u0645\u0646\u062f \u0641\u0631\u0648\u0634\u06af\u0627\u0647")
-        subtitle.setObjectName("subtitle")
-        subtitle.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        subtitle.setStyleSheet("background: transparent; margin: 0; padding: 0;")
-        brand_text_col.addWidget(subtitle)
-
-        brand_row.addLayout(brand_text_col)
-        card_layout.addLayout(brand_row)
-        card_layout.addSpacing(16)
+        welcome_subtitle = QLabel(
+            "برای ادامه، وارد حساب کاربری خود شوید"
+        )
+        welcome_subtitle.setObjectName("welcomeSubtitle")
+        welcome_subtitle.setAlignment(Qt.AlignRight)
+        card_layout.addWidget(welcome_subtitle)
+        card_layout.addSpacing(18)
 
         # خط جداکننده
         divider = QFrame()
@@ -357,31 +343,97 @@ class LoginWindow(QDialog):
         self.refresh_btn.clicked.connect(self.refresh_connectivity_status)
         card_layout.addWidget(self.refresh_btn)
 
-        root.addWidget(card)
+        root.addWidget(form_panel, 0, Qt.AlignVCenter)
+        root.addWidget(self.photo_label, 0, Qt.AlignVCenter)
 
-    def _generate_gradient_logo(self):
-        """تولید لوگو رنگی gradient"""
-        size = 80
-        pixmap = QPixmap(size, size)
-        pixmap.fill(Qt.transparent)
+    def _build_photo_panel_pixmap(self, width: int, height: int, radius: int = 26) -> QPixmap:
+        """پنلِ عکسِ سمتِ چپِ صفحه‌ی ورود: عکسِ واقعیِ گربه‌ی «پیچا»
+        (sync_app/core/Peecha.png) با برشِ کاور روی کلِ ارتفاعِ پنل، یا در
+        نبودِ فایل، یک گرادیانِ بنفش/نیلیِ هم‌رنگ با تمِ برنامه. رویِ هر دو
+        حالت، یک سایه‌ی تیره از پایین (برای خواناییِ متن) و بعد عنوانِ برند
+        نقاشی می‌شه. فقط دو گوشه‌ی بیرونی (بالا/پایینِ چپ) گرد می‌شن؛
+        گوشه‌های سمتِ راست (چسبیده به پنلِ فرم) گوشه‌دار می‌مونن تا با
+        border-radius سمتِ راستِ QFrame#formPanel یک کارتِ یکپارچه بسازن."""
+        path = _login_resource_path("Peecha.png")
+        base = QPixmap()
+        if path and os.path.isfile(path):
+            src = QPixmap(path)
+            if not src.isNull():
+                src = src.scaled(width, height, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+                x = max(0, (src.width() - width) // 2)
+                y = max(0, (src.height() - height) // 2)
+                base = src.copy(x, y, width, height)
 
-        painter = QPainter(pixmap)
+        if base.isNull():
+            base = QPixmap(width, height)
+            gradient = QLinearGradient(0, 0, width, height)
+            gradient.setColorAt(0, QColor(67, 56, 202))
+            gradient.setColorAt(1, QColor(124, 58, 237))
+            grad_painter = QPainter(base)
+            grad_painter.setRenderHint(QPainter.Antialiasing)
+            grad_painter.fillRect(base.rect(), gradient)
+            grad_painter.end()
+
+        result = QPixmap(width, height)
+        result.fill(Qt.transparent)
+        painter = QPainter(result)
         painter.setRenderHint(QPainter.Antialiasing)
 
-        gradient = QLinearGradient(0, 0, size, size)
-        gradient.setColorAt(0, QColor(79, 70, 229))     # Indigo
-        gradient.setColorAt(1, QColor(139, 92, 246))    # Purple
+        clip_path = QPainterPath()
+        clip_path.moveTo(width, 0)
+        clip_path.lineTo(radius, 0)
+        clip_path.arcTo(0, 0, radius * 2, radius * 2, 90, 90)
+        clip_path.lineTo(0, height - radius)
+        clip_path.arcTo(0, height - radius * 2, radius * 2, radius * 2, 180, 90)
+        clip_path.lineTo(width, height)
+        clip_path.closeSubpath()
 
-        painter.setBrush(gradient)
-        painter.setPen(Qt.NoPen)
-        painter.drawEllipse(0, 0, size, size)
+        painter.setClipPath(clip_path)
+        painter.drawPixmap(0, 0, base)
 
-        painter.setPen(Qt.white)
-        painter.setFont(QFont("Arial", 32, QFont.Bold))
-        painter.drawText(pixmap.rect(), Qt.AlignCenter, "P")
+        # سایه‌ی تیره از پایین برای خواناییِ متنِ سفیدِ رویِ عکس
+        shade = QLinearGradient(0, 0, 0, height)
+        shade.setColorAt(0.0, QColor(15, 10, 30, 30))
+        shade.setColorAt(0.55, QColor(15, 10, 30, 70))
+        shade.setColorAt(1.0, QColor(8, 5, 18, 215))
+        painter.fillPath(clip_path, shade)
+        painter.setClipping(False)
+
+        painter.setClipPath(clip_path)
+        pen = painter.pen()
+        pen.setColor(QColor(129, 140, 248, 140))
+        pen.setWidthF(1.5)
+        painter.setPen(pen)
+        painter.drawPath(clip_path)
+
+        # متنِ برند رویِ عکس (راست‌چین، چون فقط این‌طوری با متنِ فارسی
+        # هم‌خوان می‌مونه — Qt خودش شکل‌دهی/ترتیبِ راست‌به‌چپِ حروف رو انجام
+        # می‌ده، این پرچم فقط جایگیریِ کلِ خط رو تویِ مستطیل تعیین می‌کنه)
+        painter.setFont(QFont("IranSans", 26, QFont.Bold))
+        painter.setPen(QColor(255, 255, 255))
+        title_rect = result.rect().adjusted(24, 0, -24, -96)
+        painter.drawText(title_rect, Qt.AlignRight | Qt.AlignBottom, "\u067e\u06cc\u0686\u0627")
+
+        painter.setFont(QFont("IranSans", 11, QFont.DemiBold))
+        painter.setPen(QColor(199, 210, 254))
+        tagline_rect = result.rect().adjusted(24, 0, -24, -60)
+        painter.drawText(
+            tagline_rect,
+            Qt.AlignRight | Qt.AlignBottom,
+            "\u0647\u0645\u06af\u0627\u0645\u200c\u0633\u0627\u0632\u06cc \u0647\u0648\u0634\u0645\u0646\u062f \u0641\u0631\u0648\u0634\u06af\u0627\u0647",
+        )
+
+        painter.setFont(QFont("IranSans", 9))
+        painter.setPen(QColor(148, 163, 253, 210))
+        small_rect = result.rect().adjusted(24, 0, -24, -34)
+        painter.drawText(
+            small_rect,
+            Qt.AlignRight | Qt.AlignBottom,
+            "\u062f\u0698\u0627\u0648\u0648 / \u0647\u0644\u0648 / \u0633\u067e\u06cc\u062f\u0627\u0631 \u2194 \u0648\u0648\u06a9\u0627\u0645\u0631\u0633 / \u067e\u0631\u0633\u062a\u0627\u0634\u0627\u067e",
+        )
 
         painter.end()
-        return pixmap
+        return result
 
     def _erp_label(self, config=None) -> str:
         try:
