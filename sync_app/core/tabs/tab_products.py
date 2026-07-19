@@ -21,7 +21,7 @@ from sync_app.core.jalali_log_formatter import format_log_lines_jalali
 
 # 📌 مسیر پکیجی درست برای بارگذاری تنظیمات
 from sync_app.core.secure_config_loader import load_secure_config, save_secure_config
-from sync_app.core.sync_utils import app_path, clear_filtered_logs, log
+from sync_app.core.sync_utils import app_path, site_scoped_path, clear_filtered_logs, log
 from sync_app.core.article_price import resolve_article_price
 from sync_app.core.sql_connection_helper import open_sql_connection, format_db_error
 from sync_app.core.threading_helper import run_in_thread
@@ -969,7 +969,7 @@ class ProductTab(QWidget):
         save_secure_config(cfg)
 
     def _images_manifest_path(self):
-        return app_path("product_images_map.json")
+        return site_scoped_path("product_images_map.json")
 
     def _load_uploaded_images_map(self):
         path = self._images_manifest_path()
@@ -982,6 +982,14 @@ class ProductTab(QWidget):
         except Exception:
             pass
         return {}
+
+    def reload_site_scoped_caches(self):
+        """بعد از سوئیچِ سایت/پریست (بدونِ بستنِ تب) صدا زده می‌شه — چون
+        self._uploaded_images_map یک‌بار موقعِ ساختِ تب لود شده و اگه اینجا
+        دوباره از دیسک لود نشه، همچنان دیتایِ سایتِ قبلی رو تویِ حافظه
+        نگه می‌داره، حتی با اینکه مسیرِ فایل حالا به‌درستی برایِ سایتِ
+        جدید scoped شده."""
+        self._uploaded_images_map = self._load_uploaded_images_map()
 
     def _save_uploaded_images_map(self):
         path = self._images_manifest_path()

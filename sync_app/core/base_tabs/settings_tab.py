@@ -737,6 +737,18 @@ class SettingsTab(QWidget):
             self._dev_locked = False
             self._apply_dev_lock_ui()
 
+    def _on_change_dev_password_clicked(self):
+        from sync_app.core.dev_lock import prompt_change_password
+
+        prompt_change_password(self)
+
+    def _on_emergency_reset_dev_password(self):
+        from sync_app.core.dev_lock import prompt_emergency_reset
+
+        if prompt_emergency_reset(self):
+            self._dev_locked = True
+            self._apply_dev_lock_ui()
+
     def _refresh_backup_list(self):
         from sync_app.core.secure_config_loader import list_config_backups, _candidate_pairs
 
@@ -1945,6 +1957,17 @@ class SettingsTab(QWidget):
         self._unlock_btn.clicked.connect(self._toggle_dev_lock)
         save_bar_layout.addWidget(self._unlock_btn)
 
+        self._change_dev_password_btn = QPushButton("🔑 تغییرِ رمزِ دوم")
+        self._change_dev_password_btn.setObjectName("devChangePasswordBtn")
+        self._change_dev_password_btn.setMinimumHeight(44)
+        self._change_dev_password_btn.setStyleSheet("font-size:12px; font-weight:700; padding:10px 20px;")
+        self._change_dev_password_btn.setToolTip(
+            "تغییرِ رمزِ دومِ ویرایشِ تنظیماتِ حساس.\n"
+            "رمز را فراموش کرده‌اید؟ کلیدِ ترکیبیِ Ctrl+Shift+Alt+R را بزنید تا بازنشانی شود."
+        )
+        self._change_dev_password_btn.clicked.connect(self._on_change_dev_password_clicked)
+        save_bar_layout.addWidget(self._change_dev_password_btn)
+
         self._save_btn = QPushButton("💾  ذخیره تنظیمات")
         self._save_btn.setMinimumHeight(44)
         self._save_btn.setMinimumWidth(170)
@@ -1961,6 +1984,11 @@ class SettingsTab(QWidget):
         from PyQt5.QtGui import QKeySequence
         self._dev_unlock_shortcut = QShortcut(QKeySequence("Ctrl+Shift+P"), self)
         self._dev_unlock_shortcut.activated.connect(self._toggle_dev_lock)
+
+        # کلیدِ ترکیبیِ بازنشانیِ اضطراریِ رمزِ دوم — برایِ وقتی که رمز
+        # فراموش شده و راهِ دیگه‌ای برایِ ویرایش نمونده.
+        self._dev_reset_shortcut = QShortcut(QKeySequence("Ctrl+Shift+Alt+R"), self)
+        self._dev_reset_shortcut.activated.connect(self._on_emergency_reset_dev_password)
 
         # ── اتصال سیگنال‌های تغییر برای تشخیص تغییرات ذخیره‌نشده ──────
         self._tracked_widgets = [

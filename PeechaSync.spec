@@ -28,6 +28,7 @@ a = Analysis(
         ('sync_app/core/style.qss', '.'),
         ('sync_app/core/IRANSans.ttf', '.'),
         ('sync_app/core/license.json.example', '.'),
+        ('sync_app/core/Peecha.gif', '.'),
     ] + _image_datas,
     hiddenimports=[
         # تب‌ها

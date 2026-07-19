@@ -21,7 +21,7 @@ from sync_app.core.jalali_log_formatter import format_log_lines_jalali
 from sync_app.core.secure_config_loader import load_secure_config, save_secure_config
 from sync_app.core.event_notifier import append_system_log
 from sync_app.core.sql_connection_helper import connect_with_fallback, repair_sql_config_if_needed, format_db_error, open_sql_connection
-from sync_app.core.sync_utils import log, app_path, clear_filtered_logs
+from sync_app.core.sync_utils import log, app_path, site_scoped_path, clear_filtered_logs
 import pyodbc
 
 # ماژول sync دسته‌ها
@@ -1341,7 +1341,7 @@ class CategoryTab(QWidget):
     def _apply_icons_from_category_map(self):
         """بعد sync از category_map بخون."""
         try:
-            map_path = app_path("category_map.json")
+            map_path = site_scoped_path("category_map.json")
             with open(map_path, "r", encoding="utf-8") as f:
                 cat_map = json.load(f)
         except Exception:
@@ -1708,7 +1708,7 @@ class CategoryTab(QWidget):
             stats = result if isinstance(result, dict) else {}
             if not stats:
                 try:
-                    with open(app_path("category_map.json"), "r", encoding="utf-8") as f:
+                    with open(site_scoped_path("category_map.json"), "r", encoding="utf-8") as f:
                         local_map = json.load(f)
                     if isinstance(local_map, dict) and local_map:
                         stats = {
@@ -2093,7 +2093,7 @@ class CategoryTab(QWidget):
         return ready, skipped_no_image, stale_removed
 
     def _category_images_map_path(self):
-        return app_path("category_images_map.json")
+        return site_scoped_path("category_images_map.json")
 
     def _load_category_images_map(self):
         path = self._category_images_map_path()
@@ -2106,6 +2106,14 @@ class CategoryTab(QWidget):
         except Exception:
             pass
         return {}
+
+    def reload_site_scoped_caches(self):
+        """بعد از سوئیچِ سایت/پریست (بدونِ بستنِ تب) صدا زده می‌شه — چون
+        self._category_images_map یک‌بار موقعِ ساختِ تب لود شده و اگه اینجا
+        دوباره از دیسک لود نشه، همچنان دیتایِ سایتِ قبلی رو تویِ حافظه
+        نگه می‌داره، حتی با اینکه مسیرِ فایل حالا به‌درستی برایِ سایتِ
+        جدید scoped شده."""
+        self._category_images_map = self._load_category_images_map()
 
     def _save_category_images_map(self):
         path = self._category_images_map_path()

@@ -9,8 +9,9 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QMessageBox,
     QFrame,
+    QWidget,
 )
-from PyQt5.QtGui import QPixmap, QPainter, QFont, QColor, QLinearGradient, QIcon, QPainterPath
+from PyQt5.QtGui import QPixmap, QPainter, QFont, QColor, QLinearGradient, QIcon, QPainterPath, QRegion
 from sync_app.core.password_line_edit import PasswordLineEdit
 
 
@@ -219,10 +220,16 @@ class LoginWindow(QDialog):
         card_layout.setContentsMargins(30, 12, 30, 20)
         card_layout.setSpacing(0)
 
-        self.photo_label = QLabel()
-        self.photo_label.setFixedSize(PHOTO_W, PANEL_H)
-        self.photo_label.setStyleSheet("background: transparent;")
-        self.photo_label.setPixmap(self._build_photo_panel_pixmap(PHOTO_W, PANEL_H))
+        # اولویت با ویدئوی واقعیِ پیچا (Peecha.mp4) — اگه نبود، به عکسِ ثابت
+        # (Peecha.png) یا گرادیانِ رزرو برمی‌گرده.
+        video_panel = self._build_video_panel(PHOTO_W, PANEL_H)
+        if video_panel is not None:
+            self.photo_panel = video_panel
+        else:
+            self.photo_panel = QLabel()
+            self.photo_panel.setFixedSize(PHOTO_W, PANEL_H)
+            self.photo_panel.setStyleSheet("background: transparent;")
+            self.photo_panel.setPixmap(self._build_photo_panel_pixmap(PHOTO_W, PANEL_H))
 
         # ردیف بالا: دکمه بستن
         top_row = QHBoxLayout()
@@ -242,7 +249,7 @@ class LoginWindow(QDialog):
         # سلامِ ساده کافیه.
         welcome_title = QLabel("خوش آمدید")
         welcome_title.setObjectName("welcomeTitle")
-        welcome_title.setAlignment(Qt.AlignRight)
+        welcome_title.setAlignment(Qt.AlignRight | Qt.AlignAbsolute)
         card_layout.addWidget(welcome_title)
         card_layout.addSpacing(4)
 
@@ -250,7 +257,7 @@ class LoginWindow(QDialog):
             "برای ادامه، وارد حساب کاربری خود شوید"
         )
         welcome_subtitle.setObjectName("welcomeSubtitle")
-        welcome_subtitle.setAlignment(Qt.AlignRight)
+        welcome_subtitle.setAlignment(Qt.AlignRight | Qt.AlignAbsolute)
         card_layout.addWidget(welcome_subtitle)
         card_layout.addSpacing(18)
 
@@ -264,7 +271,7 @@ class LoginWindow(QDialog):
         # نام کاربری
         lbl_user = QLabel("\u0646\u0627\u0645 \u06a9\u0627\u0631\u0628\u0631\u06cc")
         lbl_user.setObjectName("fieldLabel")
-        lbl_user.setAlignment(Qt.AlignRight)
+        lbl_user.setAlignment(Qt.AlignRight | Qt.AlignAbsolute)
         lbl_user.setStyleSheet("background: transparent; margin: 0; padding: 0;")
         card_layout.addWidget(lbl_user)
         card_layout.addSpacing(5)
@@ -287,7 +294,7 @@ class LoginWindow(QDialog):
         # رمز عبور
         lbl_pass = QLabel("\u0631\u0645\u0632 \u0639\u0628\u0648\u0631")
         lbl_pass.setObjectName("fieldLabel")
-        lbl_pass.setAlignment(Qt.AlignRight)
+        lbl_pass.setAlignment(Qt.AlignRight | Qt.AlignAbsolute)
         lbl_pass.setStyleSheet("background: transparent; margin: 0; padding: 0;")
         card_layout.addWidget(lbl_pass)
         card_layout.addSpacing(5)
@@ -344,16 +351,102 @@ class LoginWindow(QDialog):
         card_layout.addWidget(self.refresh_btn)
 
         root.addWidget(form_panel, 0, Qt.AlignVCenter)
-        root.addWidget(self.photo_label, 0, Qt.AlignVCenter)
+        root.addWidget(self.photo_panel, 0, Qt.AlignVCenter)
 
-    def _build_photo_panel_pixmap(self, width: int, height: int, radius: int = 26) -> QPixmap:
-        """پنلِ عکسِ سمتِ چپِ صفحه‌ی ورود: عکسِ واقعیِ گربه‌ی «پیچا»
-        (sync_app/core/Peecha.png) با برشِ کاور روی کلِ ارتفاعِ پنل، یا در
-        نبودِ فایل، یک گرادیانِ بنفش/نیلیِ هم‌رنگ با تمِ برنامه. رویِ هر دو
-        حالت، یک سایه‌ی تیره از پایین (برای خواناییِ متن) و بعد عنوانِ برند
-        نقاشی می‌شه. فقط دو گوشه‌ی بیرونی (بالا/پایینِ چپ) گرد می‌شن؛
-        گوشه‌های سمتِ راست (چسبیده به پنلِ فرم) گوشه‌دار می‌مونن تا با
-        border-radius سمتِ راستِ QFrame#formPanel یک کارتِ یکپارچه بسازن."""
+    def _build_video_panel(self, width: int, height: int, radius: int = 26):
+        """اگه sync_app/core/Peecha.gif موجود باشه، یه پنلِ متحرکِ زنده
+        (لوپ‌شده) به‌جایِ عکسِ ثابت می‌سازه — با همون گردیِ دو گوشه‌ی بیرونی و
+        متنِ برندِ رویِ یه سایه‌ی تیره، بالایِ پنل.
+
+        چرا GIF به‌جایِ فایلِ ویدئوییِ mp4: پخشِ mp4 از طریقِ
+        QtMultimedia/QMediaPlayer به پلاگین‌های کدکِ سیستم‌عامل (GStreamer
+        روی لینوکس، WMF روی ویندوز) وابسته‌ست که ممکنه رویِ سیستمِ کاربر
+        نصب/کامل نباشه (دقیقاً همین اتفاق افتاد: هم تویِ محیطِ توسعه، هم رویِ
+        ویندوزِ کاربر، فریمِ ویدئو هیچ‌وقت نرسید). QMovie/GIF برعکس، بخشی از
+        خودِ Qt (بدونِ نیازِ به پلاگینِ جداگانه) هست و همیشه کار می‌کنه. اگه
+        فایل نباشه، None برمی‌گرده تا فراخوان به‌جاش عکسِ ثابت رو نشون بده."""
+        path = _login_resource_path("Peecha.gif")
+        if not path or not os.path.isfile(path):
+            return None
+
+        from PyQt5.QtGui import QMovie
+
+        movie = QMovie(path)
+        if not movie.isValid():
+            return None
+
+        container = QWidget()
+        container.setFixedSize(width, height)
+        container.setStyleSheet("background: transparent;")
+
+        # لایه‌ی زمینه (عکسِ ثابت/گرادیان): اگه به هر دلیلی GIF لود نشه، این
+        # پشتِ صحنه دیده می‌شه، نه یه مستطیلِ خالی.
+        background = QLabel(container)
+        background.setFixedSize(width, height)
+        background.setStyleSheet("background: transparent;")
+        background.setPixmap(self._build_panel_base_pixmap(width, height, radius))
+        background.move(0, 0)
+
+        movie_label = QLabel(container)
+        movie_label.setFixedSize(width, height)
+        movie_label.setStyleSheet("background: transparent;")
+        movie_label.move(0, 0)
+
+        clip_path = QPainterPath()
+        clip_path.moveTo(width, 0)
+        clip_path.lineTo(radius, 0)
+        clip_path.arcTo(0, 0, radius * 2, radius * 2, 90, 90)
+        clip_path.lineTo(0, height - radius)
+        clip_path.arcTo(0, height - radius * 2, radius * 2, radius * 2, 180, 90)
+        clip_path.lineTo(width, height)
+        clip_path.closeSubpath()
+        movie_label.setMask(QRegion(clip_path.toFillPolygon().toPolygon()))
+
+        movie.setCacheMode(QMovie.CacheAll)
+        # GIF خودش loop=0 (بی‌نهایت) رو تویِ فایل داره، پس نیازی به مدیریتِ
+        # دستیِ لوپ (برخلافِ QMediaPlayer) نیست.
+        movie_label.setMovie(movie)
+        movie.start()
+
+        # ارجاع نگه داشته می‌شه تا garbage-collect نشه
+        self._gif_movie = movie
+
+        # سایه‌ی تیره از پایین برای خواناییِ متنِ سفید
+        scrim_h = 130
+        scrim = QWidget(container)
+        scrim.setGeometry(0, height - scrim_h, width, scrim_h)
+        scrim.setStyleSheet(
+            "background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
+            " stop:0 rgba(8, 5, 18, 0), stop:1 rgba(8, 5, 18, 0.85));"
+        )
+
+        def _brand_label(text, bottom_margin, h, font_size, bold, color):
+            lbl = QLabel(text, container)
+            # AlignAbsolute لازمه: بدونش، Qt.AlignRight برایِ متنِ فارسی
+            # (که خودش راست‌به‌چپه) به‌عنوانِ «trailing» تفسیر می‌شه و
+            # چپ‌چین می‌شه — صرف‌نظر از جهتِ خودِ ویجت.
+            lbl.setAlignment(Qt.AlignRight | Qt.AlignAbsolute | Qt.AlignBottom)
+            weight = 800 if bold else 600
+            lbl.setStyleSheet(
+                f"background: transparent; color: {color}; font-size: {font_size}px; font-weight: {weight};"
+            )
+            lbl.setGeometry(24, height - bottom_margin - h, width - 48, h)
+            return lbl
+
+        _brand_label("پیچا", 96, 40, 26, True, "#ffffff")
+        _brand_label("همگام‌سازی هوشمند فروشگاه", 60, 24, 11, False, "#c7d2fe")
+        _brand_label("دژاوو / هلو / سپیدار ↔ ووکامرس / پرستاشاپ", 34, 18, 9, False, "#94a3fd")
+
+        return container
+
+    def _build_panel_base_pixmap(self, width: int, height: int, radius: int = 26) -> QPixmap:
+        """پایه‌ی مشترکِ پنلِ سمتِ چپ (بدونِ متن): عکسِ واقعیِ «پیچا»
+        (sync_app/core/Peecha.png) با برشِ کاور، یا در نبودِ فایل، یه
+        گرادیانِ بنفش/نیلیِ هم‌رنگ با تمِ برنامه — با سایه‌ی تیره از پایین و
+        گردیِ دو گوشه‌ی بیرونی (بالا/پایینِ چپ). هم به‌عنوانِ خروجیِ نهاییِ
+        حالتِ بدونِ ویدئو استفاده می‌شه (با متنِ نقاشی‌شده روش)، هم به‌عنوانِ
+        لایه‌ی زمینه‌ی پنلِ ویدئویی (اگه فریمِ ویدئو به هر دلیلی نرسه، این
+        لایه به‌جاش دیده می‌شه، نه یه مستطیلِ خالی)."""
         path = _login_resource_path("Peecha.png")
         base = QPixmap()
         if path and os.path.isfile(path):
@@ -405,6 +498,15 @@ class LoginWindow(QDialog):
         pen.setWidthF(1.5)
         painter.setPen(pen)
         painter.drawPath(clip_path)
+        painter.end()
+        return result
+
+    def _build_photo_panel_pixmap(self, width: int, height: int, radius: int = 26) -> QPixmap:
+        """همون پایه‌ی مشترکِ _build_panel_base_pixmap، به‌علاوه‌ی عنوانِ
+        برندِ نقاشی‌شده رویِ خودِ عکس (برایِ حالتی که ویدئو موجود نیست)."""
+        result = self._build_panel_base_pixmap(width, height, radius)
+        painter = QPainter(result)
+        painter.setRenderHint(QPainter.Antialiasing)
 
         # متنِ برند رویِ عکس (راست‌چین، چون فقط این‌طوری با متنِ فارسی
         # هم‌خوان می‌مونه — Qt خودش شکل‌دهی/ترتیبِ راست‌به‌چپِ حروف رو انجام

@@ -7,12 +7,11 @@ import re
 from urllib.parse import unquote
 
 try:
-    from sync_app.core.sync_utils import app_path
+    from sync_app.core.sync_utils import site_scoped_path
 except ImportError:
     import os
-    import sys
 
-    def app_path(name):
+    def site_scoped_path(name):
         return os.path.join(os.getcwd(), name)
 
 
@@ -39,7 +38,7 @@ def extract_code_from_wc_slug(slug: str) -> str | None:
 
 
 def load_category_map() -> dict:
-    path = app_path("category_map.json")
+    path = site_scoped_path("category_map.json")
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -55,7 +54,7 @@ def save_category_map(category_map: dict) -> None:
         from sync_app.core.sync_utils import log
 
         clean = {str(k).strip(): int(v) for k, v in (category_map or {}).items() if v}
-        with open(app_path("category_map.json"), "w", encoding="utf-8") as f:
+        with open(site_scoped_path("category_map.json"), "w", encoding="utf-8") as f:
             json.dump(clean, f, ensure_ascii=False, indent=2)
     except Exception as exc:
         try:

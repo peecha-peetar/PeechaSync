@@ -1268,8 +1268,29 @@ class ReconciliationTab(QWidget):
             conn, _, _ = open_sql_connection(config, timeout=5)
             try:
                 cursor = conn.cursor()
-                cursor.execute("SELECT S_Groupcode, S_GroupName FROM S_Group ORDER BY S_Groupcode")
-                return [(str(r[0]).strip(), str(r[1]).strip()) for r in cursor.fetchall()]
+                cursor.execute("SELECT M_Groupcode, M_GroupName FROM M_Group ORDER BY M_Groupcode")
+                main_groups = [(str(r[0]).strip(), str(r[1]).strip()) for r in cursor.fetchall()]
+                cursor.execute(
+                    "SELECT M_Groupcode, S_Groupcode, S_GroupName FROM S_Group ORDER BY M_Groupcode, S_Groupcode"
+                )
+                # کدِ واقعیِ زیرگروه که با پیشوندِ SKU مطابقت داره، ترکیبِ
+                # M_Groupcode+S_Groupcode است (چهاررقمی) — نه فقط S_Groupcode
+                # (که چون بینِ گروه‌های اصلیِ مختلف تکرار می‌شه، بدونِ پیشوند
+                # هم با محصولاتِ گروهِ اشتباه match می‌کرد و هم محصولاتِ گروهِ
+                # درست رو حذف می‌کرد). همون قراردادی که _fetch_erp_categories
+                # تویِ reconciliation_service.py استفاده می‌کنه.
+                sub_by_main: dict[str, list[tuple[str, str]]] = {}
+                for m_code, s_code, s_name in cursor.fetchall():
+                    m_code = str(m_code).strip()
+                    full_code = f"{m_code}{str(s_code).strip()}"
+                    sub_by_main.setdefault(m_code, []).append((full_code, str(s_name).strip()))
+
+                groups: list[tuple[str, str]] = []
+                for m_code, m_name in main_groups:
+                    groups.append((m_code, m_name))
+                    for full_code, s_name in sub_by_main.get(m_code, []):
+                        groups.append((full_code, f"{m_name} › {s_name}"))
+                return groups
             finally:
                 conn.close()
 

@@ -24,7 +24,7 @@ from sync_app.core.jalali_log_formatter import format_log_lines_jalali
 
 # اصلاح مسیر ایمپورت برای جلوگیری از خطای ModuleNotFoundError
 from sync_app.core.secure_config_loader import load_secure_config
-from sync_app.core.sync_utils import app_path, clear_filtered_logs, log
+from sync_app.core.sync_utils import app_path, site_scoped_path, clear_filtered_logs, log
 from sync_app.core.sync_job_runner import run_background_sync, cancel_background_sync
 from sync_app.core.connectivity_guard import ensure_connectivity
 from sync_app.core.connectivity_wait import wait_for_connectivity_blocking, is_transient_connectivity_issue
@@ -1137,7 +1137,7 @@ class VariationsTab(QWidget):
         QMessageBox.information(self, "انجام شد", f"{removed} خط لاگ مربوط به تب متغیرها پاک شد.")
 
     def _variation_images_manifest(self):
-        return app_path("variation_images_map.json")
+        return site_scoped_path("variation_images_map.json")
 
     def _load_variation_images_map(self):
         path = self._variation_images_manifest()
@@ -1150,6 +1150,14 @@ class VariationsTab(QWidget):
         except Exception:
             pass
         return {}
+
+    def reload_site_scoped_caches(self):
+        """بعد از سوئیچِ سایت/پریست (بدونِ بستنِ تب) صدا زده می‌شه — چون
+        self._variation_images_map یک‌بار موقعِ ساختِ تب لود شده و اگه اینجا
+        دوباره از دیسک لود نشه، همچنان دیتایِ سایتِ قبلی رو تویِ حافظه
+        نگه می‌داره، حتی با اینکه مسیرِ فایل حالا به‌درستی برایِ سایتِ
+        جدید scoped شده."""
+        self._variation_images_map = self._load_variation_images_map()
 
     def _save_variation_images_map(self):
         with open(self._variation_images_manifest(), "w", encoding="utf-8") as f:
