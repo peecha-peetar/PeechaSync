@@ -749,6 +749,49 @@ class SettingsTab(QWidget):
             self._dev_locked = True
             self._apply_dev_lock_ui()
 
+    def _refresh_mobile_photo_info(self):
+        from sync_app.core.mobile_photo_server import DEFAULT_PORT, get_or_create_token, local_lan_ip
+
+        cfg = load_secure_config(None) or {}
+        port = int(cfg.get("MOBILE_PHOTO_SERVER_PORT") or DEFAULT_PORT)
+        token = get_or_create_token(cfg)
+        ip = local_lan_ip()
+        self.mobile_photo_info_label.setText(
+            f"آدرس: http://{ip}:{port}   —   توکن: {token}\n"
+            "این دو مقدار را فقط یک‌بار داخل برنامه‌ی موبایل وارد کنید (وقتی گوشی و کامپیوتر "
+            "روی یک وای‌فای/شبکه‌ی محلی هستند)."
+        )
+
+    def _on_mobile_photo_toggle(self, checked):
+        cfg = load_secure_config(None) or {}
+        cfg["MOBILE_PHOTO_SERVER_ENABLED"] = bool(checked)
+        save_secure_config(cfg)
+        from sync_app.core.mobile_photo_server import start_server, stop_server
+
+        if checked:
+            ok, msg = start_server()
+            if not ok:
+                QMessageBox.warning(self, "خطا در راه‌اندازی", msg)
+                self.mobile_photo_enabled_checkbox.blockSignals(True)
+                self.mobile_photo_enabled_checkbox.setChecked(False)
+                self.mobile_photo_enabled_checkbox.blockSignals(False)
+                cfg["MOBILE_PHOTO_SERVER_ENABLED"] = False
+                save_secure_config(cfg)
+                return
+        else:
+            stop_server()
+        self._refresh_mobile_photo_info()
+
+    def _on_mobile_photo_regen_token(self):
+        from sync_app.core.mobile_photo_server import regenerate_token
+
+        regenerate_token()
+        self._refresh_mobile_photo_info()
+        QMessageBox.information(
+            self, "توکنِ جدید ساخته شد",
+            "توکنِ قبلی دیگر کار نمی‌کند — باید توکنِ جدید را دوباره داخلِ برنامه‌ی موبایل وارد کنید.",
+        )
+
     def _refresh_backup_list(self):
         from sync_app.core.secure_config_loader import list_config_backups, _candidate_pairs
 
@@ -1255,6 +1298,38 @@ class SettingsTab(QWidget):
         profile_row_layout.addWidget(self.profile_switch_button)
         profile_row_layout.addStretch()
         app_layout.addRow(QLabel("پروفایل فعال:"), profile_row)
+
+        # ── سرورِ محلیِ دریافتِ عکس از برنامه‌ی همراهِ موبایل ──
+        self.mobile_photo_enabled_checkbox = QCheckBox("فعال")
+        self.mobile_photo_enabled_checkbox.setLayoutDirection(Qt.RightToLeft)
+        self.mobile_photo_enabled_checkbox.setChecked(bool(self.config.get("MOBILE_PHOTO_SERVER_ENABLED", False)))
+        self.mobile_photo_enabled_checkbox.toggled.connect(self._on_mobile_photo_toggle)
+
+        self.mobile_photo_regen_btn = QPushButton("🔄 توکنِ جدید")
+        self.mobile_photo_regen_btn.setToolTip("رمزِ اشتراکیِ اتصالِ برنامه‌ی موبایل رو عوض می‌کنه")
+        self.mobile_photo_regen_btn.clicked.connect(self._on_mobile_photo_regen_token)
+
+        self.mobile_photo_info_label = QLabel("—")
+        self.mobile_photo_info_label.setWordWrap(True)
+        self.mobile_photo_info_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.mobile_photo_info_label.setStyleSheet("color:#4b5563; font-size:11px;")
+
+        mobile_photo_row = QWidget()
+        mobile_photo_layout = QVBoxLayout(mobile_photo_row)
+        mobile_photo_layout.setContentsMargins(0, 0, 0, 0)
+        mobile_photo_top_row = QHBoxLayout()
+        mobile_photo_top_row.addWidget(self.mobile_photo_enabled_checkbox)
+        mobile_photo_top_row.addWidget(self.mobile_photo_regen_btn)
+        mobile_photo_top_row.addStretch()
+        mobile_photo_layout.addLayout(mobile_photo_top_row)
+        mobile_photo_layout.addWidget(self.mobile_photo_info_label)
+        app_layout.addRow(QLabel("دریافتِ عکسِ موبایل:"), mobile_photo_row)
+        self._refresh_mobile_photo_info()
+        if self.mobile_photo_enabled_checkbox.isChecked():
+            from sync_app.core.mobile_photo_server import start_server
+
+            start_server()
+
         app_layout.addRow(QLabel("بروزرسانی:"), self.auto_update_enabled_checkbox)
         app_layout.addRow(QLabel("راهنما:"), self.provider_hint_label)
         self.update_provider_hint()

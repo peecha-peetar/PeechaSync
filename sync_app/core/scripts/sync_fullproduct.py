@@ -101,6 +101,11 @@ def _category_id_for_sku(sku, cat_map, slug_map=None):
 
 
 def _categories_for_sku(sku, cat_map, slug_map=None):
+    from sync_app.core.product_category_override import get_manual_category_ids
+
+    manual_ids = get_manual_category_ids(sku)
+    if manual_ids:
+        return [{"id": cid} for cid in manual_ids]
     return resolve_product_categories(sku, cat_map, slug_map or {})
 
 
@@ -606,7 +611,6 @@ def main():
     warm_store_connection(wcapi, raw_config)
 
     conn, _, _ = open_sql_connection(raw_config, timeout=10)
-    PRICE_COL = raw_config.get("PRICE_LIST_COLUMN", "Sel_Price")
     price_div = erp_price_divisor(raw_config)
     GROUPS = raw_config.get("SELECTED_SUB_GROUPS", [])
     DISABLED_PRODUCT_SKUS = set(raw_config.get("DISABLED_PRODUCT_SKUS", []))
@@ -773,12 +777,16 @@ def main():
     def _sync_one_row(row):
         nonlocal _processed_count
         sku = str(row[0]).strip()
+        matched_group = next((g for g in GROUPS if sku.startswith(g)), "")
 
         with progress_lock:
             _processed_count += 1
             current_num = _processed_count
 
-        raw_price = _resolve_article_price(row, PRICE_COL)
+        from sync_app.core.category_price_list import resolve_article_price_column
+
+        price_col = resolve_article_price_column(sku, matched_group, raw_config)
+        raw_price = _resolve_article_price(row, price_col)
         raw_price = apply_price_markup(raw_price, raw_config, is_sale=False)
         price = str(int(raw_price / price_div)) if raw_price > 0 else "0"
         raw_sale = resolve_sale_article_price(row, raw_config)
@@ -820,7 +828,6 @@ def main():
                 from sync_app.core.stock_mode import (
                     resolve_stock_mode, apply_stock_mode_to_payload, get_product_stock_mode_override,
                 )
-                matched_group = next((g for g in GROUPS if sku.startswith(g)), "")
                 stock_mode = resolve_stock_mode(sku, matched_group, raw_config)
                 override = get_product_stock_mode_override(raw_config, sku)
                 source = "override محصول" if override else f"دسته‌بندی «{matched_group}»"
@@ -833,7 +840,6 @@ def main():
             from sync_app.core.stock_mode import (
                 resolve_stock_mode, apply_stock_mode_to_payload, get_product_stock_mode_override,
             )
-            matched_group = next((g for g in GROUPS if sku.startswith(g)), "")
             stock_mode = resolve_stock_mode(sku, matched_group, raw_config)
             override = get_product_stock_mode_override(raw_config, sku)
             source = "override محصول" if override else f"دسته‌بندی «{matched_group}»"

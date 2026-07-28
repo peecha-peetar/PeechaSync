@@ -3019,6 +3019,13 @@ class PeechaLauncher(QWidget):
             except Exception:
                 continue
 
+        try:
+            from sync_app.core.mobile_photo_server import stop_server
+
+            stop_server()
+        except Exception:
+            pass
+
     def showEvent(self, event):
         super().showEvent(event)
         apply_brand_window_icon(self)
@@ -3501,6 +3508,14 @@ def main(existing_app=None):
         QTimer.singleShot(0, lambda: main_win.apply_theme(cfg_local.get("APP_THEME", "navy")))
         QTimer.singleShot(0, lambda: main_win.apply_font_size(cfg_local.get("APP_FONT_SIZE", 14)))
         QTimer.singleShot(3000, lambda: _schedule_profile_bootstrap(main_win))
+        # سرورِ محلیِ دریافتِ عکسِ موبایل — اگه تویِ تنظیمات فعال باشه، حتی
+        # بدونِ بازکردنِ تبِ تنظیمات هم باید همون اول بالا بیاد (وگرنه فقط
+        # وقتی کسی به تصادف تبِ تنظیمات رو باز می‌کرد شروع می‌شد).
+        if cfg_local.get("MOBILE_PHOTO_SERVER_ENABLED"):
+            def _start_mobile_photo_server():
+                from sync_app.core.mobile_photo_server import start_server
+                start_server()
+            QTimer.singleShot(1000, _start_mobile_photo_server)
 
     def show_login_window():
         global login_win
