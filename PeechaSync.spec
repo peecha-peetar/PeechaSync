@@ -47,6 +47,8 @@ a = Analysis(
         "sync_app.core.tabs.tab_seo_health",
         "sync_app.core.tabs.tab_sync_hub",
         "sync_app.core.tabs.tab_smart_assistant_hub",
+        "sync_app.core.tabs.tab_torob_compare",
+        "sync_app.core.torob_price_helper",
         "sync_app.core.adaptive_tab_bar",
         "sync_app.core.tabs.tab_marketing",
         "sync_app.core.tabs.tab_peecha_advisor",
