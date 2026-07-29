@@ -180,6 +180,34 @@ def ensure_tls_cert() -> tuple[str, str]:
     return certfile, keyfile
 
 
+def connection_url() -> str:
+    """آدرسی که برنامه‌ی همراهِ موبایل باید باز کنه — برایِ نمایشِ متنی و
+    ساختِ QR کد."""
+    from sync_app.core.secure_config_loader import load_secure_config
+
+    cfg = load_secure_config(None) or {}
+    port = int(cfg.get(MOBILE_PHOTO_SERVER_PORT_KEY) or DEFAULT_PORT)
+    scheme = current_scheme() if is_running() else "https"
+    return f"{scheme}://{local_lan_ip()}:{port}/"
+
+
+def connection_qr_png_bytes() -> bytes | None:
+    """عکسِ QR کدِ آدرسِ اتصال — تا با دوربینِ گوشی اسکن بشه و نیازی به
+    تایپِ دستیِ آدرس نباشه. اگه کتابخانه‌ی qrcode نصب نباشه، None برمی‌گردونه
+    (تنظیمات به‌جاش فقط آدرسِ متنی رو نشون می‌ده)."""
+    try:
+        import io
+
+        import qrcode
+
+        img = qrcode.make(connection_url())
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+    except Exception:
+        return None
+
+
 def inbox_dir() -> str:
     """پوشه‌ی «صندوقِ ورودی» — اگه کاربر تویِ تنظیمات مسیرِ دلخواه انتخاب کرده
     باشه همون، وگرنه پوشه‌ی پیش‌فرضِ داخلِ پروفایل."""

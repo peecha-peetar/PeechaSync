@@ -14,6 +14,7 @@ _image_hidden = (
     + collect_submodules("arabic_reshaper")
     + collect_submodules("openpyxl")
     + collect_submodules("bidi")
+    + collect_submodules("qrcode")
 )
 _image_datas = collect_data_files("pillow_heif") + collect_data_files("arabic_reshaper")
 
