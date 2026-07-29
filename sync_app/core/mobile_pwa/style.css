@@ -51,6 +51,12 @@ header p {
   cursor: pointer;
 }
 .capture-btn:active { opacity: 0.85; }
+.gallery-btn {
+  margin-top: 10px;
+  background: rgba(124,58,237,0.15);
+  color: #c7d2fe;
+  border: 1px solid rgba(124,58,237,0.4);
+}
 
 .queue-header {
   display: flex;
