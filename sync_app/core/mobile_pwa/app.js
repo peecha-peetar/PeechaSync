@@ -28,6 +28,7 @@ function openDb() {
 
 function dbAdd(item) {
   return new Promise((resolve, reject) => {
+    if (!db) { reject(new Error("پایگاه‌دادهِ محلی آماده نیست")); return; }
     const tx = db.transaction(STORE_NAME, "readwrite");
     const req = tx.objectStore(STORE_NAME).add(item);
     req.onsuccess = () => resolve(req.result);
@@ -37,6 +38,7 @@ function dbAdd(item) {
 
 function dbGetAll() {
   return new Promise((resolve, reject) => {
+    if (!db) { resolve([]); return; }
     const tx = db.transaction(STORE_NAME, "readonly");
     const req = tx.objectStore(STORE_NAME).getAll();
     req.onsuccess = () => resolve(req.result || []);
@@ -46,6 +48,7 @@ function dbGetAll() {
 
 function dbDelete(id) {
   return new Promise((resolve, reject) => {
+    if (!db) { reject(new Error("پایگاه‌دادهِ محلی آماده نیست")); return; }
     const tx = db.transaction(STORE_NAME, "readwrite");
     const req = tx.objectStore(STORE_NAME).delete(id);
     req.onsuccess = () => resolve();
@@ -55,6 +58,7 @@ function dbDelete(id) {
 
 function dbUpdate(item) {
   return new Promise((resolve, reject) => {
+    if (!db) { reject(new Error("پایگاه‌دادهِ محلی آماده نیست")); return; }
     const tx = db.transaction(STORE_NAME, "readwrite");
     const req = tx.objectStore(STORE_NAME).put(item);
     req.onsuccess = () => resolve();
@@ -111,13 +115,18 @@ async function sendOne(item) {
 }
 
 async function flushQueue() {
+  // این چک‌وست باید همین‌جا، قبلِ اولین await، به‌صورتِ اتمیک انجام بشه —
+  // وگرنه وقتی دو تا فراخوانیِ هم‌زمانِ flushQueue (مثلاً تایمرِ دوره‌ای +
+  // فراخوانیِ مستقیم بعدِ اضافه‌شدنِ عکس) هر دو قبل از رسیدن به «sending =
+  // true» به await checkReachable() می‌رسن، هر دو از این چک رد می‌شن و
+  // یک عکس دوبار ارسال می‌شه.
   if (sending) return;
-  const reachable = await checkReachable();
-  setStatus(reachable ? "🟢 متصل به پیچا" : "🔴 به پیچا وصل نیست — عکس‌ها تو صف می‌مونن", reachable);
-  if (!reachable) return;
-
   sending = true;
   try {
+    const reachable = await checkReachable();
+    setStatus(reachable ? "🟢 متصل به پیچا" : "🔴 به پیچا وصل نیست — عکس‌ها تو صف می‌مونن", reachable);
+    if (!reachable) return;
+
     const items = (await dbGetAll()).filter((it) => it.status === "pending");
     for (const item of items) {
       const ok = await sendOne(item);
@@ -585,26 +594,54 @@ function openEditor(file) {
 }
 
 async function handleFile(file) {
-  const edited = await openEditor(file);
-  if (!edited) return; // کاربر ویرایش رو لغو کرد
+  try {
+    const edited = await openEditor(file);
+    if (!edited) return; // کاربر ویرایش رو لغو کرد
 
-  const suggested = suggestFilename(file.name || "photo.jpg");
-  const chosen = window.prompt(
-    "نام فایل رو وارد کنید (بهتره کدِ کالا توش باشه، مثلاً 0103005.jpg):",
-    suggested
-  );
-  if (chosen === null) return; // انصراف
-  const rawName = chosen.trim() || suggested;
-  const filename = /\.[a-zA-Z0-9]+$/.test(rawName) ? rawName : `${rawName}.jpg`;
+    const suggested = suggestFilename(file.name || "photo.jpg");
+    const chosen = window.prompt(
+      "نام فایل رو وارد کنید (بهتره کدِ کالا توش باشه، مثلاً 0103005.jpg):",
+      suggested
+    );
+    if (chosen === null) return; // انصراف
+    const rawName = chosen.trim() || suggested;
+    const filename = /\.[a-zA-Z0-9]+$/.test(rawName) ? rawName : `${rawName}.jpg`;
 
-  await dbAdd({
-    filename,
-    blob: edited,
-    createdAt: Date.now(),
-    status: "pending",
-  });
-  await renderQueue();
-  flushQueue();
+    await dbAdd({
+      filename,
+      blob: edited,
+      createdAt: Date.now(),
+      status: "pending",
+    });
+    await renderQueue();
+    flushQueue();
+  } catch (e) {
+    // بدونِ این catch، هر خطایی (مثلاً پایگاه‌دادهِ محلی در دسترس نبودن)
+    // بی‌صدا تویِ کنسول گم می‌شد و عکس بدونِ هیچ پیامی از دست می‌رفت.
+    window.alert("مشکلی پیش اومد و عکس ذخیره نشد:\n" + e);
+  }
+}
+
+// رویِ آیفون، بدونِ «Add to Home Screen»، سرویس‌ورکر/آفلاین کاملاً قابلِ
+// اتکا نیست (Safari محدودیت‌هایِ ذخیره‌سازیِ سخت‌گیرانه‌تری برایِ تبِ سادهِ
+// مرورگر داره، نه اپِ نصب‌شده رویِ صفحه‌یِ اصلی). این فقط یه راهنماییه —
+// بدونِ نصب هم بقیه‌یِ اپ (گرفتن/ارسالِ عکس وقتی آنلاینه) کار می‌کنه.
+function initA2hsBanner() {
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+  const isStandalone =
+    window.navigator.standalone === true ||
+    (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches);
+  const banner = document.getElementById("a2hsBanner");
+  if (!banner) return;
+  if (isIOS && !isStandalone) {
+    banner.style.display = "block";
+  }
+  const closeBtn = document.getElementById("a2hsCloseBtn");
+  if (closeBtn) {
+    closeBtn.addEventListener("click", () => {
+      banner.style.display = "none";
+    });
+  }
 }
 
 function init() {
@@ -617,6 +654,7 @@ function init() {
   document.getElementById("galleryInput").addEventListener("change", onPick);
 
   document.getElementById("refreshBtn").addEventListener("click", () => flushQueue());
+  initA2hsBanner();
 
   window.addEventListener("online", () => flushQueue());
   document.addEventListener("visibilitychange", () => {
@@ -624,11 +662,22 @@ function init() {
   });
   setInterval(flushQueue, PING_INTERVAL_MS);
 
-  openDb().then((database) => {
-    db = database;
-    renderQueue();
-    flushQueue();
-  });
+  openDb()
+    .then((database) => {
+      db = database;
+      renderQueue();
+      flushQueue();
+    })
+    .catch((err) => {
+      // بدونِ این catch، اگه IndexedDB باز نشه (مثلاً حالتِ خصوصی/Private
+      // مرورگر)، db برایِ همیشه null می‌مونه و عکس‌ها بی‌صدا ذخیره
+      // نمی‌شن — کاربر هم هیچ پیامی نمی‌بینه.
+      setStatus("❌ ذخیره‌سازیِ محلی در دسترس نیست — عکس‌ها ذخیره نمی‌شن", false);
+      window.alert(
+        "ذخیره‌سازیِ محلیِ این مرورگر در دسترس نیست، پس عکس‌ها نمی‌تونن ذخیره بشن.\n" +
+        "اگه تویِ حالتِ خصوصی/Private هستید، از حالتِ عادیِ مرورگر امتحان کنید.\n(" + err + ")"
+      );
+    });
 
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("./sw.js").catch(() => {});

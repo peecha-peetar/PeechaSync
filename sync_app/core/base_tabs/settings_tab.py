@@ -4,7 +4,7 @@ from PyQt5.QtWidgets import (
     QApplication, QFileDialog, QSpinBox, QDoubleSpinBox, QListWidget, QListWidgetItem, QLayout, QDialog,
 )
 from PyQt5.QtCore import Qt, QObject, QThread, pyqtSignal, QPropertyAnimation, QEasingCurve, QTimer, QUrl
-from PyQt5.QtGui import QDesktopServices
+from PyQt5.QtGui import QDesktopServices, QPixmap
 from datetime import datetime
 import copy
 import os
@@ -750,17 +750,41 @@ class SettingsTab(QWidget):
             self._apply_dev_lock_ui()
 
     def _refresh_mobile_photo_info(self):
-        from sync_app.core.mobile_photo_server import DEFAULT_PORT, get_or_create_token, local_lan_ip
+        from sync_app.core.mobile_photo_server import (
+            DEFAULT_PORT, get_or_create_token, local_lan_ip, current_scheme, is_running,
+        )
 
         cfg = load_secure_config(None) or {}
         port = int(cfg.get("MOBILE_PHOTO_SERVER_PORT") or DEFAULT_PORT)
         token = get_or_create_token(cfg)
         ip = local_lan_ip()
-        self.mobile_photo_info_label.setText(
-            f"آدرس: http://{ip}:{port}   —   توکن: {token}\n"
-            "این دو مقدار را فقط یک‌بار داخل برنامه‌ی موبایل وارد کنید (وقتی گوشی و کامپیوتر "
-            "روی یک وای‌فای/شبکه‌ی محلی هستند)."
+        scheme = current_scheme() if is_running() else "https"
+        cert_hint = (
+            "\n⚠️ چون گواهیِ HTTPS این آدرس خودامضاست (نه از یه مرجعِ رسمی)، اولین باری که "
+            "این آدرس را در مرورگرِ گوشی باز می‌کنید یک هشدارِ «اتصال خصوصی نیست» می‌بینید — "
+            "روی «Advanced/جزئیاتِ بیشتر» بعد «ادامه/Visit this website» بزنید؛ فقط همون یک‌بار لازمه."
+            if scheme == "https"
+            else "\n⚠️ HTTPS راه‌اندازی نشد — بدونِ آن، حالتِ آفلاینِ برنامه‌ی موبایل کار نمی‌کند."
         )
+        self.mobile_photo_info_label.setText(
+            f"آدرس: {scheme}://{ip}:{port}   —   توکن: {token}\n"
+            "این آدرس را فقط یک‌بار در مرورگرِ گوشی باز کنید (وقتی گوشی و کامپیوتر "
+            f"روی یک وای‌فای/شبکه‌ی محلی هستند).{cert_hint}\n"
+            "یا به‌جایِ تایپِ آدرس، QR کدِ کنارش را با دوربینِ گوشی اسکن کنید."
+        )
+        if hasattr(self, "mobile_photo_qr_label"):
+            from sync_app.core.mobile_photo_server import connection_qr_png_bytes
+
+            qr_bytes = connection_qr_png_bytes()
+            if qr_bytes:
+                pixmap = QPixmap()
+                pixmap.loadFromData(qr_bytes)
+                self.mobile_photo_qr_label.setPixmap(
+                    pixmap.scaled(140, 140, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                )
+                self.mobile_photo_qr_label.show()
+            else:
+                self.mobile_photo_qr_label.hide()
         if hasattr(self, "mobile_photo_dir_label"):
             from sync_app.core.mobile_photo_server import inbox_dir, get_custom_inbox_dir
 
@@ -1339,6 +1363,11 @@ class SettingsTab(QWidget):
         self.mobile_photo_info_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.mobile_photo_info_label.setStyleSheet("color:#4b5563; font-size:11px;")
 
+        self.mobile_photo_qr_label = QLabel()
+        self.mobile_photo_qr_label.setFixedSize(140, 140)
+        self.mobile_photo_qr_label.setToolTip("این QR کد را با دوربینِ گوشی اسکن کنید تا آدرس بازِ اتصال باز بشه")
+        self.mobile_photo_qr_label.hide()
+
         self.mobile_photo_dir_pick_btn = QPushButton("📁 انتخابِ پوشه...")
         self.mobile_photo_dir_pick_btn.setToolTip("عکس‌هایِ رسیده از موبایل به‌جایِ مسیرِ پیش‌فرض، تویِ این پوشه ذخیره بشن")
         self.mobile_photo_dir_pick_btn.clicked.connect(self._on_mobile_photo_pick_dir)
@@ -1360,7 +1389,10 @@ class SettingsTab(QWidget):
         mobile_photo_top_row.addWidget(self.mobile_photo_regen_btn)
         mobile_photo_top_row.addStretch()
         mobile_photo_layout.addLayout(mobile_photo_top_row)
-        mobile_photo_layout.addWidget(self.mobile_photo_info_label)
+        mobile_photo_info_row = QHBoxLayout()
+        mobile_photo_info_row.addWidget(self.mobile_photo_info_label, 1)
+        mobile_photo_info_row.addWidget(self.mobile_photo_qr_label, 0)
+        mobile_photo_layout.addLayout(mobile_photo_info_row)
         mobile_photo_dir_row = QHBoxLayout()
         mobile_photo_dir_row.addWidget(self.mobile_photo_dir_pick_btn)
         mobile_photo_dir_row.addWidget(self.mobile_photo_dir_reset_btn)

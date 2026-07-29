@@ -92,6 +92,122 @@ def set_custom_inbox_dir(path: str | None) -> None:
     save_secure_config(cfg)
 
 
+TLS_CERT_SUBDIR = "mobile_photo_tls"
+_current_scheme = "http"
+
+
+def current_scheme() -> str:
+    """«http» یا «https» — بسته به اینکه گواهیِ محلی موقعِ آخرین start_server
+    درست کار کرده یا نه. تبِ تنظیمات از این برایِ ساختِ آدرسِ نمایشی استفاده
+    می‌کنه."""
+    return _current_scheme
+
+
+def _tls_cert_paths() -> tuple[str, str, str]:
+    from sync_app.core.sync_utils import app_path
+
+    d = app_path(TLS_CERT_SUBDIR)
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, "cert.pem"), os.path.join(d, "key.pem"), os.path.join(d, "meta.json")
+
+
+def _cert_covers_ip(meta_path: str, ip: str) -> bool:
+    try:
+        with open(meta_path, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+        return ip in (meta.get("ips") or [])
+    except Exception:
+        return False
+
+
+def _generate_self_signed_cert(certfile: str, keyfile: str, meta_path: str, ip: str) -> None:
+    import datetime
+    import ipaddress
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "PeechaSync Local")])
+
+    ip_addrs = {"127.0.0.1", ip}
+    san_list: list = [x509.DNSName("localhost")]
+    for addr in sorted(ip_addrs):
+        try:
+            san_list.append(x509.IPAddress(ipaddress.ip_address(addr)))
+        except ValueError:
+            pass
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(days=1))
+        .not_valid_after(now + datetime.timedelta(days=3650))
+        .add_extension(x509.SubjectAlternativeName(san_list), critical=False)
+        .sign(key, hashes.SHA256())
+    )
+
+    with open(keyfile, "wb") as f:
+        f.write(
+            key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.PKCS8,
+                encryption_algorithm=serialization.NoEncryption(),
+            )
+        )
+    with open(certfile, "wb") as f:
+        f.write(cert.public_bytes(serialization.Encoding.PEM))
+    with open(meta_path, "w", encoding="utf-8") as f:
+        json.dump({"ips": sorted(ip_addrs)}, f)
+
+
+def ensure_tls_cert() -> tuple[str, str]:
+    """گواهیِ خودامضایِ محلی برایِ HTTPS — بدونِ این، مرورگرها هیچ‌وقت
+    آدرسِ آی‌پیِ شبکه (برخلافِ 127.0.0.1/localhost) رو «Secure Context»
+    حساب نمی‌کنن، و بدونِ Secure Context اصلاً Service Worker (پایه‌یِ
+    کارکردِ آفلاین/PWA) رو رویِ گوشی ثبت نمی‌کنن — یعنی بدونِ HTTPS، حالتِ
+    آفلاینِ برنامه‌ی موبایل عملاً کار نمی‌کنه."""
+    certfile, keyfile, meta_path = _tls_cert_paths()
+    ip = local_lan_ip()
+    if not (os.path.isfile(certfile) and os.path.isfile(keyfile) and _cert_covers_ip(meta_path, ip)):
+        _generate_self_signed_cert(certfile, keyfile, meta_path, ip)
+    return certfile, keyfile
+
+
+def connection_url() -> str:
+    """آدرسی که برنامه‌ی همراهِ موبایل باید باز کنه — برایِ نمایشِ متنی و
+    ساختِ QR کد."""
+    from sync_app.core.secure_config_loader import load_secure_config
+
+    cfg = load_secure_config(None) or {}
+    port = int(cfg.get(MOBILE_PHOTO_SERVER_PORT_KEY) or DEFAULT_PORT)
+    scheme = current_scheme() if is_running() else "https"
+    return f"{scheme}://{local_lan_ip()}:{port}/"
+
+
+def connection_qr_png_bytes() -> bytes | None:
+    """عکسِ QR کدِ آدرسِ اتصال — تا با دوربینِ گوشی اسکن بشه و نیازی به
+    تایپِ دستیِ آدرس نباشه. اگه کتابخانه‌ی qrcode نصب نباشه، None برمی‌گردونه
+    (تنظیمات به‌جاش فقط آدرسِ متنی رو نشون می‌ده)."""
+    try:
+        import io
+
+        import qrcode
+
+        img = qrcode.make(connection_url())
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+    except Exception:
+        return None
+
+
 def inbox_dir() -> str:
     """پوشه‌ی «صندوقِ ورودی» — اگه کاربر تویِ تنظیمات مسیرِ دلخواه انتخاب کرده
     باشه همون، وگرنه پوشه‌ی پیش‌فرضِ داخلِ پروفایل."""
@@ -181,11 +297,20 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass  # لاگِ پیش‌فرضِ http.server رو خاموش می‌کنیم؛ لاگِ خودمون رو جدا می‌نویسیم
 
+    def _send_isolation_headers(self) -> None:
+        # COOP+COEP لازمه تا صفحه «crossOriginIsolated» بشه و SharedArrayBuffer
+        # در دسترس باشه — بدونش، بکِندِ WASM چندنخیِ onnxruntime-web (که برایِ
+        # حذفِ پس‌زمینه استفاده می‌شه) رویِ بعضی مرورگرها (بخصوص سافاریِ آیفون)
+        # لود نمی‌شه و با خطا مواجه می‌شه، حتی وقتی numThreads=1 تنظیم شده باشه.
+        self.send_header("Cross-Origin-Opener-Policy", "same-origin")
+        self.send_header("Cross-Origin-Embedder-Policy", "require-corp")
+
     def _json(self, status: int, payload: dict) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        self._send_isolation_headers()
         self.end_headers()
         self.wfile.write(body)
 
@@ -232,6 +357,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
+        self._send_isolation_headers()
         self.end_headers()
         self.wfile.write(data)
         return True
@@ -307,7 +433,7 @@ def is_running() -> bool:
 
 
 def start_server(port: int | None = None) -> tuple[bool, str]:
-    global _server_instance, _server_thread
+    global _server_instance, _server_thread, _current_scheme
     with _server_lock:
         if _server_instance is not None:
             return True, "از قبل در حال اجراست"
@@ -319,11 +445,33 @@ def start_server(port: int | None = None) -> tuple[bool, str]:
             server = _ThreadingServer(("0.0.0.0", p), _Handler)
         except OSError as exc:
             return False, f"پورتِ {p} در دسترس نیست: {exc}"
+
+        scheme = "http"
+        try:
+            import ssl
+
+            certfile, keyfile = ensure_tls_cert()
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            ctx.load_cert_chain(certfile=certfile, keyfile=keyfile)
+            server.socket = ctx.wrap_socket(server.socket, server_side=True)
+            scheme = "https"
+        except Exception as exc:
+            try:
+                from sync_app.core.sync_utils import log
+
+                log.warning(
+                    "⚠️ راه‌اندازیِ HTTPS برایِ سرورِ عکسِ موبایل ناموفق بود — "
+                    f"بدونِ آن ادامه می‌دیم (حالتِ آفلاینِ برنامه‌ی موبایل کار نمی‌کنه): {exc}"
+                )
+            except Exception:
+                pass
+
+        _current_scheme = scheme
         _server_instance = server
         thread = threading.Thread(target=server.serve_forever, daemon=True, name="PeechaMobilePhotoServer")
         _server_thread = thread
         thread.start()
-        return True, f"سرور رویِ پورتِ {p} شروع شد"
+        return True, f"سرور رویِ پورتِ {p} ({scheme}) شروع شد"
 
 
 def stop_server() -> None:
