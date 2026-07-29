@@ -608,11 +608,13 @@ async function handleFile(file) {
 }
 
 function init() {
-  document.getElementById("captureInput").addEventListener("change", (ev) => {
+  const onPick = (ev) => {
     const file = ev.target.files && ev.target.files[0];
     if (file) handleFile(file);
     ev.target.value = "";
-  });
+  };
+  document.getElementById("captureInput").addEventListener("change", onPick);
+  document.getElementById("galleryInput").addEventListener("change", onPick);
 
   document.getElementById("refreshBtn").addEventListener("click", () => flushQueue());
 
