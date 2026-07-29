@@ -750,16 +750,26 @@ class SettingsTab(QWidget):
             self._apply_dev_lock_ui()
 
     def _refresh_mobile_photo_info(self):
-        from sync_app.core.mobile_photo_server import DEFAULT_PORT, get_or_create_token, local_lan_ip
+        from sync_app.core.mobile_photo_server import (
+            DEFAULT_PORT, get_or_create_token, local_lan_ip, current_scheme, is_running,
+        )
 
         cfg = load_secure_config(None) or {}
         port = int(cfg.get("MOBILE_PHOTO_SERVER_PORT") or DEFAULT_PORT)
         token = get_or_create_token(cfg)
         ip = local_lan_ip()
+        scheme = current_scheme() if is_running() else "https"
+        cert_hint = (
+            "\n⚠️ چون گواهیِ HTTPS این آدرس خودامضاست (نه از یه مرجعِ رسمی)، اولین باری که "
+            "این آدرس را در مرورگرِ گوشی باز می‌کنید یک هشدارِ «اتصال خصوصی نیست» می‌بینید — "
+            "روی «Advanced/جزئیاتِ بیشتر» بعد «ادامه/Visit this website» بزنید؛ فقط همون یک‌بار لازمه."
+            if scheme == "https"
+            else "\n⚠️ HTTPS راه‌اندازی نشد — بدونِ آن، حالتِ آفلاینِ برنامه‌ی موبایل کار نمی‌کند."
+        )
         self.mobile_photo_info_label.setText(
-            f"آدرس: http://{ip}:{port}   —   توکن: {token}\n"
-            "این دو مقدار را فقط یک‌بار داخل برنامه‌ی موبایل وارد کنید (وقتی گوشی و کامپیوتر "
-            "روی یک وای‌فای/شبکه‌ی محلی هستند)."
+            f"آدرس: {scheme}://{ip}:{port}   —   توکن: {token}\n"
+            "این آدرس را فقط یک‌بار در مرورگرِ گوشی باز کنید (وقتی گوشی و کامپیوتر "
+            f"روی یک وای‌فای/شبکه‌ی محلی هستند).{cert_hint}"
         )
         if hasattr(self, "mobile_photo_dir_label"):
             from sync_app.core.mobile_photo_server import inbox_dir, get_custom_inbox_dir

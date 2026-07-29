@@ -3023,8 +3023,15 @@ class ProductTab(QWidget):
         return self._existing_image_paths_for_product(sku, item)
 
     def _collect_products_for_image_upload(self):
-        """محصولات تیک‌خورده با حداقل یک تصویر واقعی."""
+        """محصولات تیک‌خورده با حداقل یک تصویر واقعی.
+
+        manual_paths_by_sku: مسیرهایی که از قبل (موقعِ آپلودِ دستی/پیوستِ
+        عکسِ موبایل) یک‌بار از پایپ‌لاینِ خودکار (واترمارک و...) رد شدن —
+        تا موقعِ ارسالِ واقعی دوباره روشون اعمال نشه و واترمارک/حکِ متن
+        دوبار روی هم نیفته. فقط تصاویرِ خامِ ERP (که مستقیم کپی شدن، هنوز
+        پردازش نشدن) اینجا باید پردازش بشن."""
         ready = []
+        manual_paths_by_sku: dict[str, set] = {}
         skipped_no_image = []
         pruned = 0
 
@@ -3043,14 +3050,15 @@ class ProductTab(QWidget):
             paths = self._existing_image_paths_for_product(sku, item)
             if paths:
                 ready.append((sku, paths))
+                manual_paths_by_sku[sku] = set(self._existing_manual_image_paths(sku))
             else:
                 skipped_no_image.append(str(sku))
 
-        return ready, skipped_no_image, pruned
+        return ready, manual_paths_by_sku, skipped_no_image, pruned
 
     def _send_selected_images_to_woo(self):
         """ارسال تصاویر محصولات انتخابی به فروشگاه (دستی یا از ERP)"""
-        to_process, skipped, pruned = self._collect_products_for_image_upload()
+        to_process, manual_paths_by_sku, skipped, pruned = self._collect_products_for_image_upload()
         selected_checked = sum(
             1
             for i in range(self.product_list.count())
@@ -3091,7 +3099,7 @@ class ProductTab(QWidget):
         replace_mode = (clicked is btn_replace)
 
         def job():
-            self._do_send_images_to_woo(to_process, replace_mode)
+            self._do_send_images_to_woo(to_process, replace_mode, manual_paths_by_sku)
 
         if not run_background_sync(
             self, job,
@@ -3108,10 +3116,11 @@ class ProductTab(QWidget):
         self._action_ops.begin("images")
         self._set_products_status("loading", "⏳ در حال ارسال تصاویر...")
 
-    def _do_send_images_to_ps(self, to_process, replace_mode, cfg):
+    def _do_send_images_to_ps(self, to_process, replace_mode, cfg, manual_paths_by_sku=None):
         """معادل _do_send_images_to_woo برای پرستاشاپ — بدون کتابخانه‌ی رسانه‌ی
         وردپرس؛ هر تصویر مستقیم با ps_upload_product_image به گالری محصول
         اضافه می‌شه. برای حالت «جایگزین کن»، اول تصاویر فعلی گالری حذف می‌شن."""
+        manual_paths_by_sku = manual_paths_by_sku or {}
         from sync_app.core.ps_sync_helper import (
             ps_delete_product_image, ps_get_product_image_ids, ps_upload_product_image,
         )
@@ -3141,7 +3150,12 @@ class ProductTab(QWidget):
         else:
             pipeline_steps = []
 
-        def _apply_pipeline_if_needed(sku: str, abs_path: str, pid: int) -> str:
+        def _apply_pipeline_if_needed(sku: str, abs_path: str, pid: int, already_processed: bool) -> str:
+            if already_processed:
+                # این تصویر موقعِ آپلودِ دستی/پیوستِ عکسِ موبایل قبلاً یک‌بار
+                # از پایپ‌لاین رد شده — دوباره اجرا نکنیم، وگرنه واترمارک/حکِ
+                # متن دوبار روی هم می‌افته.
+                return abs_path
             if not (auto_run and auto_pipeline and pipeline_steps):
                 return abs_path
             try:
@@ -3177,13 +3191,14 @@ class ProductTab(QWidget):
                     except Exception as exc:
                         log.warning(f"⚠️ حذف تصاویر فعلی محصول {sku} ناموفق بود: {exc}")
 
+                sku_manual_paths = manual_paths_by_sku.get(sku, set())
                 uploaded = 0
                 for rel_or_abs in paths:
                     abs_path = self._product_image_abs_path(rel_or_abs)
                     if not abs_path:
                         log.warning(f"⚠️ فایل تصویر پیدا نشد — {sku}: {rel_or_abs}")
                         continue
-                    abs_path = _apply_pipeline_if_needed(sku, abs_path, pid)
+                    abs_path = _apply_pipeline_if_needed(sku, abs_path, pid, rel_or_abs in sku_manual_paths)
                     filename = os.path.basename(abs_path)
                     try:
                         with open(abs_path, "rb") as f:
@@ -3216,15 +3231,16 @@ class ProductTab(QWidget):
             log.warning(f"⚠️ ارسال تصاویر تمام شد. موفق: {success_count} | ناموفق: {fail_count}")
         self._last_img_upload_result = (success_count, fail_count)
 
-    def _do_send_images_to_woo(self, to_process, replace_mode):
+    def _do_send_images_to_woo(self, to_process, replace_mode, manual_paths_by_sku=None):
         """اجرا در thread پس‌زمینه — آپلود فایل‌ها به WordPress Media و بروزرسانی محصول"""
         cfg = ensure_wc_sites(load_secure_config(None) or {})
         self._last_img_upload_detail = ""
+        manual_paths_by_sku = manual_paths_by_sku or {}
 
         from sync_app.core.integrations.commerce_provider import is_prestashop
 
         if is_prestashop(cfg):
-            self._do_send_images_to_ps(to_process, replace_mode, cfg)
+            self._do_send_images_to_ps(to_process, replace_mode, cfg, manual_paths_by_sku)
             return
 
         timeout = int(cfg.get("WC_TIMEOUT", 60) or 60)
@@ -3268,9 +3284,14 @@ class ProductTab(QWidget):
         else:
             pipeline_steps = []
 
-        def _apply_pipeline_if_needed(sku: str, abs_path: str) -> str:
+        def _apply_pipeline_if_needed(sku: str, abs_path: str, already_processed: bool) -> str:
             """اگه پایپ‌لاین خودکار فعاله، تصویر رو پردازش می‌کنه و مسیر
-            فایل نهایی (پردازش‌شده) رو برمی‌گردونه؛ وگرنه همون مسیر اصلی."""
+            فایل نهایی (پردازش‌شده) رو برمی‌گردونه؛ وگرنه همون مسیر اصلی.
+            اگه already_processed باشه (یعنی این تصویرِ دستی/موبایل قبلاً
+            موقعِ آپلود/پیوست یک‌بار از پایپ‌لاین رد شده)، دوباره اجرا
+            نمی‌کنیم — وگرنه واترمارک/حکِ متن دوبار روی هم می‌افته."""
+            if already_processed:
+                return abs_path
             if not (auto_run and auto_pipeline and pipeline_steps):
                 return abs_path
             try:
@@ -3316,6 +3337,7 @@ class ProductTab(QWidget):
 
                 p_id = res[0]["id"]
                 existing_images = res[0].get("images", [])
+                sku_manual_paths = manual_paths_by_sku.get(sku, set())
 
                 new_images = []
                 for rel_or_abs in paths:
@@ -3325,7 +3347,7 @@ class ProductTab(QWidget):
                         continue
 
                     filename = os.path.basename(abs_path)
-                    abs_path = _apply_pipeline_if_needed(sku, abs_path)
+                    abs_path = _apply_pipeline_if_needed(sku, abs_path, rel_or_abs in sku_manual_paths)
                     filename = os.path.basename(abs_path)
                     with open(abs_path, "rb") as f:
                         img_data = f.read()

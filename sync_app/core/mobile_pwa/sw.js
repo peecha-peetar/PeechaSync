@@ -3,7 +3,7 @@
 // کار کنه، صرف‌نظر از وصل بودن به کامپیوتر). درخواست‌هایِ /ping، /upload
 // و /config عمداً کش نمی‌شن — چون همیشه باید تازه باشن.
 
-const CACHE_NAME = "peecha-camera-shell-v4";
+const CACHE_NAME = "peecha-camera-shell-v5";
 const SHELL_FILES = [
   "./",
   "./index.html",
