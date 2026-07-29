@@ -237,9 +237,31 @@ function applySharpen(ctx, w, h) {
 // اپ) — تا اجرایِ اپ رو کند نکنه. -----------------------------------------
 const BG_MODEL_PATH = "./models/u2netp.onnx";
 const BG_INPUT_SIZE = 320;
+const BG_SESSION_TIMEOUT_MS = 45000;
+const BG_INFERENCE_TIMEOUT_MS = 30000;
 let bgSessionPromise = null;
 
-function getBgSession() {
+// یه Promise رو با یه سقفِ زمانی می‌پیچه — اگه promise اصلی هیچ‌وقت resolve/reject
+// نشه (مثلاً fetchِ فایلِ مدل رویِ وای‌فایِ ضعیف گیر کنه و نه خطا بده نه تموم بشه)،
+// بازم بعدِ ms میلی‌ثانیه با خطا reject می‌شه — تا UI برایِ همیشه رویِ «در حال
+// حذفِ پس‌زمینه...» گیر نکنه.
+function withTimeout(promise, ms, message) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms);
+    promise.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      }
+    );
+  });
+}
+
+async function getBgSession() {
   if (!bgSessionPromise) {
     ort.env.wasm.numThreads = 1;
     ort.env.wasm.proxy = false;
@@ -247,7 +269,17 @@ function getBgSession() {
       executionProviders: ["wasm"],
     });
   }
-  return bgSessionPromise;
+  try {
+    return await withTimeout(
+      bgSessionPromise,
+      BG_SESSION_TIMEOUT_MS,
+      "آماده‌سازیِ مدلِ حذفِ پس‌زمینه بیش از حد طول کشید (شاید وای‌فای ضعیفه)."
+    );
+  } catch (e) {
+    // promiseِ ناموفق/گیرکرده رو کش نگه نمی‌داریم — تا دفعه‌ی بعد از نو امتحان بشه
+    bgSessionPromise = null;
+    throw e;
+  }
 }
 
 const BG_MEAN = [0.485, 0.456, 0.406];
@@ -276,7 +308,11 @@ async function removeBackground(ctx, size) {
   const tensor = new ort.Tensor("float32", chw, [1, 3, BG_INPUT_SIZE, BG_INPUT_SIZE]);
   const feeds = {};
   feeds[session.inputNames[0]] = tensor;
-  const results = await session.run(feeds);
+  const results = await withTimeout(
+    session.run(feeds),
+    BG_INFERENCE_TIMEOUT_MS,
+    "پردازشِ حذفِ پس‌زمینه بیش از حد طول کشید."
+  );
   const outData = results[session.outputNames[0]].data;
 
   let mn = Infinity;
@@ -345,6 +381,19 @@ function openEditor(file) {
     canvas.width = EDIT_CANVAS_SIZE;
     canvas.height = EDIT_CANVAS_SIZE;
 
+    const cancelBtn = document.getElementById("editCancelBtn");
+    const confirmBtn = document.getElementById("editConfirmBtn");
+    const bgCheckbox = document.getElementById("editBgRemove");
+    const hintEl = document.getElementById("editHint");
+    const CONFIRM_TEXT_DEFAULT = "✅ ادامه";
+    const CONFIRM_TEXT_PREVIEW = "✅ تایید همین نتیجه و ادامه";
+    const HINT_TEXT_DEFAULT = "عکس رو بکشید تا جابه‌جا بشه — با اسلایدر بزرگ‌نمایی کنید";
+    const HINT_TEXT_PREVIEW = "نتیجه‌ی حذفِ پس‌زمینه رو بررسی کنید — اگه خوبه، دوباره «ادامه» بزنید.";
+    bgCheckbox.checked = false;
+    bgCheckbox.disabled = false;
+    confirmBtn.textContent = CONFIRM_TEXT_DEFAULT;
+    if (hintEl) hintEl.textContent = HINT_TEXT_DEFAULT;
+
     let img;
     try {
       img = await loadImageSource(file);
@@ -366,6 +415,7 @@ function openEditor(file) {
       offsetX: (EDIT_CANVAS_SIZE - natW * coverScale) / 2,
       offsetY: (EDIT_CANVAS_SIZE - natH * coverScale) / 2,
       filterKey: "normal",
+      bgApplied: false,
     };
 
     function clampOffsets() {
@@ -384,6 +434,14 @@ function openEditor(file) {
     }
 
     function draw() {
+      // هر بازرسمِ خام (کشیدن/زوم/تغییرِ فیلتر) یعنی هر نتیجه‌ی حذفِ
+      // پس‌زمینه‌یِ قبلی دیگه معتبر نیست — باید دوباره اجرا بشه.
+      if (state.bgApplied) {
+        state.bgApplied = false;
+        bgCheckbox.disabled = false;
+        confirmBtn.textContent = CONFIRM_TEXT_DEFAULT;
+        if (hintEl) hintEl.textContent = HINT_TEXT_DEFAULT;
+      }
       ctx.save();
       ctx.clearRect(0, 0, EDIT_CANVAS_SIZE, EDIT_CANVAS_SIZE);
       ctx.filter = currentPreset().css || "none";
@@ -470,44 +528,56 @@ function openEditor(file) {
       overlay.classList.remove("open");
     }
 
-    const cancelBtn = document.getElementById("editCancelBtn");
-    const confirmBtn = document.getElementById("editConfirmBtn");
-    const bgCheckbox = document.getElementById("editBgRemove");
-    bgCheckbox.checked = false;
-
     cancelBtn.onclick = () => {
       cleanup();
       resolve(null);
     };
 
+    // با تیک‌بودنِ «حذفِ پس‌زمینه»، اولین کلیکِ «ادامه» فقط نتیجه رو رویِ
+    // همون کانواس نشون می‌ده (بدونِ پرسیدنِ نامِ فایل) — کاربر نتیجه رو
+    // می‌بینه و با کلیکِ دومِ «ادامه» واقعاً وارد مرحله‌ی تأییدِ نام می‌شه.
     confirmBtn.onclick = async () => {
-      draw();
       const wantsBgRemove = bgCheckbox.checked;
-      const confirmLabel = confirmBtn.textContent;
-      try {
-        if (wantsBgRemove) {
-          cancelBtn.disabled = true;
-          confirmBtn.disabled = true;
-          confirmBtn.textContent = "⏳ در حال حذفِ پس‌زمینه...";
+
+      if (wantsBgRemove && !state.bgApplied) {
+        draw();
+        cancelBtn.disabled = true;
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = "⏳ در حال حذفِ پس‌زمینه...";
+        try {
           await removeBackground(ctx, EDIT_CANVAS_SIZE);
+          if (currentPreset().sharpen) {
+            applySharpen(ctx, EDIT_CANVAS_SIZE, EDIT_CANVAS_SIZE);
+          }
+          state.bgApplied = true;
+          bgCheckbox.disabled = true;
+          confirmBtn.textContent = CONFIRM_TEXT_PREVIEW;
+          if (hintEl) hintEl.textContent = HINT_TEXT_PREVIEW;
+        } catch (e) {
+          confirmBtn.textContent = CONFIRM_TEXT_DEFAULT;
+          window.alert("حذفِ پس‌زمینه ناموفق بود — دوباره امتحان کنید یا تیکش رو بردارید.");
+        } finally {
+          cancelBtn.disabled = false;
+          confirmBtn.disabled = false;
         }
+        return;
+      }
+
+      if (!wantsBgRemove) {
+        draw();
         if (currentPreset().sharpen) {
           applySharpen(ctx, EDIT_CANVAS_SIZE, EDIT_CANVAS_SIZE);
         }
-        canvas.toBlob(
-          (blob) => {
-            cleanup();
-            resolve(blob);
-          },
-          "image/jpeg",
-          0.92
-        );
-      } catch (e) {
-        cancelBtn.disabled = false;
-        confirmBtn.disabled = false;
-        confirmBtn.textContent = confirmLabel;
-        window.alert("حذفِ پس‌زمینه ناموفق بود — بدونِ اون ادامه بدید یا دوباره امتحان کنید.");
       }
+
+      canvas.toBlob(
+        (blob) => {
+          cleanup();
+          resolve(blob);
+        },
+        "image/jpeg",
+        0.92
+      );
     };
 
     overlay.classList.add("open");

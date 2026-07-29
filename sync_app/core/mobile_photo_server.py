@@ -20,6 +20,7 @@ import time
 MOBILE_PHOTO_SERVER_ENABLED_KEY = "MOBILE_PHOTO_SERVER_ENABLED"
 MOBILE_PHOTO_SERVER_PORT_KEY = "MOBILE_PHOTO_SERVER_PORT"
 MOBILE_PHOTO_SERVER_TOKEN_KEY = "MOBILE_PHOTO_SERVER_TOKEN"
+MOBILE_PHOTO_SERVER_SAVE_DIR_KEY = "MOBILE_PHOTO_SERVER_SAVE_DIR"
 DEFAULT_PORT = 8765
 INBOX_SUBDIR = "incoming_mobile_photos"
 MAX_UPLOAD_BYTES = 30 * 1024 * 1024  # ۳۰ مگابایت — کافی برایِ یه عکسِ موبایلِ ادیت‌شده
@@ -66,10 +67,36 @@ def local_lan_ip() -> str:
             return "127.0.0.1"
 
 
-def inbox_dir() -> str:
+def default_inbox_dir() -> str:
     from sync_app.core.sync_utils import app_path
 
-    path = app_path(INBOX_SUBDIR)
+    return app_path(INBOX_SUBDIR)
+
+
+def get_custom_inbox_dir(config: dict | None = None) -> str:
+    from sync_app.core.secure_config_loader import load_secure_config
+
+    cfg = config if config is not None else (load_secure_config(None) or {})
+    return str(cfg.get(MOBILE_PHOTO_SERVER_SAVE_DIR_KEY) or "").strip()
+
+
+def set_custom_inbox_dir(path: str | None) -> None:
+    from sync_app.core.secure_config_loader import load_secure_config, save_secure_config
+
+    cfg = load_secure_config(None) or {}
+    cleaned = str(path or "").strip()
+    if cleaned:
+        cfg[MOBILE_PHOTO_SERVER_SAVE_DIR_KEY] = cleaned
+    else:
+        cfg.pop(MOBILE_PHOTO_SERVER_SAVE_DIR_KEY, None)
+    save_secure_config(cfg)
+
+
+def inbox_dir() -> str:
+    """پوشه‌ی «صندوقِ ورودی» — اگه کاربر تویِ تنظیمات مسیرِ دلخواه انتخاب کرده
+    باشه همون، وگرنه پوشه‌ی پیش‌فرضِ داخلِ پروفایل."""
+    custom = get_custom_inbox_dir()
+    path = custom or default_inbox_dir()
     os.makedirs(path, exist_ok=True)
     return path
 
@@ -107,16 +134,20 @@ def _pwa_dir() -> str:
 
 def _safe_filename(name: str) -> str:
     name = os.path.basename((name or "").strip().replace("\\", "/"))
-    name = re.sub(r"[^A-Za-z0-9_.\-؀-ۿ ]", "_", name).strip()
+    name = re.sub(r"[^A-Za-z0-9_.\-$؀-ۿ ]", "_", name).strip()
     return name or f"photo_{int(time.time())}.jpg"
 
 
 def _unique_path(directory: str, filename: str) -> str:
+    """اگه هم‌نام بود، به‌جایِ «_» از «$» برایِ شماره‌ترتیب استفاده می‌کنه —
+    مثلِ همون قراردادِ «وارد کردنِ گروهیِ عکس با کدِ کالا» (media_center.py:
+    parse_image_filename) — یعنی 1002.jpg برایِ عکسِ اصلی، 1002$1.jpg برایِ
+    عکسِ دوم — تا این عکس‌ها بعداً با همون ابزار هم قابلِ تشخیص باشن."""
     base, ext = os.path.splitext(filename)
     candidate = filename
     n = 1
     while os.path.exists(os.path.join(directory, candidate)):
-        candidate = f"{base}_{n}{ext}"
+        candidate = f"{base}${n}{ext}"
         n += 1
     return os.path.join(directory, candidate)
 
