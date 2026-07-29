@@ -297,11 +297,20 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass  # لاگِ پیش‌فرضِ http.server رو خاموش می‌کنیم؛ لاگِ خودمون رو جدا می‌نویسیم
 
+    def _send_isolation_headers(self) -> None:
+        # COOP+COEP لازمه تا صفحه «crossOriginIsolated» بشه و SharedArrayBuffer
+        # در دسترس باشه — بدونش، بکِندِ WASM چندنخیِ onnxruntime-web (که برایِ
+        # حذفِ پس‌زمینه استفاده می‌شه) رویِ بعضی مرورگرها (بخصوص سافاریِ آیفون)
+        # لود نمی‌شه و با خطا مواجه می‌شه، حتی وقتی numThreads=1 تنظیم شده باشه.
+        self.send_header("Cross-Origin-Opener-Policy", "same-origin")
+        self.send_header("Cross-Origin-Embedder-Policy", "require-corp")
+
     def _json(self, status: int, payload: dict) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        self._send_isolation_headers()
         self.end_headers()
         self.wfile.write(body)
 
@@ -348,6 +357,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
+        self._send_isolation_headers()
         self.end_headers()
         self.wfile.write(data)
         return True
