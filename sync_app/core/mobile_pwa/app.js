@@ -185,22 +185,351 @@ async function renderQueue() {
 function suggestFilename(originalName) {
   const now = new Date();
   const stamp = now.toISOString().replace(/[-:T]/g, "").slice(0, 14);
-  const ext = (originalName.match(/\.[a-zA-Z0-9]+$/) || [".jpg"])[0];
-  return `photo_${stamp}${ext}`;
+  return `photo_${stamp}.jpg`;
+}
+
+// --- ویرایشِ عکس: کراپِ مربع (کشیدن/زوم) + پیش‌تنظیمِ فیلتر -----------------
+const EDIT_CANVAS_SIZE = 1000;
+const FILTER_PRESETS = [
+  { key: "normal", label: "🔹 عادی", css: "", sharpen: false },
+  { key: "bright", label: "☀️ روشن و واضح", css: "brightness(1.12) contrast(1.08) saturate(1.05)", sharpen: true },
+  { key: "studio", label: "🏭 صنعتی/محصول", css: "brightness(1.05) contrast(1.22) saturate(0.92)", sharpen: true },
+  { key: "warm", label: "🌟 گرم", css: "brightness(1.05) contrast(1.05) saturate(1.15) sepia(0.08)", sharpen: false },
+];
+
+function applySharpen(ctx, w, h) {
+  const imgData = ctx.getImageData(0, 0, w, h);
+  const src = imgData.data;
+  const out = new Uint8ClampedArray(src.length);
+  const kernel = [0, -1, 0, -1, 5, -1, 0, -1, 0];
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const idx = (y * w + x) * 4;
+      if (x === 0 || y === 0 || x === w - 1 || y === h - 1) {
+        out[idx] = src[idx];
+        out[idx + 1] = src[idx + 1];
+        out[idx + 2] = src[idx + 2];
+        out[idx + 3] = src[idx + 3];
+        continue;
+      }
+      let r = 0, g = 0, b = 0, k = 0;
+      for (let ky = -1; ky <= 1; ky++) {
+        for (let kx = -1; kx <= 1; kx++) {
+          const nIdx = ((y + ky) * w + (x + kx)) * 4;
+          const weight = kernel[k++];
+          r += src[nIdx] * weight;
+          g += src[nIdx + 1] * weight;
+          b += src[nIdx + 2] * weight;
+        }
+      }
+      out[idx] = r;
+      out[idx + 1] = g;
+      out[idx + 2] = b;
+      out[idx + 3] = src[idx + 3];
+    }
+  }
+  imgData.data.set(out);
+  ctx.putImageData(imgData, 0, 0);
+}
+
+// --- حذفِ پس‌زمینه: کاملاً رویِ خودِ گوشی (آفلاین) با ONNX Runtime Web +
+// مدلِ سبکِ U2-Netp. سشن فقط با اولین استفاده لود می‌شه (نه موقعِ بازکردنِ
+// اپ) — تا اجرایِ اپ رو کند نکنه. -----------------------------------------
+const BG_MODEL_PATH = "./models/u2netp.onnx";
+const BG_INPUT_SIZE = 320;
+let bgSessionPromise = null;
+
+function getBgSession() {
+  if (!bgSessionPromise) {
+    ort.env.wasm.numThreads = 1;
+    ort.env.wasm.proxy = false;
+    bgSessionPromise = ort.InferenceSession.create(BG_MODEL_PATH, {
+      executionProviders: ["wasm"],
+    });
+  }
+  return bgSessionPromise;
+}
+
+const BG_MEAN = [0.485, 0.456, 0.406];
+const BG_STD = [0.229, 0.224, 0.225];
+
+// عکسِ رویِ canvas رو می‌گیره، پس‌زمینه رو تشخیص می‌ده و با سفید جایگزین
+// می‌کنه — مستقیم رویِ همون ctx می‌نویسه.
+async function removeBackground(ctx, size) {
+  const session = await getBgSession();
+
+  const small = document.createElement("canvas");
+  small.width = BG_INPUT_SIZE;
+  small.height = BG_INPUT_SIZE;
+  const sctx = small.getContext("2d");
+  sctx.drawImage(ctx.canvas, 0, 0, size, size, 0, 0, BG_INPUT_SIZE, BG_INPUT_SIZE);
+  const srcData = sctx.getImageData(0, 0, BG_INPUT_SIZE, BG_INPUT_SIZE).data;
+
+  const plane = BG_INPUT_SIZE * BG_INPUT_SIZE;
+  const chw = new Float32Array(3 * plane);
+  for (let i = 0; i < plane; i++) {
+    chw[i] = (srcData[i * 4] / 255 - BG_MEAN[0]) / BG_STD[0];
+    chw[plane + i] = (srcData[i * 4 + 1] / 255 - BG_MEAN[1]) / BG_STD[1];
+    chw[plane * 2 + i] = (srcData[i * 4 + 2] / 255 - BG_MEAN[2]) / BG_STD[2];
+  }
+
+  const tensor = new ort.Tensor("float32", chw, [1, 3, BG_INPUT_SIZE, BG_INPUT_SIZE]);
+  const feeds = {};
+  feeds[session.inputNames[0]] = tensor;
+  const results = await session.run(feeds);
+  const outData = results[session.outputNames[0]].data;
+
+  let mn = Infinity;
+  let mx = -Infinity;
+  for (let i = 0; i < outData.length; i++) {
+    if (outData[i] < mn) mn = outData[i];
+    if (outData[i] > mx) mx = outData[i];
+  }
+  const range = mx - mn || 1;
+
+  const maskSmall = document.createElement("canvas");
+  maskSmall.width = BG_INPUT_SIZE;
+  maskSmall.height = BG_INPUT_SIZE;
+  const mctx = maskSmall.getContext("2d");
+  const maskImgData = mctx.createImageData(BG_INPUT_SIZE, BG_INPUT_SIZE);
+  for (let i = 0; i < outData.length; i++) {
+    const v = Math.round(((outData[i] - mn) / range) * 255);
+    maskImgData.data[i * 4] = v;
+    maskImgData.data[i * 4 + 1] = v;
+    maskImgData.data[i * 4 + 2] = v;
+    maskImgData.data[i * 4 + 3] = 255;
+  }
+  mctx.putImageData(maskImgData, 0, 0);
+
+  // آپ‌اسکیلِ ماسک به اندازه‌ی تصویرِ اصلی (bilinear خودِ canvas)
+  const maskBig = document.createElement("canvas");
+  maskBig.width = size;
+  maskBig.height = size;
+  const mbctx = maskBig.getContext("2d");
+  mbctx.drawImage(maskSmall, 0, 0, size, size);
+  const maskData = mbctx.getImageData(0, 0, size, size).data;
+
+  const orig = ctx.getImageData(0, 0, size, size);
+  const out = orig.data;
+  for (let i = 0; i < out.length; i += 4) {
+    const alpha = maskData[i] / 255;
+    out[i] = out[i] * alpha + 255 * (1 - alpha);
+    out[i + 1] = out[i + 1] * alpha + 255 * (1 - alpha);
+    out[i + 2] = out[i + 2] * alpha + 255 * (1 - alpha);
+  }
+  ctx.putImageData(orig, 0, 0);
+}
+
+async function loadImageSource(file) {
+  try {
+    return await createImageBitmap(file);
+  } catch (e) {
+    const url = URL.createObjectURL(file);
+    return await new Promise((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = reject;
+      el.src = url;
+    });
+  }
+}
+
+// عکسِ گرفته‌شده رو تویِ یه صفحه‌ی مربع نشون می‌ده — با کشیدن جابه‌جا و با
+// اسلایدر زوم می‌شه، بعد یه پیش‌تنظیمِ فیلتر (نور/کنتراست/شارپ) انتخاب
+// می‌شه. خروجی یه Blob مربعِ نهایی‌ست، یا null اگه کاربر لغو کرده باشه.
+function openEditor(file) {
+  return new Promise(async (resolve) => {
+    const overlay = document.getElementById("editScreen");
+    const canvas = document.getElementById("editCanvas");
+    const ctx = canvas.getContext("2d");
+    canvas.width = EDIT_CANVAS_SIZE;
+    canvas.height = EDIT_CANVAS_SIZE;
+
+    let img;
+    try {
+      img = await loadImageSource(file);
+    } catch (e) {
+      resolve(null);
+      return;
+    }
+    const natW = img.width || img.naturalWidth;
+    const natH = img.height || img.naturalHeight;
+    if (!natW || !natH) {
+      resolve(null);
+      return;
+    }
+
+    const coverScale = Math.max(EDIT_CANVAS_SIZE / natW, EDIT_CANVAS_SIZE / natH);
+    const state = {
+      minScale: coverScale,
+      scale: coverScale,
+      offsetX: (EDIT_CANVAS_SIZE - natW * coverScale) / 2,
+      offsetY: (EDIT_CANVAS_SIZE - natH * coverScale) / 2,
+      filterKey: "normal",
+    };
+
+    function clampOffsets() {
+      const w = natW * state.scale;
+      const h = natH * state.scale;
+      state.offsetX = w <= EDIT_CANVAS_SIZE
+        ? (EDIT_CANVAS_SIZE - w) / 2
+        : Math.min(0, Math.max(EDIT_CANVAS_SIZE - w, state.offsetX));
+      state.offsetY = h <= EDIT_CANVAS_SIZE
+        ? (EDIT_CANVAS_SIZE - h) / 2
+        : Math.min(0, Math.max(EDIT_CANVAS_SIZE - h, state.offsetY));
+    }
+
+    function currentPreset() {
+      return FILTER_PRESETS.find((p) => p.key === state.filterKey) || FILTER_PRESETS[0];
+    }
+
+    function draw() {
+      ctx.save();
+      ctx.clearRect(0, 0, EDIT_CANVAS_SIZE, EDIT_CANVAS_SIZE);
+      ctx.filter = currentPreset().css || "none";
+      ctx.drawImage(img, state.offsetX, state.offsetY, natW * state.scale, natH * state.scale);
+      ctx.restore();
+    }
+
+    draw();
+
+    const zoomEl = document.getElementById("editZoom");
+    zoomEl.min = "1";
+    zoomEl.max = "3";
+    zoomEl.step = "0.01";
+    zoomEl.value = "1";
+    const onZoom = () => {
+      const factor = parseFloat(zoomEl.value) || 1;
+      const newScale = state.minScale * factor;
+      const cx = EDIT_CANVAS_SIZE / 2;
+      const cy = EDIT_CANVAS_SIZE / 2;
+      const imgCx = (cx - state.offsetX) / state.scale;
+      const imgCy = (cy - state.offsetY) / state.scale;
+      state.scale = newScale;
+      state.offsetX = cx - imgCx * state.scale;
+      state.offsetY = cy - imgCy * state.scale;
+      clampOffsets();
+      draw();
+    };
+    zoomEl.oninput = onZoom;
+
+    let dragging = false;
+    let lastX = 0;
+    let lastY = 0;
+    function toCanvasPoint(ev) {
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = EDIT_CANVAS_SIZE / rect.width;
+      const scaleY = EDIT_CANVAS_SIZE / rect.height;
+      return { x: (ev.clientX - rect.left) * scaleX, y: (ev.clientY - rect.top) * scaleY };
+    }
+    function onDown(ev) {
+      dragging = true;
+      const p = toCanvasPoint(ev);
+      lastX = p.x;
+      lastY = p.y;
+    }
+    function onMove(ev) {
+      if (!dragging) return;
+      ev.preventDefault();
+      const p = toCanvasPoint(ev);
+      state.offsetX += p.x - lastX;
+      state.offsetY += p.y - lastY;
+      lastX = p.x;
+      lastY = p.y;
+      clampOffsets();
+      draw();
+    }
+    function onUp() {
+      dragging = false;
+    }
+    canvas.addEventListener("pointerdown", onDown);
+    canvas.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+
+    const presetsRow = document.getElementById("editPresets");
+    presetsRow.innerHTML = "";
+    FILTER_PRESETS.forEach((preset) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "preset-btn" + (preset.key === state.filterKey ? " active" : "");
+      btn.textContent = preset.label;
+      btn.onclick = () => {
+        state.filterKey = preset.key;
+        [...presetsRow.children].forEach((c) => c.classList.remove("active"));
+        btn.classList.add("active");
+        draw();
+      };
+      presetsRow.appendChild(btn);
+    });
+
+    function cleanup() {
+      canvas.removeEventListener("pointerdown", onDown);
+      canvas.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      zoomEl.oninput = null;
+      overlay.classList.remove("open");
+    }
+
+    const cancelBtn = document.getElementById("editCancelBtn");
+    const confirmBtn = document.getElementById("editConfirmBtn");
+    const bgCheckbox = document.getElementById("editBgRemove");
+    bgCheckbox.checked = false;
+
+    cancelBtn.onclick = () => {
+      cleanup();
+      resolve(null);
+    };
+
+    confirmBtn.onclick = async () => {
+      draw();
+      const wantsBgRemove = bgCheckbox.checked;
+      const confirmLabel = confirmBtn.textContent;
+      try {
+        if (wantsBgRemove) {
+          cancelBtn.disabled = true;
+          confirmBtn.disabled = true;
+          confirmBtn.textContent = "⏳ در حال حذفِ پس‌زمینه...";
+          await removeBackground(ctx, EDIT_CANVAS_SIZE);
+        }
+        if (currentPreset().sharpen) {
+          applySharpen(ctx, EDIT_CANVAS_SIZE, EDIT_CANVAS_SIZE);
+        }
+        canvas.toBlob(
+          (blob) => {
+            cleanup();
+            resolve(blob);
+          },
+          "image/jpeg",
+          0.92
+        );
+      } catch (e) {
+        cancelBtn.disabled = false;
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = confirmLabel;
+        window.alert("حذفِ پس‌زمینه ناموفق بود — بدونِ اون ادامه بدید یا دوباره امتحان کنید.");
+      }
+    };
+
+    overlay.classList.add("open");
+  });
 }
 
 async function handleFile(file) {
+  const edited = await openEditor(file);
+  if (!edited) return; // کاربر ویرایش رو لغو کرد
+
   const suggested = suggestFilename(file.name || "photo.jpg");
   const chosen = window.prompt(
     "نام فایل رو وارد کنید (بهتره کدِ کالا توش باشه، مثلاً 0103005.jpg):",
     suggested
   );
   if (chosen === null) return; // انصراف
-  const filename = chosen.trim() || suggested;
+  const rawName = chosen.trim() || suggested;
+  const filename = /\.[a-zA-Z0-9]+$/.test(rawName) ? rawName : `${rawName}.jpg`;
 
   await dbAdd({
     filename,
-    blob: file,
+    blob: edited,
     createdAt: Date.now(),
     status: "pending",
   });

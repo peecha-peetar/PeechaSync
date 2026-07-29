@@ -29,6 +29,30 @@
   </div>
   <div id="queueList"></div>
 </div>
+
+<div id="editScreen" class="edit-overlay">
+  <div class="edit-panel">
+    <p class="edit-hint">عکس رو بکشید تا جابه‌جا بشه — با اسلایدر بزرگ‌نمایی کنید</p>
+    <div class="edit-canvas-wrap">
+      <canvas id="editCanvas"></canvas>
+    </div>
+    <div class="edit-zoom-row">
+      <span>🔍</span>
+      <input type="range" id="editZoom" />
+    </div>
+    <div id="editPresets" class="edit-presets"></div>
+    <label class="bg-remove-row">
+      <input type="checkbox" id="editBgRemove" />
+      <span>🧹 حذفِ خودکارِ پس‌زمینه (رویِ همینِ گوشی — اولین بار چند ثانیه طول می‌کشه)</span>
+    </label>
+    <div class="edit-actions">
+      <button id="editCancelBtn" class="edit-btn cancel">لغو</button>
+      <button id="editConfirmBtn" class="edit-btn confirm">✅ ادامه</button>
+    </div>
+  </div>
+</div>
+
+<script src="./vendor/ort/ort.wasm.min.js"></script>
 <script src="./app.js"></script>
 </body>
 </html>

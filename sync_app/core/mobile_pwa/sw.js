@@ -3,7 +3,7 @@
 // کار کنه، صرف‌نظر از وصل بودن به کامپیوتر). درخواست‌هایِ /ping، /upload
 // و /config عمداً کش نمی‌شن — چون همیشه باید تازه باشن.
 
-const CACHE_NAME = "peecha-camera-shell-v1";
+const CACHE_NAME = "peecha-camera-shell-v3";
 const SHELL_FILES = [
   "./",
   "./index.html",
@@ -35,10 +35,23 @@ self.addEventListener("fetch", (event) => {
   const dynamic = ["/ping", "/upload", "/config"].some((p) => url.pathname.endsWith(p));
   if (dynamic) return; // این‌ها همیشه مستقیم از شبکه — بدونِ دخالتِ کش
 
+  // فایل‌هایِ حجیمِ حذفِ پس‌زمینه (WASM + مدل) عمداً تویِ SHELL_FILES نیستن —
+  // فقط با اولین استفاده‌ی واقعی دانلود می‌شن، ولی بعدِ اولین بار کش می‌شن
+  // تا دفعاتِ بعد آفلاین/بدونِ دانلودِ دوباره کار کنن.
+  const runtimeCache = url.pathname.includes("/vendor/") || url.pathname.includes("/models/");
+
   event.respondWith(
     caches.match(event.request).then((cached) => {
       if (cached) return cached;
-      return fetch(event.request).catch(() => cached);
+      return fetch(event.request)
+        .then((resp) => {
+          if (runtimeCache && resp && resp.ok) {
+            const clone = resp.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+          }
+          return resp;
+        })
+        .catch(() => cached);
     })
   );
 });
