@@ -33,6 +33,8 @@ from sync_app.core.media_center import (
     generate_profile_outputs,
     detect_low_quality,
     IMAGE_PROFILES_KEY,
+    filter_unuploaded_items,
+    mark_bulk_import_uploaded,
 )
 from sync_app.core.wc_sync_helper import (
     build_wcapi,
@@ -489,6 +491,14 @@ class MediaCenterTab(QWidget):
         self.bulk_upload_btn.clicked.connect(self._run_bulk_upload)
         layout.addWidget(self.bulk_upload_btn)
 
+        self.bulk_reset_uploaded_btn = QPushButton("♻️ بازنشانیِ وضعیتِ «قبلاً منتقل‌شده»")
+        self.bulk_reset_uploaded_btn.setToolTip(
+            "عکس‌هایی که یک‌بار با این ابزار آپلود شدن، دوباره پیشنهاد داده نمی‌شن — "
+            "با این دکمه این وضعیت پاک می‌شه و دوباره همه برایِ تطبیق در دسترس می‌شن."
+        )
+        self.bulk_reset_uploaded_btn.clicked.connect(self._reset_bulk_uploaded_history)
+        layout.addWidget(self.bulk_reset_uploaded_btn)
+
         self.bulk_summary_label = QLabel("")
         self.bulk_summary_label.setStyleSheet("font-weight:700;")
         layout.addWidget(self.bulk_summary_label)
@@ -532,17 +542,29 @@ class MediaCenterTab(QWidget):
 
             erp_label = erp_provider_label(config)
             results = []
-            for file_code, items in groups.items():
+            for file_code, all_items in groups.items():
                 a_code = lookup.resolve(file_code)
                 if not a_code:
-                    results.append((file_code, "—", "—", "—", len(items), f"❌ کد ناشناس (در {erp_label} نیست)", None))
+                    results.append((file_code, "—", "—", "—", len(all_items), f"❌ کد ناشناس (در {erp_label} نیست)", None))
                     continue
                 name = name_by_code.get(a_code, "—")
                 manual_code = manual_by_code.get(a_code, "") or "—"
                 if a_code not in product_map:
-                    results.append((file_code, name, a_code, manual_code, len(items), "⚠️ این کالا با فروشگاه سینک نشده", None))
+                    results.append((file_code, name, a_code, manual_code, len(all_items), "⚠️ این کالا با فروشگاه سینک نشده", None))
                     continue
-                results.append((file_code, name, a_code, manual_code, len(items), "✅ آماده‌ی آپلود", items))
+
+                # عکس‌هایی که قبلاً از همین ابزار آپلود شدن، دوباره پیشنهاد نمی‌شن
+                items = filter_unuploaded_items(all_items)
+                if not items:
+                    results.append(
+                        (file_code, name, a_code, manual_code, len(all_items), "✅ قبلاً منتقل شده (بدونِ تغییرِ جدید)", None)
+                    )
+                    continue
+                if len(items) < len(all_items):
+                    status = f"✅ آماده‌ی آپلود ({len(items)} عکسِ جدید — {len(all_items) - len(items)} قبلاً منتقل شده)"
+                else:
+                    status = "✅ آماده‌ی آپلود"
+                results.append((file_code, name, a_code, manual_code, len(items), status, items))
             return results
 
         def _done(results):
@@ -625,6 +647,20 @@ class MediaCenterTab(QWidget):
             first_path = items[0][1] if isinstance(items[0], (list, tuple)) else items[0]
             self._show_image_preview_dialog(first_path)
 
+    def _reset_bulk_uploaded_history(self):
+        confirm = QMessageBox.question(
+            self, "بازنشانی",
+            "تاریخچه‌ی «قبلاً منتقل‌شده» پاک بشه؟ دفعه‌ی بعدِ «بررسیِ تطبیق»، همه‌ی عکس‌ها "
+            "(حتی اونایی که قبلاً آپلود شدن) دوباره پیشنهاد داده می‌شن.",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+        from sync_app.core.media_center import save_bulk_import_uploaded
+
+        save_bulk_import_uploaded({})
+        QMessageBox.information(self, "پاک شد", "تاریخچه پاک شد.")
+
     def _run_bulk_upload(self):
         self._bulk_matched_groups = {
             a_code: items
@@ -701,6 +737,7 @@ class MediaCenterTab(QWidget):
                             with open(path, "rb") as f:
                                 data = f.read()
                             ps_upload_product_image(config, pid, data, os.path.basename(path))
+                        mark_bulk_import_uploaded([p for _idx, p in items], a_code)
                         ok_count += 1
                         continue
 
@@ -723,6 +760,7 @@ class MediaCenterTab(QWidget):
                     ok2, _resp, err2 = update_wc_product_images(config, wc_id, image_ids)
                     if not ok2:
                         raise RuntimeError(err2)
+                    mark_bulk_import_uploaded([p for _idx, p in items], a_code)
                     ok_count += 1
                 except Exception as exc:
                     failed.append(f"{a_code} ({exc})")

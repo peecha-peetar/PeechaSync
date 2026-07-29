@@ -689,6 +689,55 @@ def scan_product_image_folder(folder: str) -> dict[str, list[tuple[int, str]]]:
     return groups
 
 
+BULK_IMPORT_UPLOADED_FILE = "bulk_image_import_uploaded.json"
+
+
+def load_bulk_import_uploaded() -> dict:
+    """نگاشتِ مسیرِ مطلقِ فایل -> {a_code, uploaded_at} برایِ عکس‌هایی که قبلاً
+    از «وارد کردنِ گروهی» با موفقیت آپلود شدن — تا دوباره پیشنهادِ تطبیق
+    داده نشن."""
+    import json
+
+    from sync_app.core.sync_utils import site_scoped_path
+
+    path = site_scoped_path(BULK_IMPORT_UPLOADED_FILE)
+    try:
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return data
+    except Exception:
+        pass
+    return {}
+
+
+def save_bulk_import_uploaded(data: dict) -> None:
+    import json
+
+    from sync_app.core.sync_utils import site_scoped_path
+
+    path = site_scoped_path(BULK_IMPORT_UPLOADED_FILE)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def mark_bulk_import_uploaded(paths: list[str], a_code: str = "") -> None:
+    import time
+
+    data = load_bulk_import_uploaded()
+    now = time.time()
+    for p in paths:
+        data[os.path.abspath(p)] = {"a_code": a_code, "uploaded_at": now}
+    save_bulk_import_uploaded(data)
+
+
+def filter_unuploaded_items(items: list[tuple[int, str]]) -> list[tuple[int, str]]:
+    """از یه لیستِ (idx, path)، فقط اونایی که هنوز آپلود نشدن رو برمی‌گردونه."""
+    uploaded = load_bulk_import_uploaded()
+    return [(idx, p) for idx, p in items if os.path.abspath(p) not in uploaded]
+
+
 @dataclass
 class ProductCodeLookup:
     """نگاشت کد اتوماتیک/دستی -> کد اصلی ERP (A_Code) — برای تطبیق نام فایل با کالا."""
