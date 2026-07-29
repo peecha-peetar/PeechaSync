@@ -100,13 +100,14 @@ def _category_id_for_sku(sku, cat_map, slug_map=None):
     return primary_category_id(resolve_product_categories(sku, cat_map, slug_map or {}))
 
 
-def _categories_for_sku(sku, cat_map, slug_map=None):
+def _categories_for_sku(sku, cat_map, slug_map=None, config=None):
     from sync_app.core.product_category_override import get_manual_category_ids
 
     manual_ids = get_manual_category_ids(sku)
     if manual_ids:
         return [{"id": cid} for cid in manual_ids]
-    return resolve_product_categories(sku, cat_map, slug_map or {})
+    subgroups_only = bool((config or {}).get("CATEGORY_SYNC_SUBGROUPS_ONLY", False))
+    return resolve_product_categories(sku, cat_map, slug_map or {}, include_parent=not subgroups_only)
 
 
 def _load_product_woo_map():
@@ -546,7 +547,7 @@ def patch_product_categories(config=None):
 
     def _apply_one(sku):
         check_cancelled()
-        categories = _categories_for_sku(sku, cat_map, slug_map)
+        categories = _categories_for_sku(sku, cat_map, slug_map, config)
         if not categories:
             log.warning(f"⚠️ {explain_category_miss(sku, cat_map, slug_map)}")
             with stats_lock:
@@ -797,7 +798,7 @@ def main():
         description = str(row[8] or "").strip()
 
         cat_id = _category_id_for_sku(sku, cat_map, slug_map)
-        categories = _categories_for_sku(sku, cat_map, slug_map)
+        categories = _categories_for_sku(sku, cat_map, slug_map, raw_config)
 
         p_data = {
             "name": str(row[1]).strip(),

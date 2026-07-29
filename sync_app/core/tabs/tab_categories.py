@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QPushButton,
     QTreeWidget, QTreeWidgetItem, QListWidget, QListWidgetItem,
     QMessageBox, QHBoxLayout, QTextEdit, QSplitter, QLineEdit, QDialog,
-    QDialogButtonBox, QFileDialog, QProgressBar, QToolButton, QComboBox
+    QDialogButtonBox, QFileDialog, QProgressBar, QToolButton, QComboBox, QCheckBox
 )
 from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QObject, QEvent, QPoint, QSize
 from PyQt5.QtGui import QPixmap, QCursor, QGuiApplication
@@ -535,6 +535,19 @@ class CategoryTab(QWidget):
         layout.addWidget(self.lists_splitter, 1)
 
         layout.addWidget(QLabel("✔️ تغییر انتخاب‌ها به‌صورت خودکار ذخیره و در تب محصولات اعمال می‌شود."))
+
+        self.subgroups_only_checkbox = QCheckBox(
+            "فقط زیرگروه‌ها به فروشگاه ارسال شوند (بدونِ ساختِ گروهِ اصلی)"
+        )
+        self.subgroups_only_checkbox.setLayoutDirection(Qt.RightToLeft)
+        self.subgroups_only_checkbox.setToolTip(
+            "فعال: گروه‌هایِ اصلی اصلاً روی فروشگاه ساخته/به‌روزرسانی نمی‌شن و هر محصول فقط "
+            "به زیرگروهِ (سطحِ دو) خودش — به‌صورتِ مسطح و بدونِ والد — متصل می‌شه.\n"
+            "غیرفعال (پیش‌فرض): هم گروهِ اصلی هم زیرگروه ساخته می‌شن و هر دو به محصول متصل می‌شن."
+        )
+        self.subgroups_only_checkbox.setChecked(bool(self.config.get("CATEGORY_SYNC_SUBGROUPS_ONLY", False)))
+        self.subgroups_only_checkbox.toggled.connect(self._on_subgroups_only_toggled)
+        layout.addWidget(self.subgroups_only_checkbox)
 
         self.status_label = QLabel("✓ آماده — برای بارگذاری دکمه بروزرسانی را بزنید")
         self._set_categories_status("ready", self.status_label.text())
@@ -1341,6 +1354,12 @@ class CategoryTab(QWidget):
                 if m_code + s_code == code:
                     return (child.data(0, Qt.UserRole) or "").strip()
         return ""
+
+    def _on_subgroups_only_toggled(self, checked):
+        cfg = load_secure_config(None) or {}
+        cfg["CATEGORY_SYNC_SUBGROUPS_ONLY"] = bool(checked)
+        save_secure_config(cfg)
+        self.config = cfg
 
     # ── بررسی وضعیت دسته‌بندی‌ها در فروشگاه ──────────────────
     def _on_wc_check_clicked(self):
