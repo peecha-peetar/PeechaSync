@@ -25,25 +25,43 @@ REQUEST_TIMEOUT = 12
 DEFAULT_DELAY_SECONDS = 1.5
 CACHE_FILE = "torob_price_cache.json"
 
+# کدهایی که معمولاً یعنی «موقتاً مسدود/محدود شدیم» — با یه تاخیرِ کوتاه
+# یه‌بار دیگه امتحان می‌کنیم، نه اینکه فوری failed برگردونیم.
+_RETRYABLE_HTTP_CODES = frozenset({403, 429, 503})
+_RETRY_BACKOFF_SECONDS = 4.0
+
 _USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
 
 
-def _fetch(url: str) -> str:
+def _fetch_once(url: str) -> str:
     req = urllib.request.Request(
         url,
         headers={
             "User-Agent": _USER_AGENT,
             "Accept-Language": "fa-IR,fa;q=0.9,en;q=0.8",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Referer": "https://torob.com/",
         },
     )
     with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
         raw = resp.read()
         charset = resp.headers.get_content_charset() or "utf-8"
         return raw.decode(charset, errors="replace")
+
+
+def _fetch(url: str) -> str:
+    """یه‌بار retry با تاخیر، مخصوصِ کدهایِ نشون‌دهنده‌یِ محدودیتِ موقت
+    (403/429/503) — چون این‌ها گاهی گذرا هستن، نه لزوماً مسدودشدنِ دائمی."""
+    try:
+        return _fetch_once(url)
+    except urllib.error.HTTPError as e:
+        if e.code in _RETRYABLE_HTTP_CODES:
+            time.sleep(_RETRY_BACKOFF_SECONDS)
+            return _fetch_once(url)
+        raise
 
 
 def _extract_json_ld_entries(html: str) -> list[dict]:
@@ -79,13 +97,45 @@ def _extract_json_ld_entries(html: str) -> list[dict]:
     return entries
 
 
-def _lowest_price_from_offers(offers) -> float | None:
+def _offer_matches_domain(offer: dict, domain: str) -> bool:
+    """اگه پیشنهاد (offer) مالِ فروشنده‌ای باشه که دامنه‌ش با «domain» یکی
+    باشه (مثلاً سایتِ خودِ ما)، True برمی‌گردونه — تا از حساب‌کردن جا بمونه."""
+    if not domain:
+        return False
+    domain = domain.strip().lower()
+    if not domain:
+        return False
+    candidates = [str(offer.get("url") or "")]
+    seller = offer.get("seller")
+    if isinstance(seller, dict):
+        candidates.append(str(seller.get("name") or ""))
+        candidates.append(str(seller.get("url") or ""))
+    return any(domain in c.lower() for c in candidates if c)
+
+
+def _entry_matches_domain(entry: dict, domain: str) -> bool:
+    if not domain:
+        return False
+    domain = domain.strip().lower()
+    if not domain:
+        return False
+    candidates = [str(entry.get("url") or "")]
+    seller = entry.get("seller") or entry.get("brand")
+    if isinstance(seller, dict):
+        candidates.append(str(seller.get("name") or ""))
+        candidates.append(str(seller.get("url") or ""))
+    return any(domain in c.lower() for c in candidates if c)
+
+
+def _lowest_price_from_offers(offers, exclude_domain: str | None = None) -> float | None:
     if offers is None:
         return None
     offers_list = offers if isinstance(offers, list) else [offers]
     prices = []
     for off in offers_list:
         if not isinstance(off, dict):
+            continue
+        if exclude_domain and _offer_matches_domain(off, exclude_domain):
             continue
         for key in ("lowPrice", "price"):
             v = off.get(key)
@@ -109,9 +159,40 @@ def _extract_price_fallback(html: str) -> float | None:
     return float(min(prices)) if prices else None
 
 
-def lookup_lowest_price(product_name: str) -> dict:
+def _lowest_from_html(html: str, page_url: str, exclude_domain: str | None) -> dict:
+    entries = _extract_json_ld_entries(html)
+    best_price = None
+    best_title = None
+    best_url = None
+    for entry in entries:
+        entry_type = entry.get("@type")
+        types = entry_type if isinstance(entry_type, list) else [entry_type]
+        if "Product" not in [t for t in types if t]:
+            continue
+        if exclude_domain and _entry_matches_domain(entry, exclude_domain):
+            continue
+        price = _lowest_price_from_offers(entry.get("offers"), exclude_domain)
+        if price is None:
+            continue
+        if best_price is None or price < best_price:
+            best_price = price
+            best_title = entry.get("name")
+            best_url = entry.get("url") or page_url
+
+    if best_price is None:
+        fallback_price = _extract_price_fallback(html)
+        if fallback_price is not None:
+            return {"found": True, "title": None, "price": fallback_price, "url": page_url, "error": None}
+        return {"found": False, "title": None, "price": None, "url": page_url, "error": "قیمتی در نتایج پیدا نشد"}
+
+    return {"found": True, "title": best_title, "price": best_price, "url": best_url, "error": None}
+
+
+def lookup_lowest_price(product_name: str, exclude_domain: str | None = None) -> dict:
     """برایِ یک نامِ کالا، تویِ ترب جستجو می‌کنه و کمترین قیمتِ پیداشده
-    رو برمی‌گردونه.
+    رو برمی‌گردونه (پیشنهادهایِ فروشنده‌ای که دامنه‌ش با exclude_domain
+    یکی باشه، در محاسبه‌ی کمترین قیمت نادیده گرفته می‌شه — مثلاً برایِ
+    نادیده‌گرفتنِ خودِ سایتِ ما اگه تویِ نتایجِ ترب هم باشیم).
 
     خروجی: {"found": bool, "title": str|None, "price": float|None,
     "url": str, "error": str|None}
@@ -128,43 +209,54 @@ def lookup_lowest_price(product_name: str) -> dict:
     except Exception as e:
         return {"found": False, "title": None, "price": None, "url": url, "error": str(e)}
 
-    entries = _extract_json_ld_entries(html)
-    best_price = None
-    best_title = None
-    best_url = None
-    for entry in entries:
-        entry_type = entry.get("@type")
-        types = entry_type if isinstance(entry_type, list) else [entry_type]
-        if "Product" not in [t for t in types if t]:
-            continue
-        price = _lowest_price_from_offers(entry.get("offers"))
-        if price is None:
-            continue
-        if best_price is None or price < best_price:
-            best_price = price
-            best_title = entry.get("name")
-            best_url = entry.get("url") or url
-
-    if best_price is None:
-        fallback_price = _extract_price_fallback(html)
-        if fallback_price is not None:
-            return {"found": True, "title": None, "price": fallback_price, "url": url, "error": None}
-        return {"found": False, "title": None, "price": None, "url": url, "error": "قیمتی در نتایج پیدا نشد"}
-
-    return {"found": True, "title": best_title, "price": best_price, "url": best_url, "error": None}
+    return _lowest_from_html(html, url, exclude_domain)
 
 
-def lookup_many(items, delay_seconds: float = DEFAULT_DELAY_SECONDS, progress_cb=None, should_stop=None):
-    """items: لیستی از (sku, name). برایِ کاهشِ ریسکِ مسدودشدن توسطِ ترب،
-    بینِ هر درخواست یه مکثِ کوتاه می‌ذاره. should_stop() اگه True برگردونه،
-    اسکن سریع متوقف می‌شه."""
+def lookup_price_from_url(product_url: str, exclude_domain: str | None = None) -> dict:
+    """وقتی کاربر لینکِ دقیقِ صفحه‌ی محصول تویِ ترب رو وارد کرده، به‌جایِ
+    جستجویِ نامی، مستقیم همون صفحه رو می‌خونه — دقیق‌تر از جستجوی خودکاره."""
+    product_url = (product_url or "").strip()
+    if not product_url:
+        return {"found": False, "title": None, "price": None, "url": "", "error": "لینک خالیه"}
+
+    try:
+        html = _fetch(product_url)
+    except urllib.error.HTTPError as e:
+        return {"found": False, "title": None, "price": None, "url": product_url, "error": f"HTTP {e.code}"}
+    except Exception as e:
+        return {"found": False, "title": None, "price": None, "url": product_url, "error": str(e)}
+
+    return _lowest_from_html(html, product_url, exclude_domain)
+
+
+def lookup_product(product_name: str, manual_url: str | None = None, exclude_domain: str | None = None) -> dict:
+    """اگه لینکِ دستیِ ترب برایِ این کالا وارد شده باشه، مستقیم از رویِ
+    همون لینک قیمت رو می‌خونه؛ وگرنه جستجویِ خودکار بر اساسِ نام."""
+    manual_url = (manual_url or "").strip()
+    if manual_url:
+        return lookup_price_from_url(manual_url, exclude_domain)
+    return lookup_lowest_price(product_name, exclude_domain)
+
+
+def lookup_many(
+    items,
+    delay_seconds: float = DEFAULT_DELAY_SECONDS,
+    progress_cb=None,
+    should_stop=None,
+    exclude_domain: str | None = None,
+):
+    """items: لیستی از (sku, name, manual_url). برایِ کاهشِ ریسکِ مسدودشدن
+    توسطِ ترب، بینِ هر درخواست یه مکثِ کوتاه می‌ذاره. should_stop() اگه
+    True برگردونه، اسکن سریع متوقف می‌شه."""
     results = []
     total = len(items)
-    for idx, (sku, name) in enumerate(items):
+    for idx, item in enumerate(items):
+        sku, name = item[0], item[1]
+        manual_url = item[2] if len(item) > 2 else None
         if should_stop and should_stop():
             break
         try:
-            info = lookup_lowest_price(name)
+            info = lookup_product(name, manual_url, exclude_domain)
         except Exception as e:
             info = {"found": False, "title": None, "price": None, "url": None, "error": str(e)}
         results.append((sku, name, info))
@@ -207,3 +299,27 @@ def update_cache_entry(cache: dict, sku: str, name: str, our_price: float, info:
         "error": info.get("error"),
         "checked_at": time.time(),
     }
+
+
+def suggest_new_price(our_price, torob_price, discount_mode: str, discount_value: float):
+    """اگه قیمتِ ترب (بجزِ خودمون) از قیمتِ ما کمتر باشه، قیمتِ پیشنهادیِ
+    جدید رو حساب می‌کنه: یا discount_value درصدِ کمتر از قیمتِ ترب، یا
+    discount_value مبلغِ ثابت کمتر از قیمتِ ترب — تا از رقیب ارزون‌تر بشیم.
+    اگه ترب گرون‌تر/مساوی بود یا نتیجه بی‌معنی (صفر/منفی) بشه، None."""
+    if our_price is None or torob_price is None:
+        return None
+    try:
+        our_price = float(our_price)
+        torob_price = float(torob_price)
+        discount_value = float(discount_value or 0)
+    except (TypeError, ValueError):
+        return None
+    if torob_price >= our_price:
+        return None
+    if discount_mode == "amount":
+        new_price = torob_price - max(0.0, discount_value)
+    else:
+        new_price = torob_price * (1 - max(0.0, discount_value) / 100.0)
+    if new_price <= 0:
+        return None
+    return round(new_price)
