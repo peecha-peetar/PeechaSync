@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import http.cookiejar
 import json
 import re
 import time
@@ -24,10 +25,6 @@ TOROB_SEARCH_URL = "https://torob.com/search/?query={query}"
 REQUEST_TIMEOUT = 12
 DEFAULT_DELAY_SECONDS = 1.5
 CACHE_FILE = "torob_price_cache.json"
-
-# کدهایی که معمولاً یعنی «موقتاً مسدود/محدود شدیم» — با یه تاخیرِ کوتاه
-# یه‌بار دیگه امتحان می‌کنیم، نه اینکه فوری failed برگردونیم.
-_RETRYABLE_HTTP_CODES = frozenset({403, 429, 503})
 _RETRY_BACKOFF_SECONDS = 4.0
 
 _USER_AGENT = (
@@ -35,33 +32,56 @@ _USER_AGENT = (
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
 
+# یه cookie jar/opener مشترک برایِ کلِ اسکن — تا مثلِ یه مرورگرِ واقعی،
+# کوکی‌هایِ سشن بینِ درخواست‌ها حفظ بشن (خیلی از سیستم‌هایِ ضدربات، درخواستِ
+# بدونِ کوکیِ سشن رو مستقیم مسدود می‌کنن، حتی با هدرهایِ درست).
+_cookie_jar = http.cookiejar.CookieJar()
+_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(_cookie_jar))
+_warmed_up = False
+
+
+def _request_headers() -> dict:
+    return {
+        "User-Agent": _USER_AGENT,
+        "Accept-Language": "fa-IR,fa;q=0.9,en;q=0.8",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Referer": "https://torob.com/",
+    }
+
+
+def _ensure_warmed_up() -> None:
+    """یه‌بار (در طولِ اجرایِ برنامه) اول صفحه‌ی اصلیِ ترب رو باز می‌کنه تا
+    کوکیِ سشن گرفته بشه — قبلِ اینکه سراغِ جستجو/صفحه‌ی محصول بریم."""
+    global _warmed_up
+    if _warmed_up:
+        return
+    _warmed_up = True  # حتی اگه ناموفق بود، دوباره امتحان نکنیم (برایِ هر درخواست کند نشه)
+    try:
+        req = urllib.request.Request("https://torob.com/", headers=_request_headers())
+        with _opener.open(req, timeout=REQUEST_TIMEOUT) as resp:
+            resp.read()
+    except Exception:
+        pass
+
 
 def _fetch_once(url: str) -> str:
-    req = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": _USER_AGENT,
-            "Accept-Language": "fa-IR,fa;q=0.9,en;q=0.8",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Referer": "https://torob.com/",
-        },
-    )
-    with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+    _ensure_warmed_up()
+    req = urllib.request.Request(url, headers=_request_headers())
+    with _opener.open(req, timeout=REQUEST_TIMEOUT) as resp:
         raw = resp.read()
         charset = resp.headers.get_content_charset() or "utf-8"
         return raw.decode(charset, errors="replace")
 
 
 def _fetch(url: str) -> str:
-    """یه‌بار retry با تاخیر، مخصوصِ کدهایِ نشون‌دهنده‌یِ محدودیتِ موقت
-    (403/429/503) — چون این‌ها گاهی گذرا هستن، نه لزوماً مسدودشدنِ دائمی."""
+    """یه‌بار retry با تاخیر — چون خطاهایِ محدودیتِ ربات (403/429/490/503
+    و مشابه، که کدشون بسته به تنظیماتِ ضدربات‌ِ سایت فرق می‌کنه) گاهی گذرا
+    هستن، نه لزوماً مسدودشدنِ دائمی."""
     try:
         return _fetch_once(url)
-    except urllib.error.HTTPError as e:
-        if e.code in _RETRYABLE_HTTP_CODES:
-            time.sleep(_RETRY_BACKOFF_SECONDS)
-            return _fetch_once(url)
-        raise
+    except urllib.error.HTTPError:
+        time.sleep(_RETRY_BACKOFF_SECONDS)
+        return _fetch_once(url)
 
 
 def _extract_json_ld_entries(html: str) -> list[dict]:
