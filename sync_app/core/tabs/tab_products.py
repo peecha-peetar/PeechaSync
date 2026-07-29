@@ -1476,24 +1476,71 @@ class ProductTab(QWidget):
         config = load_secure_config(None) or {}
         current_ids = set(get_manual_category_ids(sku) or [])
 
+        site_url = str(config.get("WC_URL") or config.get("PS_URL") or "").strip()
+        if not site_url:
+            QMessageBox.warning(
+                self,
+                "سایت تنظیم نشده",
+                "برای دریافتِ دسته‌بندی‌هایِ زنده‌ی سایت، ابتدا آدرسِ فروشگاه را در تبِ "
+                "تنظیمات وارد و ذخیره کنید.",
+            )
+            return
+
         progress = QMessageBox(self)
         progress.setWindowTitle("در حال دریافت")
-        progress.setText(f"دریافتِ دسته‌بندی‌هایِ زنده‌ی سایت برایِ «{product_name or sku}»...")
-        progress.setStandardButtons(QMessageBox.NoButton)
+        progress.setText(
+            f"دریافتِ دسته‌بندی‌هایِ زنده‌ی سایت برایِ «{product_name or sku}»...\n"
+            "(اگر بیش از حد طول کشید، «لغو» بزنید)"
+        )
+        progress.setStandardButtons(QMessageBox.Cancel)
         progress.show()
         QApplication.processEvents()
+
+        state = {"finished": False}
+
+        watchdog = QTimer(self)
+        watchdog.setSingleShot(True)
+        watchdog.setInterval(45000)
+
+        def _finish_once():
+            if state["finished"]:
+                return False
+            state["finished"] = True
+            watchdog.stop()
+            progress.close()
+            return True
+
+        def _on_cancel():
+            if _finish_once():
+                log.warning("⚠️ دریافتِ دسته‌بندی‌هایِ زنده‌ی سایت توسطِ کاربر لغو شد.")
+
+        progress.rejected.connect(_on_cancel)
+
+        def _on_watchdog_timeout():
+            if _finish_once():
+                QMessageBox.critical(
+                    self,
+                    "پایانِ زمان",
+                    "دریافتِ دسته‌بندی‌هایِ سایت بیش از حدِ انتظار طول کشید.\n"
+                    "اتصال به اینترنت و تنظیماتِ فروشگاه را بررسی کنید.",
+                )
+
+        watchdog.timeout.connect(_on_watchdog_timeout)
+        watchdog.start()
 
         def _worker():
             from sync_app.core.integrations.commerce_provider import fetch_store_slug_map
 
-            return fetch_store_slug_map(config, timeout=30)
+            return fetch_store_slug_map(config, timeout=25)
 
         def _done(slug_map):
-            progress.close()
+            if not _finish_once():
+                return
             self._open_store_category_picker(sku, product_name, slug_map, current_ids)
 
         def _fail(msg):
-            progress.close()
+            if not _finish_once():
+                return
             QMessageBox.critical(self, "خطا", f"دریافتِ دسته‌بندی‌هایِ سایت ناموفق بود:\n{msg}")
 
         run_in_thread(_worker, on_complete=_done, on_error=_fail)

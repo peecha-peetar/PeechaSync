@@ -145,9 +145,16 @@ def fetch_wc_slug_map(config, timeout=60, cancel_check=None) -> dict:
 
     all_cats = []
     page = 1
+    prev_ids = None
+    max_pages = 500  # سقفِ ایمنی — جلویِ حلقه‌ی بی‌پایان رو می‌گیره
     while True:
         if cancel_check:
             cancel_check()
+        if page > max_pages:
+            raise RuntimeError(
+                f"بیش از {max_pages} صفحه دسته‌بندی دریافت شد و صفحه‌بندی هنوز تمام نشده — "
+                "احتمالاً کشِ سایت پارامترِ صفحه‌بندی را نادیده می‌گیرد."
+            )
         batch = wc_rest_json(
             config,
             "GET",
@@ -158,6 +165,17 @@ def fetch_wc_slug_map(config, timeout=60, cancel_check=None) -> dict:
         )
         if not batch:
             break
+        # اگه سایت (مثلاً به‌خاطرِ کشِ WAF/LiteSpeed که پارامترِ page رو
+        # نادیده می‌گیره) دوباره همون آیتم‌هایِ صفحه‌ی قبل رو برگردونه،
+        # حلقه هیچ‌وقت با «len(batch) < 100» تموم نمی‌شه — این حالت رو
+        # زودتر تشخیص می‌دیم تا کاربر با یه اسپینرِ بی‌پایان گیر نکنه.
+        batch_ids = tuple(sorted(c.get("id") for c in batch if c.get("id") is not None))
+        if batch_ids and batch_ids == prev_ids:
+            raise RuntimeError(
+                "صفحه‌بندیِ دسته‌بندی‌هایِ سایت پیش نمی‌رود (همان دسته‌های صفحه‌ی قبل دوباره "
+                "برگشت) — احتمالاً کشِ سایت پارامترِ صفحه‌بندی را نادیده می‌گیرد."
+            )
+        prev_ids = batch_ids
         all_cats.extend(batch)
         if len(batch) < 100:
             break
