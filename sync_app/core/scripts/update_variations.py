@@ -17,6 +17,7 @@ try:
         load_article_variant_prices,
         resolve_article_price,
     )
+    from sync_app.core.category_price_list import resolve_article_price_sc_id
     from sync_app.core.product_selection import is_product_enabled, is_variation_enabled
     from sync_app.core.sql_connection_helper import open_sql_connection
     from sync_app.core.scripts.Poshakproperties import normalize_text
@@ -53,6 +54,7 @@ except ImportError:
         load_article_variant_prices,
         resolve_article_price,
     )
+    from sync_app.core.category_price_list import resolve_article_price_sc_id
     from sync_app.core.product_selection import is_product_enabled, is_variation_enabled
     from sync_app.core.sql_connection_helper import open_sql_connection
     from sync_app.core.scripts.Poshakproperties import normalize_text
@@ -330,7 +332,9 @@ def fetch_variations_from_db(
 ):
     cursor = conn.cursor()
     rows = fetch_variation_rows(cursor, a_code)
-    sc_id = article_price_sc_id(config or {})
+    selected_groups = [str(g).strip() for g in (config or {}).get("SELECTED_SUB_GROUPS", []) if str(g).strip()]
+    matched_group = next((g for g in selected_groups if str(a_code).startswith(g)), "")
+    sc_id = resolve_article_price_sc_id(str(a_code), matched_group, config or {})
     sale_sc_id = article_price_sale_list_id(config or {})
     price_map = load_article_variant_prices(cursor, a_code, sc_id=sc_id)
     sale_map = (

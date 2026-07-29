@@ -33,6 +33,8 @@ from sync_app.core.media_center import (
     generate_profile_outputs,
     detect_low_quality,
     IMAGE_PROFILES_KEY,
+    filter_unuploaded_items,
+    mark_bulk_import_uploaded,
 )
 from sync_app.core.wc_sync_helper import (
     build_wcapi,
@@ -42,6 +44,13 @@ from sync_app.core.wc_sync_helper import (
 )
 from sync_app.core.integrations.commerce_provider import is_prestashop
 
+# کلیدهایِ ذخیره‌یِ آخرین پوشه‌یِ انتخاب‌شده — تا کاربر هر بار مجبور نباشه
+# دوباره مسیر رو انتخاب کنه.
+MEDIA_WEBP_OUTPUT_DIR_KEY = "MEDIA_WEBP_OUTPUT_DIR"
+MEDIA_BULK_IMPORT_DIR_KEY = "MEDIA_BULK_IMPORT_DIR"
+MEDIA_DUP_SCAN_DIR_KEY = "MEDIA_DUP_SCAN_DIR"
+MEDIA_LQ_SCAN_DIR_KEY = "MEDIA_LQ_SCAN_DIR"
+
 
 class MediaCenterTab(QWidget):
     def __init__(self):
@@ -49,8 +58,16 @@ class MediaCenterTab(QWidget):
         self.setLayoutDirection(Qt.RightToLeft)
         self.config = load_secure_config(None) or {}
         self._webp_files: list[str] = []
-        self._dup_folder = ""
+        self._bulk_folder = str(self.config.get(MEDIA_BULK_IMPORT_DIR_KEY) or "")
+        self._dup_folder = str(self.config.get(MEDIA_DUP_SCAN_DIR_KEY) or "")
+        self._lq_folder = str(self.config.get(MEDIA_LQ_SCAN_DIR_KEY) or "")
         self._build_ui()
+
+    def _remember_media_dir(self, key: str, path: str) -> None:
+        cfg = load_secure_config(None) or {}
+        cfg[key] = path
+        save_secure_config(cfg)
+        self.config = cfg
 
     # ------------------------------------------------------------------
     # UI
@@ -285,9 +302,11 @@ class MediaCenterTab(QWidget):
             QMessageBox.information(self, "فایلی انتخاب نشده", "ابتدا تصاویر را انتخاب کنید.")
             return
 
-        out_dir = QFileDialog.getExistingDirectory(self, "پوشه‌ی خروجی را انتخاب کنید")
+        start_dir = str(self.config.get(MEDIA_WEBP_OUTPUT_DIR_KEY) or "")
+        out_dir = QFileDialog.getExistingDirectory(self, "پوشه‌ی خروجی را انتخاب کنید", start_dir)
         if not out_dir:
             return
+        self._remember_media_dir(MEDIA_WEBP_OUTPUT_DIR_KEY, out_dir)
 
         quality = self.quality_spin.value()
         max_w = self.max_w_spin.value() or None
@@ -437,7 +456,7 @@ class MediaCenterTab(QWidget):
         self.bulk_pick_btn = QPushButton("📁 انتخاب پوشه‌ی تصاویر آماده")
         self.bulk_pick_btn.clicked.connect(self._pick_bulk_folder)
         row1.addWidget(self.bulk_pick_btn)
-        self.bulk_folder_label = QLabel("پوشه‌ای انتخاب نشده")
+        self.bulk_folder_label = QLabel(self._bulk_folder or "پوشه‌ای انتخاب نشده")
         self.bulk_folder_label.setStyleSheet("color:#64748b;")
         row1.addWidget(self.bulk_folder_label)
         row1.addStretch()
@@ -489,21 +508,29 @@ class MediaCenterTab(QWidget):
         self.bulk_upload_btn.clicked.connect(self._run_bulk_upload)
         layout.addWidget(self.bulk_upload_btn)
 
+        self.bulk_reset_uploaded_btn = QPushButton("♻️ بازنشانیِ وضعیتِ «قبلاً منتقل‌شده»")
+        self.bulk_reset_uploaded_btn.setToolTip(
+            "عکس‌هایی که یک‌بار با این ابزار آپلود شدن، دوباره پیشنهاد داده نمی‌شن — "
+            "با این دکمه این وضعیت پاک می‌شه و دوباره همه برایِ تطبیق در دسترس می‌شن."
+        )
+        self.bulk_reset_uploaded_btn.clicked.connect(self._reset_bulk_uploaded_history)
+        layout.addWidget(self.bulk_reset_uploaded_btn)
+
         self.bulk_summary_label = QLabel("")
         self.bulk_summary_label.setStyleSheet("font-weight:700;")
         layout.addWidget(self.bulk_summary_label)
 
         group.setLayout(layout)
-        self._bulk_folder = ""
         self._bulk_matched_groups = {}  # a_code -> [(idx, path), ...]
         return group
 
     def _pick_bulk_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, "پوشه‌ی تصاویر آماده")
+        folder = QFileDialog.getExistingDirectory(self, "پوشه‌ی تصاویر آماده", self._bulk_folder or "")
         if not folder:
             return
         self._bulk_folder = folder
         self.bulk_folder_label.setText(folder)
+        self._remember_media_dir(MEDIA_BULK_IMPORT_DIR_KEY, folder)
 
     def _run_bulk_scan(self):
         if not self._bulk_folder or not os.path.isdir(self._bulk_folder):
@@ -532,17 +559,29 @@ class MediaCenterTab(QWidget):
 
             erp_label = erp_provider_label(config)
             results = []
-            for file_code, items in groups.items():
+            for file_code, all_items in groups.items():
                 a_code = lookup.resolve(file_code)
                 if not a_code:
-                    results.append((file_code, "—", "—", "—", len(items), f"❌ کد ناشناس (در {erp_label} نیست)", None))
+                    results.append((file_code, "—", "—", "—", len(all_items), f"❌ کد ناشناس (در {erp_label} نیست)", None))
                     continue
                 name = name_by_code.get(a_code, "—")
                 manual_code = manual_by_code.get(a_code, "") or "—"
                 if a_code not in product_map:
-                    results.append((file_code, name, a_code, manual_code, len(items), "⚠️ این کالا با فروشگاه سینک نشده", None))
+                    results.append((file_code, name, a_code, manual_code, len(all_items), "⚠️ این کالا با فروشگاه سینک نشده", None))
                     continue
-                results.append((file_code, name, a_code, manual_code, len(items), "✅ آماده‌ی آپلود", items))
+
+                # عکس‌هایی که قبلاً از همین ابزار آپلود شدن، دوباره پیشنهاد نمی‌شن
+                items = filter_unuploaded_items(all_items)
+                if not items:
+                    results.append(
+                        (file_code, name, a_code, manual_code, len(all_items), "✅ قبلاً منتقل شده (بدونِ تغییرِ جدید)", None)
+                    )
+                    continue
+                if len(items) < len(all_items):
+                    status = f"✅ آماده‌ی آپلود ({len(items)} عکسِ جدید — {len(all_items) - len(items)} قبلاً منتقل شده)"
+                else:
+                    status = "✅ آماده‌ی آپلود"
+                results.append((file_code, name, a_code, manual_code, len(items), status, items))
             return results
 
         def _done(results):
@@ -625,6 +664,20 @@ class MediaCenterTab(QWidget):
             first_path = items[0][1] if isinstance(items[0], (list, tuple)) else items[0]
             self._show_image_preview_dialog(first_path)
 
+    def _reset_bulk_uploaded_history(self):
+        confirm = QMessageBox.question(
+            self, "بازنشانی",
+            "تاریخچه‌ی «قبلاً منتقل‌شده» پاک بشه؟ دفعه‌ی بعدِ «بررسیِ تطبیق»، همه‌ی عکس‌ها "
+            "(حتی اونایی که قبلاً آپلود شدن) دوباره پیشنهاد داده می‌شن.",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+        from sync_app.core.media_center import save_bulk_import_uploaded
+
+        save_bulk_import_uploaded({})
+        QMessageBox.information(self, "پاک شد", "تاریخچه پاک شد.")
+
     def _run_bulk_upload(self):
         self._bulk_matched_groups = {
             a_code: items
@@ -701,6 +754,7 @@ class MediaCenterTab(QWidget):
                             with open(path, "rb") as f:
                                 data = f.read()
                             ps_upload_product_image(config, pid, data, os.path.basename(path))
+                        mark_bulk_import_uploaded([p for _idx, p in items], a_code)
                         ok_count += 1
                         continue
 
@@ -723,6 +777,7 @@ class MediaCenterTab(QWidget):
                     ok2, _resp, err2 = update_wc_product_images(config, wc_id, image_ids)
                     if not ok2:
                         raise RuntimeError(err2)
+                    mark_bulk_import_uploaded([p for _idx, p in items], a_code)
                     ok_count += 1
                 except Exception as exc:
                     failed.append(f"{a_code} ({exc})")
@@ -757,7 +812,7 @@ class MediaCenterTab(QWidget):
         self.dup_pick_btn = QPushButton("📁 انتخاب پوشه‌ی تصاویر")
         self.dup_pick_btn.clicked.connect(self._pick_dup_folder)
         row.addWidget(self.dup_pick_btn)
-        self.dup_folder_label = QLabel("پوشه‌ای انتخاب نشده")
+        self.dup_folder_label = QLabel(self._dup_folder or "پوشه‌ای انتخاب نشده")
         self.dup_folder_label.setStyleSheet("color:#64748b;")
         row.addWidget(self.dup_folder_label)
         row.addStretch()
@@ -780,11 +835,12 @@ class MediaCenterTab(QWidget):
             self._show_image_preview_dialog(path)
 
     def _pick_dup_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, "پوشه‌ی تصاویر برای اسکن")
+        folder = QFileDialog.getExistingDirectory(self, "پوشه‌ی تصاویر برای اسکن", self._dup_folder or "")
         if not folder:
             return
         self._dup_folder = folder
         self.dup_folder_label.setText(folder)
+        self._remember_media_dir(MEDIA_DUP_SCAN_DIR_KEY, folder)
 
     def _run_duplicate_scan(self):
         if not self._dup_folder or not os.path.isdir(self._dup_folder):
@@ -848,7 +904,7 @@ class MediaCenterTab(QWidget):
         self.lq_pick_btn = QPushButton("📁 انتخاب پوشه‌ی تصاویر")
         self.lq_pick_btn.clicked.connect(self._pick_lq_folder)
         row.addWidget(self.lq_pick_btn)
-        self.lq_folder_label = QLabel("پوشه‌ای انتخاب نشده")
+        self.lq_folder_label = QLabel(self._lq_folder or "پوشه‌ای انتخاب نشده")
         self.lq_folder_label.setStyleSheet("color:#64748b;")
         row.addWidget(self.lq_folder_label)
         row.addStretch()
@@ -865,15 +921,15 @@ class MediaCenterTab(QWidget):
         layout.addWidget(self.lq_table)
 
         group.setLayout(layout)
-        self._lq_folder = ""
         return group
 
     def _pick_lq_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, "پوشه‌ی تصاویر برای بررسی کیفیت")
+        folder = QFileDialog.getExistingDirectory(self, "پوشه‌ی تصاویر برای بررسی کیفیت", self._lq_folder or "")
         if not folder:
             return
         self._lq_folder = folder
         self.lq_folder_label.setText(folder)
+        self._remember_media_dir(MEDIA_LQ_SCAN_DIR_KEY, folder)
 
     def _run_low_quality_scan(self):
         if not self._lq_folder or not os.path.isdir(self._lq_folder):

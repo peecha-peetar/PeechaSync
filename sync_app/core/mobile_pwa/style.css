@@ -1,0 +1,224 @@
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: Tahoma, "Segoe UI", sans-serif;
+  background: linear-gradient(180deg, #1e1b4b 0%, #0f0a1e 100%);
+  color: #e5e7eb;
+  min-height: 100vh;
+  direction: rtl;
+}
+.wrap {
+  max-width: 480px;
+  margin: 0 auto;
+  padding: 18px 16px 40px;
+}
+header {
+  text-align: center;
+  margin-bottom: 18px;
+}
+header h1 {
+  font-size: 20px;
+  margin: 6px 0 2px;
+  color: #fff;
+}
+header p {
+  font-size: 12px;
+  color: #a5b4fc;
+  margin: 0;
+}
+.status {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.status.ok { background: rgba(34,197,94,0.15); color: #4ade80; }
+.status.bad { background: rgba(239,68,68,0.15); color: #f87171; }
+
+.capture-btn {
+  display: block;
+  width: 100%;
+  padding: 18px;
+  font-size: 17px;
+  font-weight: 800;
+  color: #fff;
+  background: linear-gradient(90deg, #4f46e5, #7c3aed);
+  border: none;
+  border-radius: 14px;
+  text-align: center;
+  cursor: pointer;
+}
+.capture-btn:active { opacity: 0.85; }
+
+.queue-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 22px 0 8px;
+}
+.queue-header span { font-size: 13px; color: #c7d2fe; font-weight: 700; }
+.refresh-btn {
+  background: transparent;
+  border: 1px solid rgba(129,140,248,0.5);
+  color: #a5b4fc;
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.queue-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(30,27,75,0.55);
+  border: 1px solid rgba(99,102,241,0.25);
+  border-radius: 12px;
+  padding: 8px;
+  margin-bottom: 8px;
+}
+.thumb {
+  width: 52px;
+  height: 52px;
+  object-fit: cover;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+.info { flex: 1; min-width: 0; }
+.fname {
+  font-size: 13px;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.meta { font-size: 11px; color: #9ca3af; margin-top: 2px; }
+.del-btn {
+  background: rgba(239,68,68,0.15);
+  color: #f87171;
+  border: none;
+  border-radius: 8px;
+  width: 30px;
+  height: 30px;
+  font-size: 14px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+/* --- ویرایشِ عکس: کراپِ مربع + فیلتر --------------------------------- */
+.edit-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 8, 20, 0.92);
+  z-index: 50;
+  align-items: center;
+  justify-content: center;
+  padding: 14px;
+}
+.edit-overlay.open { display: flex; }
+.edit-panel {
+  width: 100%;
+  max-width: 480px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.edit-hint {
+  text-align: center;
+  font-size: 12px;
+  color: #c7d2fe;
+  margin: 0;
+}
+.edit-canvas-wrap {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 16px;
+  overflow: hidden;
+  background: #000;
+  border: 1px solid rgba(129,140,248,0.35);
+}
+#editCanvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+  cursor: grab;
+}
+.edit-zoom-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #c7d2fe;
+  font-size: 14px;
+}
+.edit-zoom-row input[type="range"] {
+  flex: 1;
+}
+.edit-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+}
+.preset-btn {
+  background: rgba(30,27,75,0.7);
+  border: 1px solid rgba(99,102,241,0.35);
+  color: #e5e7eb;
+  border-radius: 999px;
+  padding: 7px 14px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.preset-btn.active {
+  background: linear-gradient(90deg, #4f46e5, #7c3aed);
+  border-color: transparent;
+  color: #fff;
+  font-weight: 700;
+}
+.bg-remove-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(30,27,75,0.55);
+  border: 1px solid rgba(99,102,241,0.3);
+  border-radius: 10px;
+  padding: 9px 12px;
+  font-size: 12px;
+  color: #c7d2fe;
+  cursor: pointer;
+}
+.bg-remove-row input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  accent-color: #7c3aed;
+}
+.edit-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 4px;
+}
+.edit-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.edit-btn {
+  flex: 1;
+  padding: 13px;
+  border-radius: 12px;
+  border: none;
+  font-size: 15px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.edit-btn.cancel {
+  background: rgba(239,68,68,0.15);
+  color: #f87171;
+}
+.edit-btn.confirm {
+  background: linear-gradient(90deg, #16a34a, #22c55e);
+  color: #fff;
+}

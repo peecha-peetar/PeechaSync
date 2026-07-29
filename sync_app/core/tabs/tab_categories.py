@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QPushButton,
     QTreeWidget, QTreeWidgetItem, QListWidget, QListWidgetItem,
     QMessageBox, QHBoxLayout, QTextEdit, QSplitter, QLineEdit, QDialog,
-    QDialogButtonBox, QFileDialog, QProgressBar, QToolButton, QComboBox
+    QDialogButtonBox, QFileDialog, QProgressBar, QToolButton, QComboBox, QCheckBox
 )
 from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QObject, QEvent, QPoint, QSize
 from PyQt5.QtGui import QPixmap, QCursor, QGuiApplication
@@ -107,10 +107,14 @@ def _guess_mime_cat(filename):
 
 class CategoryRowWidget(QWidget):
     """ردیف دسته‌بندی در لیست انتخاب‌شده‌ها — دکمه آپلود + حذف تصویر + نام + حالت موجودی"""
-    def __init__(self, text, on_upload, on_clear=None, on_stock_mode_changed=None, parent=None, show_image_buttons=True):
+    def __init__(
+        self, text, on_upload, on_clear=None, on_stock_mode_changed=None,
+        on_price_list_changed=None, parent=None, show_image_buttons=True,
+    ):
         super().__init__(parent)
         self._on_clear = on_clear
         self._on_stock_mode_changed = on_stock_mode_changed
+        self._on_price_list_changed = on_price_list_changed
         self.setLayoutDirection(Qt.LeftToRight)
         row = QHBoxLayout(self)
         row.setDirection(QHBoxLayout.LeftToRight)
@@ -159,6 +163,28 @@ class CategoryRowWidget(QWidget):
         self.stock_mode_combo.currentIndexChanged.connect(self._handle_stock_mode_changed)
         row.addWidget(self.stock_mode_combo)
 
+        self.price_list_combo = QComboBox()
+        self.price_list_combo.setLayoutDirection(Qt.RightToLeft)
+        self.price_list_combo.setMaximumWidth(150)
+        self.price_list_combo.setFixedHeight(28)
+        self.price_list_combo.setStyleSheet("font-size: 11px; padding: 1px 4px;")
+        if show_image_buttons:
+            self.price_list_combo.setToolTip(
+                "لیستِ قیمتِ این زیر-دسته — اگر «پیش‌فرض» بمونه، از لیستِ قیمتِ "
+                "سراسریِ تنظیمات یا لیستِ قیمتِ دسته‌ی اصلی (بالای همین لیست) "
+                "ارث می‌بره. هر محصول هم می‌تونه جدا تو تب «محصولات» بازنویسی بشه."
+            )
+        else:
+            self.price_list_combo.setToolTip(
+                "لیستِ قیمتِ پیش‌فرض برای همه‌ی زیر-دسته‌های این دسته‌ی اصلی — "
+                "روی هر زیر-دسته که جدا override نشده باشه اعمال می‌شه."
+            )
+        self.price_list_combo.addItem("پیش‌فرض (سراسری)", None)
+        for i in range(10):
+            self.price_list_combo.addItem(f"لیست قیمت {i + 1}", i)
+        self.price_list_combo.currentIndexChanged.connect(self._handle_price_list_changed)
+        row.addWidget(self.price_list_combo)
+
         row.addStretch(1)
 
         self.title = QLabel(text)
@@ -179,6 +205,16 @@ class CategoryRowWidget(QWidget):
     def _handle_stock_mode_changed(self):
         if callable(self._on_stock_mode_changed):
             self._on_stock_mode_changed(self.stock_mode_combo.currentData())
+
+    def set_price_list_index(self, index):
+        self.price_list_combo.blockSignals(True)
+        idx = self.price_list_combo.findData(index)
+        self.price_list_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self.price_list_combo.blockSignals(False)
+
+    def _handle_price_list_changed(self):
+        if callable(self._on_price_list_changed):
+            self._on_price_list_changed(self.price_list_combo.currentData())
 
     def _handle_clear(self):
         if callable(self._on_clear):
@@ -499,6 +535,19 @@ class CategoryTab(QWidget):
         layout.addWidget(self.lists_splitter, 1)
 
         layout.addWidget(QLabel("✔️ تغییر انتخاب‌ها به‌صورت خودکار ذخیره و در تب محصولات اعمال می‌شود."))
+
+        self.subgroups_only_checkbox = QCheckBox(
+            "فقط زیرگروه‌ها به فروشگاه ارسال شوند (بدونِ ساختِ گروهِ اصلی)"
+        )
+        self.subgroups_only_checkbox.setLayoutDirection(Qt.RightToLeft)
+        self.subgroups_only_checkbox.setToolTip(
+            "فعال: گروه‌هایِ اصلی اصلاً روی فروشگاه ساخته/به‌روزرسانی نمی‌شن و هر محصول فقط "
+            "به زیرگروهِ (سطحِ دو) خودش — به‌صورتِ مسطح و بدونِ والد — متصل می‌شه.\n"
+            "غیرفعال (پیش‌فرض): هم گروهِ اصلی هم زیرگروه ساخته می‌شن و هر دو به محصول متصل می‌شن."
+        )
+        self.subgroups_only_checkbox.setChecked(bool(self.config.get("CATEGORY_SYNC_SUBGROUPS_ONLY", False)))
+        self.subgroups_only_checkbox.toggled.connect(self._on_subgroups_only_toggled)
+        layout.addWidget(self.subgroups_only_checkbox)
 
         self.status_label = QLabel("✓ آماده — برای بارگذاری دکمه بروزرسانی را بزنید")
         self._set_categories_status("ready", self.status_label.text())
@@ -1091,6 +1140,7 @@ class CategoryTab(QWidget):
     def _populate_selected_list(self, entries):
         """entries: list of dicts with keys: text, full_code, s_name, m_code, m_name, ..."""
         from sync_app.core.stock_mode import get_category_stock_mode
+        from sync_app.core.category_price_list import get_category_price_list_index
 
         self.selected_list.clear()
         seen_main_codes = set()
@@ -1109,10 +1159,12 @@ class CategoryTab(QWidget):
                     f"🗂 {m_name} (کل دسته)",
                     on_upload=None,
                     on_stock_mode_changed=lambda mode, mc=m_code: self._set_category_stock_mode(mc, mode),
+                    on_price_list_changed=lambda idx, mc=m_code: self._set_category_price_list(mc, idx),
                     parent=self.selected_list,
                     show_image_buttons=False,
                 )
                 header_row.set_stock_mode(get_category_stock_mode(self.config, m_code))
+                header_row.set_price_list_index(get_category_price_list_index(self.config, m_code))
                 header_item.setSizeHint(QSize(0, 40))
                 self.selected_list.addItem(header_item)
                 self.selected_list.setItemWidget(header_item, header_row)
@@ -1128,9 +1180,11 @@ class CategoryTab(QWidget):
                 on_upload=lambda _=False, fc=full_code, it=item: self._upload_image_for_category(fc, it),
                 on_clear=lambda fc=full_code, it=item: self._clear_image_for_category(fc, it),
                 on_stock_mode_changed=lambda mode, fc=full_code: self._set_category_stock_mode(fc, mode),
+                on_price_list_changed=lambda idx, fc=full_code: self._set_category_price_list(fc, idx),
                 parent=self.selected_list,
             )
             row_widget.set_stock_mode(get_category_stock_mode(self.config, full_code))
+            row_widget.set_price_list_index(get_category_price_list_index(self.config, full_code))
             row_widget.set_has_image(self._category_has_local_image(full_code))
             item.setSizeHint(QSize(0, 48))
 
@@ -1143,6 +1197,11 @@ class CategoryTab(QWidget):
     def _set_category_stock_mode(self, group_code, mode):
         from sync_app.core.stock_mode import set_category_stock_mode
         set_category_stock_mode(group_code, mode)
+        self.config = load_secure_config(None) or {}
+
+    def _set_category_price_list(self, group_code, index):
+        from sync_app.core.category_price_list import set_category_price_list_index
+        set_category_price_list_index(group_code, index)
         self.config = load_secure_config(None) or {}
 
     def _format_selection_text(self, main_name, main_code, child_name, child_code):
@@ -1295,6 +1354,12 @@ class CategoryTab(QWidget):
                 if m_code + s_code == code:
                     return (child.data(0, Qt.UserRole) or "").strip()
         return ""
+
+    def _on_subgroups_only_toggled(self, checked):
+        cfg = load_secure_config(None) or {}
+        cfg["CATEGORY_SYNC_SUBGROUPS_ONLY"] = bool(checked)
+        save_secure_config(cfg)
+        self.config = cfg
 
     # ── بررسی وضعیت دسته‌بندی‌ها در فروشگاه ──────────────────
     def _on_wc_check_clicked(self):

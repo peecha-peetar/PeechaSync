@@ -11,7 +11,7 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QPushButton,
     QListWidget, QMessageBox, QHBoxLayout, QTextEdit, QListWidgetItem, QToolTip, QSplitter,
     QLineEdit, QCheckBox, QFileDialog, QProgressBar, QToolButton, QDialog, QDialogButtonBox,
-    QComboBox, QApplication, QTabWidget, QInputDialog, QSpinBox
+    QComboBox, QApplication, QTabWidget, QInputDialog, QSpinBox, QScrollArea
 )
 from PyQt5.QtCore import Qt, QTimer, QPoint, QEvent, QSize
 from PyQt5.QtGui import QColor, QCursor, QFont, QGuiApplication, QPainter, QPixmap
@@ -115,7 +115,7 @@ def _build_template_context(product: dict, fetched: dict, cfg: dict, fallback_li
 
 
 class ProductRowWidget(QWidget):
-    def __init__(self, text, checked, on_toggle, on_upload, on_clear=None, on_seo=None, on_pipeline=None, on_content=None, on_smart_prep=None, on_delete=None, on_stock_mode_changed=None, on_stock_group=None, parent=None):
+    def __init__(self, text, checked, on_toggle, on_upload, on_clear=None, on_seo=None, on_pipeline=None, on_content=None, on_smart_prep=None, on_delete=None, on_stock_mode_changed=None, on_stock_group=None, on_store_category=None, parent=None):
         super().__init__(parent)
         self.setLayoutDirection(Qt.LeftToRight)
         self._on_upload = on_upload
@@ -127,6 +127,7 @@ class ProductRowWidget(QWidget):
         self._on_delete = on_delete
         self._on_stock_mode_changed = on_stock_mode_changed
         self._on_stock_group = on_stock_group
+        self._on_store_category = on_store_category
         row = QHBoxLayout(self)
         row.setDirection(QHBoxLayout.LeftToRight)
         row.setContentsMargins(6, 2, 6, 2)
@@ -199,6 +200,16 @@ class ProductRowWidget(QWidget):
         )
         self.stock_group_button.clicked.connect(self._handle_stock_group)
         row.addWidget(self.stock_group_button)
+
+        self.store_category_button = make_row_button(
+            "🏷️",
+            "دسته‌بندیِ این محصول را مستقیم از دسته‌بندی‌هایِ واقعیِ سایت "
+            "(نه ERP) انتخاب کن — این انتخاب در همگام‌سازی‌هایِ بعدی هم "
+            "حفظ می‌شه، مگه خودتون دوباره تغییرش بدید.",
+            kind="neutral",
+        )
+        self.store_category_button.clicked.connect(self._handle_store_category)
+        row.addWidget(self.store_category_button)
 
         self.clear_button = make_row_button(
             "✕", "حذف تصاویر دستی این محصول", kind="danger", size=24,
@@ -276,6 +287,23 @@ class ProductRowWidget(QWidget):
         base_tooltip = "پیوند این محصول به یه محصول اصلیِ دیگه (موجودی مشترک)"
         self.stock_group_button.setToolTip(f"{base_tooltip}\n{tooltip_extra}" if tooltip_extra else base_tooltip)
 
+    def _handle_store_category(self):
+        if callable(self._on_store_category):
+            self._on_store_category()
+
+    def set_store_category_state(self, manual: bool, tooltip_extra: str = ""):
+        from sync_app.core.row_action_button import row_button_style
+
+        kind = "success" if manual else "neutral"
+        self.store_category_button.setStyleSheet(row_button_style(kind))
+        base_tooltip = (
+            "دسته‌بندیِ این محصول را مستقیم از دسته‌بندی‌هایِ واقعیِ سایت "
+            "(نه ERP) انتخاب کن"
+        )
+        self.store_category_button.setToolTip(
+            f"{base_tooltip}\n{tooltip_extra}" if tooltip_extra else base_tooltip
+        )
+
     def set_wc_image_count(self, count: int):
         current = self.title.text()
         # اگه قبلاً یه‌بار اضافه شده، اول پاکش کن تا تکراری نشه
@@ -344,6 +372,14 @@ class ProductTab(QWidget):
         self._sync_live_timer = QTimer(self)
         self._sync_live_timer.setInterval(400)
         self._sync_live_timer.timeout.connect(self._tick_products_sync_ui)
+
+        self._mobile_inbox_timer = QTimer(self)
+        self._mobile_inbox_timer.setInterval(15000)
+        self._mobile_inbox_timer.timeout.connect(
+            lambda: self._refresh_mobile_inbox_badge() if self.isVisible() else None
+        )
+        self._mobile_inbox_timer.start()
+        self._refresh_mobile_inbox_badge()
 
     def _erp_label(self) -> str:
         from sync_app.core.integrations.erp_provider import erp_provider_label
@@ -551,6 +587,13 @@ class ProductTab(QWidget):
         )
         self.batch_schedule_button.clicked.connect(self._open_batch_schedule_dialog)
 
+        self._mobile_inbox_idle_text = "📥 عکس‌هایِ موبایل"
+        self.mobile_inbox_button = CompactCaptionButton(self._mobile_inbox_idle_text)
+        self.mobile_inbox_button.setToolTip(
+            "عکس‌هایی که از برنامه‌ی همراهِ موبایل دریافت شده — بررسی و پیوست به محصولات"
+        )
+        self.mobile_inbox_button.clicked.connect(self._open_mobile_inbox_dialog)
+
         self._action_ops = TabActionController(self)
         self._action_ops.register(
             "refresh",
@@ -591,7 +634,8 @@ class ProductTab(QWidget):
         layout.addWidget(
             build_responsive_action_row(
                 [self.refresh_button, self.sync_button, self.upload_images_button,
-                 self.check_wc_images_button, self.batch_schedule_button, self.wc_admin_button],
+                 self.check_wc_images_button, self.batch_schedule_button,
+                 self.mobile_inbox_button, self.wc_admin_button],
                 parent=right_panel,
             )
         )
@@ -863,6 +907,7 @@ class ProductTab(QWidget):
                     on_delete=lambda s=sku, it=item, n=product_name: self._delete_product_from_wc(s, it, n),
                     on_stock_mode_changed=lambda mode, s=sku: self._set_product_stock_mode(s, mode),
                     on_stock_group=lambda s=sku, n=product_name: self._manage_stock_group(s, n),
+                    on_store_category=lambda s=sku, n=product_name: self._manage_store_category(s, n),
                     parent=self.product_list,
                 )
                 from sync_app.core.stock_mode import get_product_stock_mode_override
@@ -879,6 +924,15 @@ class ProductTab(QWidget):
                     )
                 else:
                     row_widget.set_stock_group_state("none")
+
+                from sync_app.core.product_category_override import get_manual_category_ids
+                _manual_cat_ids = get_manual_category_ids(sku)
+                if _manual_cat_ids:
+                    row_widget.set_store_category_state(
+                        True, f"idِ دسته‌بندی‌هایِ دستی: {', '.join(str(i) for i in _manual_cat_ids)}"
+                    )
+                else:
+                    row_widget.set_store_category_state(False)
                 manual_paths = self._existing_manual_image_paths(sku)
                 row_widget.set_manual_upload_count(len(manual_paths))
                 item.setData(Qt.UserRole + 7, manual_paths)
@@ -1051,16 +1105,18 @@ class ProductTab(QWidget):
                 row_widget.set_manual_upload_count(len(valid))
         return True
 
-    def _upload_images_for_product(self, sku, item):
-        files, _ = QFileDialog.getOpenFileNames(
-            self,
-            f"انتخاب تصاویر برای محصول {sku}",
-            "",
-            "Images (*.png *.jpg *.jpeg *.webp *.bmp)",
-        )
-        if not files:
-            return
+    def _find_item_by_sku(self, sku):
+        for i in range(self.product_list.count()):
+            item = self.product_list.item(i)
+            if str(item.data(Qt.UserRole) or "") == sku:
+                return item
+        return None
 
+    def _attach_manual_image_file(self, sku, src_path, product_name=""):
+        """کپیِ یک فایلِ تصویر به پوشه‌ی محصول + اجرایِ پایپ‌لاینِ خودکار
+        (اگه فعال باشه) + افزودن به نگاشتِ تصاویرِ دستیِ محصول. اگه ردیفِ
+        محصول تویِ لیستِ فعلاً بارگذاری‌شده باشه، UI هم به‌روز می‌شه.
+        مسیرِ نسبیِ ذخیره‌شده رو برمی‌گردونه."""
         dst_dir = app_path("product_images", sku)
         os.makedirs(dst_dir, exist_ok=True)
 
@@ -1078,7 +1134,6 @@ class ProductTab(QWidget):
 
         # اطلاعاتی که مراحل «حک متن» و «QR کد» بهشون نیاز دارن — کد کالا،
         # نام محصول، و لینک محصول رو سایت (اگه قبلاً به فروشگاه لینک شده باشه).
-        product_name = str(item.data(Qt.UserRole + 4) or "") if item else ""
         product_url = ""
         try:
             wc_id = load_product_woo_map().get(sku)
@@ -1089,52 +1144,70 @@ class ProductTab(QWidget):
             product_url = ""
         product_info = {"a_code": sku, "a_code_c": sku, "name": product_name, "product_url": product_url}
 
+        base = os.path.basename(src_path)
+        timestamp = str(int(time.time() * 1000))
+        dst_name = f"{timestamp}_{base}"
+        dst_abs = os.path.join(dst_dir, dst_name)
+        shutil.copy2(src_path, dst_abs)
+
+        if auto_pipeline:
+            steps = auto_pipeline.get("steps", [])
+            profile_name = auto_pipeline.get("profile", "")
+            profiles = load_image_profiles(config)
+            profile = profiles.get(profile_name) if profile_name else None
+            watermark = load_watermark_settings(config)
+            ai_studio = load_ai_studio_settings(config)
+            result = run_pipeline(
+                dst_abs, steps, out_dir=dst_dir, profile=profile, watermark=watermark,
+                ai_studio=ai_studio,
+                text_engrave=load_text_engrave_settings(config),
+                qr_code=load_qr_code_settings(config),
+                product_info=product_info,
+            )
+            if result.ok:
+                # فایل نهایی پردازش‌شده جای فایل خام می‌شینه
+                final_ext = os.path.splitext(result.dst_path)[1]
+                final_name = f"{timestamp}_{os.path.splitext(base)[0]}{final_ext}"
+                final_abs = os.path.join(dst_dir, final_name)
+                os.replace(result.dst_path, final_abs)
+                if os.path.isfile(dst_abs) and dst_abs != final_abs:
+                    os.remove(dst_abs)
+                dst_name = final_name
+            else:
+                log.warning(f"⚠️ Smart Publish خودکار روی {base} ناموفق بود: {result.error}")
+
+        rel_path = os.path.join("product_images", sku, dst_name).replace("\\", "/")
+
         rel_paths = list(self._existing_manual_image_paths(sku))
-        for src in files:
-            base = os.path.basename(src)
-            timestamp = str(int(time.time() * 1000))
-            dst_name = f"{timestamp}_{base}"
-            dst_abs = os.path.join(dst_dir, dst_name)
-            try:
-                shutil.copy2(src, dst_abs)
-
-                if auto_pipeline:
-                    steps = auto_pipeline.get("steps", [])
-                    profile_name = auto_pipeline.get("profile", "")
-                    profiles = load_image_profiles(config)
-                    profile = profiles.get(profile_name) if profile_name else None
-                    watermark = load_watermark_settings(config)
-                    ai_studio = load_ai_studio_settings(config)
-                    result = run_pipeline(
-                        dst_abs, steps, out_dir=dst_dir, profile=profile, watermark=watermark,
-                        ai_studio=ai_studio,
-                        text_engrave=load_text_engrave_settings(config),
-                        qr_code=load_qr_code_settings(config),
-                        product_info=product_info,
-                    )
-                    if result.ok:
-                        # فایل نهایی پردازش‌شده جای فایل خام می‌شینه
-                        final_ext = os.path.splitext(result.dst_path)[1]
-                        final_name = f"{timestamp}_{os.path.splitext(base)[0]}{final_ext}"
-                        final_abs = os.path.join(dst_dir, final_name)
-                        os.replace(result.dst_path, final_abs)
-                        if os.path.isfile(dst_abs) and dst_abs != final_abs:
-                            os.remove(dst_abs)
-                        dst_name = final_name
-                    else:
-                        log.warning(f"⚠️ Smart Publish خودکار روی {base} ناموفق بود: {result.error}")
-
-                rel_paths.append(os.path.join("product_images", sku, dst_name).replace("\\", "/"))
-            except Exception as exc:
-                QMessageBox.warning(self, "خطا", f"کپی تصویر ناموفق بود: {exc}")
-
+        rel_paths.append(rel_path)
         self._uploaded_images_map[sku] = rel_paths
         self._save_uploaded_images_map()
-        item.setData(Qt.UserRole + 7, rel_paths)
 
-        row_widget = self.product_list.itemWidget(item)
-        if isinstance(row_widget, ProductRowWidget):
-            row_widget.set_manual_upload_count(len(rel_paths))
+        item = self._find_item_by_sku(sku)
+        if item is not None:
+            item.setData(Qt.UserRole + 7, rel_paths)
+            row_widget = self.product_list.itemWidget(item)
+            if isinstance(row_widget, ProductRowWidget):
+                row_widget.set_manual_upload_count(len(rel_paths))
+
+        return rel_path
+
+    def _upload_images_for_product(self, sku, item):
+        files, _ = QFileDialog.getOpenFileNames(
+            self,
+            f"انتخاب تصاویر برای محصول {sku}",
+            "",
+            "Images (*.png *.jpg *.jpeg *.webp *.bmp)",
+        )
+        if not files:
+            return
+
+        product_name = str(item.data(Qt.UserRole + 4) or "") if item else ""
+        for src in files:
+            try:
+                self._attach_manual_image_file(sku, src, product_name)
+            except Exception as exc:
+                QMessageBox.warning(self, "خطا", f"کپی تصویر ناموفق بود: {exc}")
 
     def _clear_images_for_product(self, sku, item):
         """حذف تصاویر دستی محصول از نگاشت و دیسک."""
@@ -1167,6 +1240,192 @@ class ProductTab(QWidget):
         if isinstance(row_widget, ProductRowWidget):
             row_widget.set_manual_upload_count(0)
         self.image_preview.hide()
+
+    # ------------------------------------------------------------------
+    # صندوقِ ورودیِ عکس‌هایِ موبایل — بررسی/پیوستِ عکس‌هایی که برنامه‌ی
+    # همراه رویِ شبکه‌ی محلی به سرورِ محلیِ پیچا فرستاده.
+    # ------------------------------------------------------------------
+    _MOBILE_INBOX_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
+
+    def _list_mobile_inbox_files(self):
+        from sync_app.core import mobile_photo_server
+
+        directory = mobile_photo_server.inbox_dir()
+        try:
+            return directory, sorted(
+                f for f in os.listdir(directory)
+                if f.lower().endswith(self._MOBILE_INBOX_IMAGE_EXTS)
+                and os.path.isfile(os.path.join(directory, f))
+            )
+        except Exception:
+            return directory, []
+
+    def _refresh_mobile_inbox_badge(self):
+        try:
+            _, filenames = self._list_mobile_inbox_files()
+        except Exception:
+            return
+        count = len(filenames)
+        if count > 0:
+            self.mobile_inbox_button.setText(f"{self._mobile_inbox_idle_text} ({count})")
+        else:
+            self.mobile_inbox_button.setText(self._mobile_inbox_idle_text)
+
+    def _guess_sku_for_filename(self, filename, known_skus):
+        stem = os.path.splitext(filename)[0]
+        tokens = [t for t in re.split(r"[^A-Za-z0-9؀-ۿ]+", stem) if t]
+        for t in tokens:
+            if t in known_skus:
+                return t
+        upper_map = {str(s).upper(): s for s in known_skus}
+        for t in tokens:
+            if t.upper() in upper_map:
+                return upper_map[t.upper()]
+        for s in known_skus:
+            if s and s in stem:
+                return s
+        return ""
+
+    def _open_mobile_inbox_dialog(self):
+        directory, filenames = self._list_mobile_inbox_files()
+        if not filenames:
+            QMessageBox.information(
+                self,
+                "خالی",
+                "فعلاً هیچ عکسی از برنامه‌ی همراهِ موبایل دریافت نشده.\n"
+                "اگه تازه از گوشی فرستادید، چند لحظه صبر کنید و دوباره امتحان کنید.",
+            )
+            self._refresh_mobile_inbox_badge()
+            return
+
+        known_skus = {
+            str(self.product_list.item(i).data(Qt.UserRole) or "")
+            for i in range(self.product_list.count())
+        }
+        known_skus.discard("")
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"📥 عکس‌هایِ دریافتی از موبایل ({len(filenames)})")
+        dlg.setLayoutDirection(Qt.RightToLeft)
+        dlg.resize(560, 620)
+        outer = QVBoxLayout(dlg)
+
+        hint = QLabel(
+            "کدِ کالایِ هر عکس از رویِ نامِ فایل حدس زده شده — در صورتِ نیاز اصلاحش "
+            "کنید و «پیوست» بزنید تا به تصاویرِ دستیِ همون محصول اضافه بشه (همون "
+            "مسیرِ «انتقال تصاویر» — با پایپ‌لاینِ خودکار در صورتِ فعال بودن). "
+            "«حذف» فقط از صفِ دریافتی پاک می‌کنه، بدونِ پیوست‌کردن."
+        )
+        hint.setWordWrap(True)
+        outer.addWidget(hint)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll_body = QWidget()
+        rows_layout = QVBoxLayout(scroll_body)
+        rows_layout.setSpacing(8)
+        scroll.setWidget(scroll_body)
+        outer.addWidget(scroll, 1)
+
+        remaining = {"count": len(filenames)}
+
+        def _forget_row(row_widget):
+            row_widget.setParent(None)
+            row_widget.deleteLater()
+            remaining["count"] -= 1
+            dlg.setWindowTitle(f"📥 عکس‌هایِ دریافتی از موبایل ({remaining['count']})")
+            self._refresh_mobile_inbox_badge()
+            if remaining["count"] <= 0:
+                dlg.accept()
+
+        def _do_discard(path, row_widget):
+            confirm = QMessageBox.question(
+                dlg, "حذف",
+                f"عکسِ «{os.path.basename(path)}» بدونِ پیوست‌شدن حذف بشه؟",
+                QMessageBox.Yes | QMessageBox.No,
+            )
+            if confirm != QMessageBox.Yes:
+                return
+            try:
+                os.remove(path)
+            except Exception as exc:
+                QMessageBox.warning(dlg, "خطا", f"حذف ناموفق بود:\n{exc}")
+                return
+            _forget_row(row_widget)
+
+        def _do_attach(path, sku_edit, row_widget):
+            sku = sku_edit.text().strip()
+            if not sku:
+                QMessageBox.warning(dlg, "کدِ کالا خالیه", "لطفاً کدِ کالا رو وارد کنید.")
+                return
+            item = self._find_item_by_sku(sku)
+            product_name = str(item.data(Qt.UserRole + 4) or "") if item is not None else ""
+            try:
+                self._attach_manual_image_file(sku, path, product_name)
+                os.remove(path)
+            except Exception as exc:
+                QMessageBox.warning(dlg, "خطا", f"پیوستِ عکس ناموفق بود:\n{exc}")
+                return
+            _forget_row(row_widget)
+
+        for filename in filenames:
+            full_path = os.path.join(directory, filename)
+            row = QWidget()
+            row.setStyleSheet(
+                "background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px;"
+            )
+            row_layout = QHBoxLayout(row)
+
+            thumb = QLabel()
+            pix = QPixmap(full_path)
+            if not pix.isNull():
+                thumb.setPixmap(
+                    pix.scaled(64, 64, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+                )
+            thumb.setFixedSize(64, 64)
+            thumb.setScaledContents(True)
+            row_layout.addWidget(thumb)
+
+            info_col = QVBoxLayout()
+            fname_label = QLabel(filename)
+            fname_label.setStyleSheet("font-size: 11px; color: #64748b;")
+            fname_label.setWordWrap(True)
+            info_col.addWidget(fname_label)
+
+            sku_row = QHBoxLayout()
+            sku_row.addWidget(QLabel("کدِ کالا:"))
+            sku_edit = QLineEdit(self._guess_sku_for_filename(filename, known_skus))
+            sku_edit.setPlaceholderText("کدِ کالا را وارد کنید...")
+            sku_row.addWidget(sku_edit, 1)
+            info_col.addLayout(sku_row)
+            row_layout.addLayout(info_col, 1)
+
+            attach_btn = QPushButton("✅ پیوست")
+            attach_btn.setStyleSheet(
+                "background: #16a34a; color: white; border-radius: 8px; padding: 6px 12px; font-weight: bold;"
+            )
+            discard_btn = QPushButton("🗑️ حذف")
+            discard_btn.setStyleSheet(
+                "background: #fee2e2; color: #b91c1c; border-radius: 8px; padding: 6px 12px;"
+            )
+            row_layout.addWidget(attach_btn)
+            row_layout.addWidget(discard_btn)
+
+            attach_btn.clicked.connect(
+                lambda _=False, p=full_path, e=sku_edit, r=row: _do_attach(p, e, r)
+            )
+            discard_btn.clicked.connect(lambda _=False, p=full_path, r=row: _do_discard(p, r))
+
+            rows_layout.addWidget(row)
+
+        rows_layout.addStretch(1)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.rejected.connect(dlg.reject)
+        outer.addWidget(buttons)
+
+        dlg.exec_()
+        self._refresh_mobile_inbox_badge()
 
     # ------------------------------------------------------------------
     # سئو: امتیاز واقعی (از روی داده‌ی زنده‌ی سایت) + رفع موارد ناقص
@@ -1206,6 +1465,172 @@ class ProductTab(QWidget):
         else:
             QMessageBox.information(self, "پاک شد", f"محصول {sku} دیگه فرعی هیچ کدی نیست.")
         self.config = load_secure_config(None) or {}
+        self.load_products(manual=False)
+
+    def _manage_store_category(self, sku, product_name=""):
+        """دسته‌بندیِ این محصول رو مستقیم از دسته‌بندی‌هایِ واقعیِ سایت
+        (نه ERP) انتخاب می‌کنه — برایِ سایت‌هایی که از قبل ساختارِ
+        دسته‌بندیِ خودشون رو دارن. لیستِ زنده از خودِ فروشگاه گرفته می‌شه."""
+        from sync_app.core.product_category_override import get_manual_category_ids
+
+        config = load_secure_config(None) or {}
+        current_ids = set(get_manual_category_ids(sku) or [])
+
+        site_url = str(config.get("WC_URL") or config.get("PS_URL") or "").strip()
+        if not site_url:
+            QMessageBox.warning(
+                self,
+                "سایت تنظیم نشده",
+                "برای دریافتِ دسته‌بندی‌هایِ زنده‌ی سایت، ابتدا آدرسِ فروشگاه را در تبِ "
+                "تنظیمات وارد و ذخیره کنید.",
+            )
+            return
+
+        progress = QMessageBox(self)
+        progress.setWindowTitle("در حال دریافت")
+        progress.setText(
+            f"دریافتِ دسته‌بندی‌هایِ زنده‌ی سایت برایِ «{product_name or sku}»...\n"
+            "(اگر بیش از حد طول کشید، «لغو» بزنید)"
+        )
+        progress.setStandardButtons(QMessageBox.Cancel)
+        progress.show()
+        QApplication.processEvents()
+
+        state = {"finished": False}
+
+        watchdog = QTimer(self)
+        watchdog.setSingleShot(True)
+        watchdog.setInterval(45000)
+
+        def _finish_once():
+            if state["finished"]:
+                return False
+            state["finished"] = True
+            watchdog.stop()
+            progress.close()
+            return True
+
+        def _on_cancel():
+            if _finish_once():
+                log.warning("⚠️ دریافتِ دسته‌بندی‌هایِ زنده‌ی سایت توسطِ کاربر لغو شد.")
+
+        progress.rejected.connect(_on_cancel)
+
+        def _on_watchdog_timeout():
+            if _finish_once():
+                QMessageBox.critical(
+                    self,
+                    "پایانِ زمان",
+                    "دریافتِ دسته‌بندی‌هایِ سایت بیش از حدِ انتظار طول کشید.\n"
+                    "اتصال به اینترنت و تنظیماتِ فروشگاه را بررسی کنید.",
+                )
+
+        watchdog.timeout.connect(_on_watchdog_timeout)
+        watchdog.start()
+
+        def _worker():
+            from sync_app.core.integrations.commerce_provider import fetch_store_slug_map
+
+            return fetch_store_slug_map(config, timeout=25)
+
+        def _done(slug_map):
+            if not _finish_once():
+                return
+            self._open_store_category_picker(sku, product_name, slug_map, current_ids)
+
+        def _fail(msg):
+            if not _finish_once():
+                return
+            QMessageBox.critical(self, "خطا", f"دریافتِ دسته‌بندی‌هایِ سایت ناموفق بود:\n{msg}")
+
+        run_in_thread(_worker, on_complete=_done, on_error=_fail)
+
+    def _open_store_category_picker(self, sku, product_name, slug_map, current_ids):
+        cats = sorted((slug_map or {}).values(), key=lambda c: str(c.get("name") or ""))
+        if not cats:
+            QMessageBox.warning(self, "خالی", "هیچ دسته‌بندی‌ای از سایت دریافت نشد.")
+            return
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"دسته‌بندیِ سایت — {product_name or sku}")
+        dlg.setLayoutDirection(Qt.RightToLeft)
+        dlg.resize(420, 480)
+        layout = QVBoxLayout(dlg)
+
+        hint = QLabel(
+            "دسته‌بندیِ(هایِ) واقعیِ سایت رو برایِ این محصول انتخاب کنید. "
+            "این انتخاب رویِ منطقِ خودکارِ (ERP→دسته‌بندی) اولویت داره و در "
+            "همگام‌سازی‌هایِ بعدی هم حفظ می‌شه — تا خودتون دوباره تغییرش بدید."
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        search = QLineEdit()
+        search.setPlaceholderText("جستجویِ نام دسته‌بندی...")
+        layout.addWidget(search)
+
+        list_widget = QListWidget()
+        list_widget.setLayoutDirection(Qt.RightToLeft)
+        for cat in cats:
+            cid = int(cat.get("id") or 0)
+            if not cid:
+                continue
+            name = str(cat.get("name") or f"#{cid}")
+            item = QListWidgetItem(f"{name} ({cid})")
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Checked if cid in current_ids else Qt.Unchecked)
+            item.setData(Qt.UserRole, cid)
+            item.setData(Qt.UserRole + 1, name.lower())
+            list_widget.addItem(item)
+        layout.addWidget(list_widget)
+
+        def _apply_search(text):
+            needle = (text or "").strip().lower()
+            for i in range(list_widget.count()):
+                it = list_widget.item(i)
+                it.setHidden(bool(needle) and needle not in (it.data(Qt.UserRole + 1) or ""))
+
+        search.textChanged.connect(_apply_search)
+
+        btn_row = QHBoxLayout()
+        clear_btn = QPushButton("↩️ بازگشت به حالتِ خودکار")
+        clear_btn.setToolTip("حذفِ کاملِ این override — دوباره از منطقِ خودکارِ ERP→دسته‌بندی استفاده می‌شه")
+        btn_row.addWidget(clear_btn)
+        btn_row.addStretch(1)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btn_row.addWidget(buttons)
+        layout.addLayout(btn_row)
+
+        result = {"action": None}
+
+        def _on_clear():
+            result["action"] = "clear"
+            dlg.accept()
+
+        clear_btn.clicked.connect(_on_clear)
+        buttons.accepted.connect(lambda: (result.__setitem__("action", "save"), dlg.accept()))
+        buttons.rejected.connect(dlg.reject)
+
+        if dlg.exec_() != QDialog.Accepted or result["action"] is None:
+            return
+
+        from sync_app.core.product_category_override import set_manual_category_ids
+
+        if result["action"] == "clear":
+            set_manual_category_ids(sku, None)
+            QMessageBox.information(self, "پاک شد", f"دسته‌بندیِ دستیِ محصول {sku} پاک شد — دوباره خودکار می‌شه.")
+        else:
+            selected_ids = [
+                list_widget.item(i).data(Qt.UserRole)
+                for i in range(list_widget.count())
+                if list_widget.item(i).checkState() == Qt.Checked
+            ]
+            set_manual_category_ids(sku, selected_ids or None)
+            if selected_ids:
+                QMessageBox.information(self, "ثبت شد", f"دسته‌بندیِ دستیِ محصول {sku} ثبت شد.")
+            else:
+                QMessageBox.information(self, "پاک شد", f"دسته‌بندیِ دستیِ محصول {sku} پاک شد — دوباره خودکار می‌شه.")
+
         self.load_products(manual=False)
 
     def _set_product_stock_mode(self, sku, mode):

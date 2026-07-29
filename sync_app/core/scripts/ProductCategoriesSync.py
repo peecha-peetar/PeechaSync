@@ -601,25 +601,41 @@ def main():
         sub_group_where = f" WHERE LTRIM(RTRIM(M_Groupcode)) + LTRIM(RTRIM(S_Groupcode)) IN ({all_sub_codes_str})"
         log.info(f"✔️ فیلتر زیرگروه‌ها: {all_sub_codes_str}")
 
-    query_main_groups = f"""
-        SELECT
-            LTRIM(RTRIM(M_Groupcode)) AS Dejavu_ID,
-            NULL AS Parent_Dejavu_ID,
-            M_GroupName AS Group_Name
-        FROM M_Group
-        {main_group_where}
-    """
+    subgroups_only = bool(config.get("CATEGORY_SYNC_SUBGROUPS_ONLY", False))
 
-    query_sub_groups = f"""
-        SELECT
-            LTRIM(RTRIM(M_Groupcode)) + LTRIM(RTRIM(S_Groupcode)) AS Dejavu_ID,
-            LTRIM(RTRIM(M_Groupcode)) AS Parent_Dejavu_ID,
-            S_GroupName AS Group_Name
-        FROM S_Group
-        {sub_group_where if required_sub_group_codes else main_group_where}
-    """
+    if subgroups_only:
+        # حالتِ «فقط زیرگروه»: گروه‌هایِ اصلی اصلاً ساخته/به‌روزرسانی نمی‌شن
+        # و زیرگروه‌ها بدونِ والد (مسطح) روی فروشگاه می‌رن.
+        query_sub_groups = f"""
+            SELECT
+                LTRIM(RTRIM(M_Groupcode)) + LTRIM(RTRIM(S_Groupcode)) AS Dejavu_ID,
+                NULL AS Parent_Dejavu_ID,
+                S_GroupName AS Group_Name
+            FROM S_Group
+            {sub_group_where if required_sub_group_codes else main_group_where}
+        """
+        SQL_QUERY_CATEGORIES_DYNAMIC = query_sub_groups
+        log.info("🧩 حالتِ «فقط زیرگروه» فعاله — گروه‌هایِ اصلی روی فروشگاه ساخته/به‌روزرسانی نمی‌شن.")
+    else:
+        query_main_groups = f"""
+            SELECT
+                LTRIM(RTRIM(M_Groupcode)) AS Dejavu_ID,
+                NULL AS Parent_Dejavu_ID,
+                M_GroupName AS Group_Name
+            FROM M_Group
+            {main_group_where}
+        """
 
-    SQL_QUERY_CATEGORIES_DYNAMIC = f"{query_main_groups}\nUNION\n{query_sub_groups}"
+        query_sub_groups = f"""
+            SELECT
+                LTRIM(RTRIM(M_Groupcode)) + LTRIM(RTRIM(S_Groupcode)) AS Dejavu_ID,
+                LTRIM(RTRIM(M_Groupcode)) AS Parent_Dejavu_ID,
+                S_GroupName AS Group_Name
+            FROM S_Group
+            {sub_group_where if required_sub_group_codes else main_group_where}
+        """
+
+        SQL_QUERY_CATEGORIES_DYNAMIC = f"{query_main_groups}\nUNION\n{query_sub_groups}"
     log.info("✅ کوئری نهایی SQL برای دسته‌بندی‌ها ساخته شد.")
 
     raw_data = fetch_data_from_sql_server(SQL_CONN_STRING, SQL_QUERY_CATEGORIES_DYNAMIC)

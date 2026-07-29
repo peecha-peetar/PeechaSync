@@ -15,9 +15,12 @@ from sync_app.core.log_panel_ui import LogPanelController, LogActionRail
 from sync_app.core.rtl_item_delegate import RightAlignedCheckableItemDelegate, make_rtl_item
 from sync_app.core.product_selection import is_product_enabled, is_variation_enabled
 from sync_app.core.article_price import (
-    article_price_sc_id,
     load_bulk_article_variant_prices,
     resolve_article_price,
+)
+from sync_app.core.category_price_list import (
+    resolve_article_price_column,
+    resolve_article_price_sc_id,
 )
 from sync_app.core.currency_helper import erp_price_divisor
 from sync_app.core.jalali_log_formatter import format_log_lines_jalali
@@ -594,13 +597,16 @@ class VariationsTab(QWidget):
         cursor = conn.cursor()
         self._variant_code_label = fetch_variant_code_label(conn)
         from sync_app.core.article_price import article_price_sale_list_id
-        sc_id = article_price_sc_id(config)
         sale_sc_id = article_price_sale_list_id(config)
         price_div = erp_price_divisor(config)
-        price_col = (config.get("PRICE_LIST_COLUMN") or "Sel_Price").strip()
         is_toman = bool(config.get("WC_CURRENCY_IS_TOMAN"))
         display_div = price_div * (10.0 if is_toman else 1.0)
 
+        def _matched_group(code: str) -> str:
+            return next((g for g in selected_groups if code.startswith(g)), "")
+
+        # لیستِ قیمت می‌تونه به‌ازای هر زیر-دسته (و حتی هر محصول) فرق کنه —
+        # پس ستونِ Article هم باید per-SKU resolve بشه، نه یه ستونِ سراسری.
         article_prices: dict[str, float] = {}
         cursor.execute(
             "SELECT A_Code, Sel_Price, Sel_Price2, Sel_Price3, Sel_Price4, Sel_Price5 "
@@ -609,6 +615,7 @@ class VariationsTab(QWidget):
         for art_row in cursor.fetchall():
             code = str(art_row[0] or "").strip()
             if code:
+                price_col = resolve_article_price_column(code, _matched_group(code), config)
                 article_prices[code] = resolve_article_price(art_row, price_col)
 
         def _row_sku(r):
@@ -626,16 +633,32 @@ class VariationsTab(QWidget):
             candidate_rows.append(row)
             candidate_skus.add(sku)
 
-        price_cache = load_bulk_article_variant_prices(cursor, sorted(candidate_skus), sc_id=sc_id)
-        if sc_id != 1:
-            missing = [sku for sku in candidate_skus if not price_cache.get(sku)]
-            if missing:
-                fallback = load_bulk_article_variant_prices(cursor, missing, sc_id=1)
-                for code, prices in fallback.items():
-                    price_cache.setdefault(code, {}).update(prices)
+        # همون منطق: لیستِ قیمتِ جدولِ ArticlePrice هم می‌تونه بینِ SKUهای
+        # مختلف (بسته به دسته‌بندی/override‌شون) فرق کنه — پس SKUها رو بر
+        # اساسِ sc_id ِresolve‌شده گروه‌بندی می‌کنیم و برایِ هر گروه یه
+        # کوئریِ bulk جدا می‌زنیم (نه یه sc_id سراسری برایِ همه).
+        skus_by_sc_id: dict[int, list[str]] = {}
+        for sku in candidate_skus:
+            sid = resolve_article_price_sc_id(sku, _matched_group(sku), config)
+            skus_by_sc_id.setdefault(sid, []).append(sku)
 
+        price_cache: dict[str, dict[int, float]] = {}
+        for sid, skus in skus_by_sc_id.items():
+            group_cache = load_bulk_article_variant_prices(cursor, sorted(skus), sc_id=sid)
+            price_cache.update(group_cache)
+            if sid != 1:
+                missing = [sku for sku in skus if not group_cache.get(sku)]
+                if missing:
+                    fallback = load_bulk_article_variant_prices(cursor, missing, sc_id=1)
+                    for code, prices in fallback.items():
+                        price_cache.setdefault(code, {}).update(prices)
+
+        # قبلاً یه چک بود که فقط اگه sale_sc_id با sc_idِ سراسری فرق داشت
+        # کوئری می‌زد؛ حالا که sc_id می‌تونه به‌ازای هر SKU فرق کنه، دیگه
+        # یه sc_idِ سراسریِ واحد برای مقایسه نداریم — همیشه (وقتی فعاله)
+        # کوئری می‌زنیم؛ هزینه‌ش یه bulk query اضافه‌ست، نه چیزِ سنگینی.
         sale_cache: dict[str, dict[int, float]] = {}
-        if sale_sc_id and sale_sc_id != sc_id:
+        if sale_sc_id:
             sale_cache = load_bulk_article_variant_prices(cursor, sorted(candidate_skus), sc_id=sale_sc_id)
 
         rows = []
