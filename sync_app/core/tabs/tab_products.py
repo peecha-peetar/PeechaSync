@@ -852,6 +852,11 @@ class ProductTab(QWidget):
         is_toman = bool(self.config.get("WC_CURRENCY_IS_TOMAN"))
         row_count = 0
         product_map = load_product_woo_map()
+        # این فایل رو یه‌بار برایِ کلِ لیست می‌خونیم، نه هر بار داخلِ حلقه —
+        # وگرنه برایِ هر محصول جداگانه از دیسک خونده و JSON‌پارس می‌شد و
+        # با کاتالوگِ بزرگ باعثِ کندیِ محسوسِ بارگذاریِ لیست می‌شد.
+        from sync_app.core.product_category_override import load_category_overrides
+        category_overrides = load_category_overrides()
 
         try:
             for row in rows or []:
@@ -925,8 +930,7 @@ class ProductTab(QWidget):
                 else:
                     row_widget.set_stock_group_state("none")
 
-                from sync_app.core.product_category_override import get_manual_category_ids
-                _manual_cat_ids = get_manual_category_ids(sku)
+                _manual_cat_ids = category_overrides.get(sku)
                 if _manual_cat_ids:
                     row_widget.set_store_category_state(
                         True, f"idِ دسته‌بندی‌هایِ دستی: {', '.join(str(i) for i in _manual_cat_ids)}"
