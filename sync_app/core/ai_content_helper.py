@@ -33,6 +33,17 @@ class AiContentError(RuntimeError):
     pass
 
 
+def _proxies_dict(proxy_url: str | None) -> dict | None:
+    """گوگل درخواست‌هایِ Gemini API از IPِ ایران رو معمولاً مسدود می‌کنه
+    (تحریم) — بدونِ پراکسی معمولاً با ۴۰۳ (یا سهمیه‌ی صفر) مواجه می‌شید.
+    proxy_url می‌تونه http://, https:// یا socks5:// باشه (برایِ socks5
+    پکیجِ PySocks لازمه، در requirements هست)."""
+    url = (proxy_url or "").strip()
+    if not url:
+        return None
+    return {"http": url, "https": url}
+
+
 def _prompt_for(title: str, extra_instructions: str = "") -> str:
     extra = f"\nنکاتِ اضافه از کاربر: {extra_instructions.strip()}" if extra_instructions.strip() else ""
     return (
@@ -61,6 +72,8 @@ def generate_article(config, title: str, *, extra_instructions: str = "") -> dic
             "Gemini از aistudio.google.com/apikey وارد کنید.",
         }
 
+    proxy_url = str((config or {}).get("AI_PROXY_URL") or "").strip()
+
     body = {
         "contents": [{"parts": [{"text": _prompt_for(title, extra_instructions)}]}],
         "generationConfig": {
@@ -72,15 +85,34 @@ def generate_article(config, title: str, *, extra_instructions: str = "") -> dic
     try:
         resp = requests.post(
             GEMINI_URL, params={"key": api_key}, json=body, timeout=REQUEST_TIMEOUT,
+            proxies=_proxies_dict(proxy_url),
         )
     except Exception as e:
         return {"ok": False, "content_html": "", "excerpt": "", "error": f"اتصال به سرویسِ هوشِ مصنوعی ناموفق بود: {e}"}
 
+    location_hint = (
+        "\n⚠️ گوگل معمولاً درخواست‌هایِ Gemini API رو از IPِ ایران مسدود می‌کنه (به‌خاطرِ تحریم) — "
+        "اگه پراکسی/VPN روشن ندارید، همینه که این خطا رو می‌ده. یه آدرسِ پراکسی (VPNِ محلی یا socks5) "
+        "تویِ تنظیمات > «هوشِ مصنوعی» > «پراکسی» وارد کنید و دوباره امتحان کنید."
+        if not proxy_url else ""
+    )
     if resp.status_code == 400:
         return {"ok": False, "content_html": "", "excerpt": "", "error": "کلیدِ API نامعتبره — دوباره چک کنید."}
     if resp.status_code == 403:
-        return {"ok": False, "content_html": "", "excerpt": "", "error": "کلیدِ API مجوزِ لازم رو نداره (۴۰۳)."}
+        return {
+            "ok": False, "content_html": "", "excerpt": "",
+            "error": f"کلیدِ API مجوزِ لازم رو نداره (۴۰۳).{location_hint}",
+        }
     if resp.status_code == 429:
+        resp_text = getattr(resp, "text", "") or ""
+        quota_zero = '"limit": 0' in resp_text or "limit: 0" in resp_text
+        if quota_zero:
+            return {
+                "ok": False, "content_html": "", "excerpt": "",
+                "error": f"سهمیه‌ی رایگانِ این کلید صفره (۴۲۹) — یا هنوز محدودیتِ جغرافیایی/تحریم فعاله، یا حسابِ "
+                f"Google AI Studio نیاز به تأییدِ بیشتر داره (شماره‌موبایل/پروژه). چک کنید در aistudio.google.com "
+                f"واقعاً «Free tier» فعاله.{location_hint}",
+            }
         return {
             "ok": False, "content_html": "", "excerpt": "",
             "error": "سهمیه‌ی رایگانِ امروز تموم شده (۴۲۹) — کمی بعد دوباره امتحان کنید.",

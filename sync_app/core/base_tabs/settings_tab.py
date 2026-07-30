@@ -1860,18 +1860,24 @@ class SettingsTab(QWidget):
 
         self.ai_api_key_input = PasswordLineEdit(str(self.config.get("AI_API_KEY") or ""))
         self.ai_api_key_input.setPlaceholderText("کلیدِ API رایگانِ Google Gemini")
-        self.ai_api_key_input.setLayoutDirection(Qt.LeftToRight)
-        self.ai_api_key_input.setAlignment(Qt.AlignLeft)
-        self.ai_api_key_input.setMinimumHeight(38)
+        self.ai_proxy_url_input = QLineEdit(str(self.config.get("AI_PROXY_URL") or ""))
+        self.ai_proxy_url_input.setPlaceholderText("مثلاً socks5://127.0.0.1:1080 (اختیاری)")
+        for field in (self.ai_api_key_input, self.ai_proxy_url_input):
+            field.setLayoutDirection(Qt.LeftToRight)
+            field.setAlignment(Qt.AlignLeft)
+            field.setMinimumHeight(38)
 
         ai_help = QLabel(
             "برایِ نوشتنِ خودکارِ مقاله در تبِ «مقالاتِ سایت» لازمه. یه کلیدِ رایگان (بدونِ نیاز به کارتِ بانکی) "
-            "از aistudio.google.com/apikey بسازید و همین‌جا وارد کنید."
+            "از aistudio.google.com/apikey بسازید و همین‌جا وارد کنید.\n"
+            "⚠️ گوگل درخواست‌هایِ Gemini API رو معمولاً از IPِ ایران مسدود می‌کنه (تحریم) — اگه با خطایِ ۴۰۳/سهمیه‌ی صفر "
+            "مواجه شدید، آدرسِ یک پراکسی (VPNِ محلی یا socks5) رو در فیلدِ پراکسی وارد کنید."
         )
         ai_help.setStyleSheet("color:#64748b; font-size:10px;")
         ai_help.setWordWrap(True)
 
         ai_layout.addRow(english_caption("Gemini API Key:"), self.ai_api_key_input)
+        ai_layout.addRow(english_caption("Proxy URL:"), self.ai_proxy_url_input)
         ai_layout.addRow(QLabel(""), ai_help)
         self.ai_group.setLayout(ai_layout)
 
@@ -5114,6 +5120,7 @@ class SettingsTab(QWidget):
                 "BALE_BOT_TOKEN": self.bale_bot_token_input.text().strip(),
                 "BALE_CHAT_ID": self.bale_chat_id_input.text().strip(),
                 "AI_API_KEY": self.ai_api_key_input.text().strip(),
+                "AI_PROXY_URL": self.ai_proxy_url_input.text().strip(),
                 "CONTACT_PHONE": self.contact_phone_input.text().strip(),
                 "SITE_ADDRESS_DISPLAY": self.site_address_display_input.text().strip(),
                 "SOCIAL_INSTAGRAM": self.social_instagram_input.text().strip(),
