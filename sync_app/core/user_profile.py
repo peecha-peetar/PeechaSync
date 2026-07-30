@@ -243,6 +243,30 @@ def initialize_new_profile_config(username: str, password: str) -> dict:
     return load_secure_config_after_profile(log=None) or cfg
 
 
+def read_profile_config_readonly(profile_id: str) -> dict:
+    """کانفیگِ یه پروفایلِ مشخص رو می‌خونه، بدونِ اینکه اون رو پروفایلِ فعال
+    کنه — برایِ پیش‌نمایشِ پیش‌تنظیم‌ها تویِ فرمِ لاگین، قبل از اینکه کاربر
+    واقعاً وارد بشه (رمز عبور هنوز چک نشده)."""
+    from cryptography.fernet import Fernet
+
+    pid = sanitize_profile_id(profile_id)
+    base = profile_dir(pid)
+    key_path = os.path.join(base, PROFILE_KEY_NAME)
+    config_path = os.path.join(base, PROFILE_CONFIG_NAME)
+    if not (os.path.isfile(key_path) and os.path.isfile(config_path)):
+        return {}
+    try:
+        with open(key_path, "rb") as f:
+            key = f.read()
+        with open(config_path, "rb") as f:
+            encrypted = f.read()
+        decrypted = Fernet(key).decrypt(encrypted)
+        cfg = json.loads(decrypted.decode("utf-8"))
+        return cfg if isinstance(cfg, dict) else {}
+    except Exception:
+        return {}
+
+
 def load_secure_config_after_profile(log=None):
     from sync_app.core.secure_config_loader import load_secure_config
     from sync_app.core.wc_site_profiles import ensure_wc_sites

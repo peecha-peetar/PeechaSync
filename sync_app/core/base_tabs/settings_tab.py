@@ -1848,6 +1848,39 @@ class SettingsTab(QWidget):
         bale_layout.addRow(QLabel(""), self.bale_test_button)
         self.bale_group.setLayout(bale_layout)
 
+        # --- هوشِ مصنوعی (تولیدِ خودکارِ متنِ مقاله در تبِ «مقالاتِ سایت») ---
+        self.ai_group = QGroupBox("🤖 هوشِ مصنوعی (تولیدِ خودکارِ متنِ مقاله)")
+        self.ai_group.setLayoutDirection(Qt.LeftToRight)
+        ai_layout = QFormLayout()
+        ai_layout.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        ai_layout.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        ai_layout.setFormAlignment(Qt.AlignTop)
+        ai_layout.setHorizontalSpacing(14)
+        ai_layout.setVerticalSpacing(10)
+
+        self.ai_api_key_input = PasswordLineEdit(str(self.config.get("AI_API_KEY") or ""))
+        self.ai_api_key_input.setPlaceholderText("کلیدِ API رایگانِ Google Gemini")
+        self.ai_proxy_url_input = QLineEdit(str(self.config.get("AI_PROXY_URL") or ""))
+        self.ai_proxy_url_input.setPlaceholderText("مثلاً socks5://127.0.0.1:1080 (اختیاری)")
+        for field in (self.ai_api_key_input, self.ai_proxy_url_input):
+            field.setLayoutDirection(Qt.LeftToRight)
+            field.setAlignment(Qt.AlignLeft)
+            field.setMinimumHeight(38)
+
+        ai_help = QLabel(
+            "برایِ نوشتنِ خودکارِ مقاله در تبِ «مقالاتِ سایت» لازمه. یه کلیدِ رایگان (بدونِ نیاز به کارتِ بانکی) "
+            "از aistudio.google.com/apikey بسازید و همین‌جا وارد کنید.\n"
+            "⚠️ گوگل درخواست‌هایِ Gemini API رو معمولاً از IPِ ایران مسدود می‌کنه (تحریم) — اگه با خطایِ ۴۰۳/سهمیه‌ی صفر "
+            "مواجه شدید، آدرسِ یک پراکسی (VPNِ محلی یا socks5) رو در فیلدِ پراکسی وارد کنید."
+        )
+        ai_help.setStyleSheet("color:#64748b; font-size:10px;")
+        ai_help.setWordWrap(True)
+
+        ai_layout.addRow(english_caption("Gemini API Key:"), self.ai_api_key_input)
+        ai_layout.addRow(english_caption("Proxy URL:"), self.ai_proxy_url_input)
+        ai_layout.addRow(QLabel(""), ai_help)
+        self.ai_group.setLayout(ai_layout)
+
         # --- اطلاعاتِ تماس/برندینگ — برای فیلدهای «تلفن»/«آدرسِ سایت»/
         # شبکه‌های اجتماعی در قالبِ پست (تا یک‌بار وارد بشه و همه‌جا استفاده بشه) ---
         self.brand_group = QGroupBox("اطلاعاتِ تماس و برندینگ (برای قالبِ پست)")
@@ -2229,11 +2262,12 @@ class SettingsTab(QWidget):
             grid.addWidget(self.telegram_group, 3, 0)
             grid.addWidget(self.bale_group, 4, 0)
             grid.addWidget(self.brand_group, 5, 0)
-            grid.addWidget(self.customer_group, 6, 0)
-            grid.addWidget(self.fields_group, 7, 0)
-            grid.addWidget(self.license_group, 8, 0)
-            grid.addWidget(self.monitor_group, 9, 0)
-            grid.addWidget(self.backup_group, 10, 0)
+            grid.addWidget(self.ai_group, 6, 0)
+            grid.addWidget(self.customer_group, 7, 0)
+            grid.addWidget(self.fields_group, 8, 0)
+            grid.addWidget(self.license_group, 9, 0)
+            grid.addWidget(self.monitor_group, 10, 0)
+            grid.addWidget(self.backup_group, 11, 0)
         else:
             grid.addWidget(self.sql_group, 0, 0)
             grid.addWidget(self.app_group, 0, 1)
@@ -2242,10 +2276,11 @@ class SettingsTab(QWidget):
             grid.addWidget(self.telegram_group, 2, 0)
             grid.addWidget(self.bale_group, 2, 1)
             grid.addWidget(self.brand_group, 3, 0, 1, 2)
-            grid.addWidget(self.customer_group, 4, 0)
-            grid.addWidget(self.license_group, 4, 1)
-            grid.addWidget(self.fields_group, 5, 0, 1, 2)
-            grid.addWidget(self.backup_group, 6, 0, 1, 2)
+            grid.addWidget(self.ai_group, 4, 0, 1, 2)
+            grid.addWidget(self.customer_group, 5, 0)
+            grid.addWidget(self.license_group, 5, 1)
+            grid.addWidget(self.fields_group, 6, 0, 1, 2)
+            grid.addWidget(self.backup_group, 7, 0, 1, 2)
             grid.setColumnStretch(0, 1)
             grid.setColumnStretch(1, 1)
 
@@ -5084,6 +5119,8 @@ class SettingsTab(QWidget):
                 "TELEGRAM_PROXY_URL": self.telegram_proxy_url_input.text().strip(),
                 "BALE_BOT_TOKEN": self.bale_bot_token_input.text().strip(),
                 "BALE_CHAT_ID": self.bale_chat_id_input.text().strip(),
+                "AI_API_KEY": self.ai_api_key_input.text().strip(),
+                "AI_PROXY_URL": self.ai_proxy_url_input.text().strip(),
                 "CONTACT_PHONE": self.contact_phone_input.text().strip(),
                 "SITE_ADDRESS_DISPLAY": self.site_address_display_input.text().strip(),
                 "SOCIAL_INSTAGRAM": self.social_instagram_input.text().strip(),

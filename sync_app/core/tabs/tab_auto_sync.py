@@ -265,6 +265,25 @@ class AutoSyncTab(QWidget):
         info_body.setObjectName("autoSyncInfoBody")
         info_body.setWordWrap(True)
         info_layout.addWidget(info_body)
+
+        info_multi_profile = QLabel(
+            "چند فروشگاه/پروفایل دارید؟ تنظیماتِ این تب فقط برای همین پروفایل ذخیره می‌شود. با دکمه‌ی "
+            "زیر، برای همه‌ی پروفایل‌های موجود یک‌جا یک زمان‌بندِ ویندوزِ جداگانه ساخته می‌شود تا "
+            "همگام‌سازیِ خودکارِ هرکدام، مستقل از بقیه و حتی وقتی برنامه باز نیست، اجرا شود. اگر بعداً "
+            "فاصله‌ی زمانی یا ماژول‌های تیک‌خورده را در همین تب عوض کنید، نیازی به فشردنِ دوباره‌ی دکمه "
+            "نیست — فقط برایِ پروفایلِ تازه‌ساخته، یک‌بار دیگر لازم است."
+        )
+        info_multi_profile.setObjectName("autoSyncInfoBody")
+        info_multi_profile.setWordWrap(True)
+        info_layout.addWidget(info_multi_profile)
+
+        multi_profile_row = QHBoxLayout()
+        self.setup_tasks_btn = QPushButton("📅 ثبتِ زمان‌بندِ ویندوز برایِ همه‌ی پروفایل‌ها")
+        self.setup_tasks_btn.setObjectName("autoSyncSetupTasksBtn")
+        self.setup_tasks_btn.setMinimumHeight(36)
+        self.setup_tasks_btn.clicked.connect(self._on_setup_windows_tasks)
+        multi_profile_row.addWidget(self.setup_tasks_btn)
+        info_layout.addLayout(multi_profile_row)
         layout.addWidget(info_card)
 
         jobs_card = QFrame()
@@ -969,6 +988,31 @@ class AutoSyncTab(QWidget):
             self.auto_state_label.setText(f"▶️ اجرای اتوماتیک فعال — هر {interval}")
         else:
             self.auto_state_label.setText("⏹ اجرای اتوماتیک غیرفعال است")
+
+    def _on_setup_windows_tasks(self):
+        from sync_app.core.auto_sync_task_setup import run_setup_script
+        from PyQt5.QtWidgets import QApplication
+
+        self.setup_tasks_btn.setEnabled(False)
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            interval_ms = AUTO_INTERVAL_MS.get(self._current_interval_text(), AUTO_INTERVAL_MS["4 ساعت"])
+            interval_minutes = max(1, interval_ms // 60000)
+            ok, output = run_setup_script(interval_minutes=min(interval_minutes, 15))
+        finally:
+            QApplication.restoreOverrideCursor()
+            self.setup_tasks_btn.setEnabled(True)
+
+        if ok:
+            QMessageBox.information(
+                self,
+                "زمان‌بندِ ویندوز ثبت شد",
+                f"برایِ پروفایل‌هایِ موجود، تسکِ زمان‌بندی‌شده ساخته/به‌روزرسانی شد.\n\n{output}",
+            )
+            self._set_status("success", "✅ زمان‌بندِ ویندوز برایِ همه‌ی پروفایل‌ها ثبت شد")
+        else:
+            QMessageBox.warning(self, "ثبتِ زمان‌بند ناموفق بود", output or "خطایِ نامشخص")
+            self._set_status("error", f"❌ ثبتِ زمان‌بندِ ویندوز ناموفق بود: {output[:120]}")
 
     def save_config(self):
         try:

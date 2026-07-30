@@ -24,6 +24,7 @@ from sync_app.core.tabs.tab_seo_health import SeoHealthTab
 from sync_app.core.tabs.tab_marketing import MarketingTab
 from sync_app.core.tabs.tab_content_calendar import ContentCalendarTab
 from sync_app.core.tabs.tab_peecha_advisor import PeechaAdvisorTab
+from sync_app.core.tabs.tab_articles import ArticlesTab
 
 
 class SmartAssistantHubTab(QWidget):
@@ -44,6 +45,7 @@ class SmartAssistantHubTab(QWidget):
         self.marketing_tab = MarketingTab()
         self.content_calendar_tab = ContentCalendarTab()
         self.peecha_advisor_tab = PeechaAdvisorTab()
+        self.articles_tab = ArticlesTab()
 
         self.sub_tabs.addTab(self.media_center_tab, "🖼️ مرکز رسانه")
         self.sub_tabs.addTab(self.smart_publish_tab, "✨ انتشار هوشمند")
@@ -51,6 +53,7 @@ class SmartAssistantHubTab(QWidget):
         self.sub_tabs.addTab(self.marketing_tab, "📈 مدیریت بازاریابی")
         self.sub_tabs.addTab(self.content_calendar_tab, "📅 تقویم محتوا")
         self.sub_tabs.addTab(self.peecha_advisor_tab, "🧭 مشاور پیچا")
+        self.sub_tabs.addTab(self.articles_tab, "📰 مقالات سایت")
 
         layout.addWidget(self.sub_tabs)
         self.setLayout(layout)
@@ -63,6 +66,7 @@ class SmartAssistantHubTab(QWidget):
             "marketing_tab": self.marketing_tab,
             "content_calendar_tab": self.content_calendar_tab,
             "peecha_advisor_tab": self.peecha_advisor_tab,
+            "articles_tab": self.articles_tab,
         }
 
     def select_sub_tab(self, attr_name: str) -> bool:

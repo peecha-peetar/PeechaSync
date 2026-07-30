@@ -46,6 +46,16 @@ def _bootstrap_win32_dll_paths():
 
 
 if __name__ == "__main__":
+    # اجرایِ بدونِ رابطِ گرافیکی برایِ زمان‌بندِ ویندوز/Task Scheduler — مثلاً
+    # PeechaSync.exe --profile shop-a . قبل از هر importِ PyQt5/ساختِ splash
+    # چک می‌شه تا این مسیر اصلاً نیازی به display نداشته باشه (برایِ
+    # چندین پروفایل/فروشگاهِ مستقل که هرکدوم زمان‌بندِ خودشون رو دارن).
+    if "--profile" in sys.argv or "--all-profiles" in sys.argv:
+        _boot_log("headless auto-sync mode")
+        from sync_app.core.headless_auto_sync_runner import main as _headless_main
+
+        raise SystemExit(_headless_main(sys.argv[1:]))
+
     _boot_log(f"main start exe={sys.executable}")
     _bootstrap_win32_dll_paths()
     try:

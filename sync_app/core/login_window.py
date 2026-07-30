@@ -6,6 +6,7 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QComboBox,
     QPushButton,
     QMessageBox,
     QFrame,
@@ -154,6 +155,30 @@ class LoginWindow(QDialog):
                 border: 1.5px solid #818cf8;
                 background-color: rgba(10, 12, 30, 0.95);
             }
+            QComboBox {
+                background-color: rgba(15, 20, 40, 0.85);
+                border: 1px solid rgba(99, 102, 241, 0.35);
+                border-radius: 10px;
+                padding: 8px 14px;
+                font-size: 13px;
+                color: #e5e7eb;
+                selection-background-color: #4f46e5;
+            }
+            QComboBox:focus {
+                border: 1.5px solid #818cf8;
+                background-color: rgba(10, 12, 30, 0.95);
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 26px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #1a1035;
+                color: #e5e7eb;
+                selection-background-color: #4f46e5;
+                border: 1px solid rgba(99, 102, 241, 0.5);
+                outline: none;
+            }
             QPushButton#loginBtn {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
                     stop:0 #4f46e5, stop:1 #7c3aed);
@@ -268,28 +293,58 @@ class LoginWindow(QDialog):
         card_layout.addWidget(divider)
         card_layout.addSpacing(12)
 
-        # نام کاربری
-        lbl_user = QLabel("\u0646\u0627\u0645 \u06a9\u0627\u0631\u0628\u0631\u06cc")
+        # نام کاربری / پروفایل — کشوی و قابل‌ویرایش:
+        # اگه پروفایل ذخیره‌ای وجود داشته باشه، از فهرست انتخاب می‌شه (هر پروفایل تنظیماتی کاملاً جدا داره)، وگرنه می‌شه یه نامِ جدید همون‌جا تایپ کرد.
+        lbl_user = QLabel("\u0646\u0627\u0645 \u06a9\u0627\u0631\u0628\u0631\u06cc / \u067e\u0631\u0648\u0641\u0627\u06cc\u0644")
         lbl_user.setObjectName("fieldLabel")
         lbl_user.setAlignment(Qt.AlignRight | Qt.AlignAbsolute)
         lbl_user.setStyleSheet("background: transparent; margin: 0; padding: 0;")
         card_layout.addWidget(lbl_user)
         card_layout.addSpacing(5)
 
-        self.username_input = QLineEdit()
-        self.username_input.setPlaceholderText("\u0646\u0627\u0645 \u06a9\u0627\u0631\u0628\u0631\u06cc \u062e\u0648\u062f \u0631\u0627 \u0648\u0627\u0631\u062f \u06a9\u0646\u06cc\u062f")
-        from sync_app.core.user_profile import load_last_profile_id
+        from sync_app.core.user_profile import list_profile_ids, load_last_profile_id
+
+        self.username_input = QComboBox()
+        self.username_input.setEditable(True)
+        self.username_input.setInsertPolicy(QComboBox.NoInsert)
+        self.username_input.lineEdit().setPlaceholderText("\u0646\u0627\u0645 \u06a9\u0627\u0631\u0628\u0631\u06cc \u062e\u0648\u062f \u0631\u0627 \u0648\u0627\u0631\u062f \u06a9\u0646\u06cc\u062f")
+        existing_profiles = list_profile_ids()
+        self.username_input.addItems(existing_profiles)
 
         prefill = (
             load_last_profile_id()
             or (self.config.get("APP_LOGIN_USERNAME") or "").strip()
+            or (existing_profiles[0] if existing_profiles else "")
             or "admin"
         )
-        self.username_input.setText(prefill)
+        idx = self.username_input.findText(prefill)
+        if idx >= 0:
+            self.username_input.setCurrentIndex(idx)
+        else:
+            self.username_input.setCurrentText(prefill)
         self.username_input.setFixedHeight(42)
-        self.username_input.returnPressed.connect(self.try_login)
+        self.username_input.lineEdit().returnPressed.connect(self.try_login)
         card_layout.addWidget(self.username_input)
         card_layout.addSpacing(10)
+
+        # پیش‌تنظیم — اگه پروفایلِ انتخاب‌شده چند پیش‌تنظیمِ ذخیره‌شده (از تبِ
+        # تنظیمات) داشته باشه، اینجا هم قابلِ انتخابه تا همون موقعِ ورود
+        # فعال بشه؛ بدونِ پیش‌تنظیمِ خاص یعنی همون تنظیماتِ فعلیِ پروفایل.
+        lbl_preset = QLabel("پیش‌تنظیم")
+        lbl_preset.setObjectName("fieldLabel")
+        lbl_preset.setAlignment(Qt.AlignRight | Qt.AlignAbsolute)
+        lbl_preset.setStyleSheet("background: transparent; margin: 0; padding: 0;")
+        card_layout.addWidget(lbl_preset)
+        card_layout.addSpacing(5)
+
+        self.preset_input = QComboBox()
+        self.preset_input.setFixedHeight(42)
+        card_layout.addWidget(self.preset_input)
+        card_layout.addSpacing(10)
+
+        self._refresh_preset_options()
+        self.username_input.currentIndexChanged.connect(self._refresh_preset_options)
+        self.username_input.editTextChanged.connect(self._refresh_preset_options)
 
         # رمز عبور
         lbl_pass = QLabel("\u0631\u0645\u0632 \u0639\u0628\u0648\u0631")
@@ -563,7 +618,7 @@ class LoginWindow(QDialog):
 
         from sync_app.core.user_profile import activate_profile, load_secure_config_after_profile
 
-        username = (self.username_input.text() or "").strip() or "admin"
+        username = (self.username_input.currentText() or "").strip() or "admin"
         activate_profile(username)
         probe_config = load_secure_config_after_profile() or self.config
         self._active_config = probe_config
@@ -616,6 +671,25 @@ class LoginWindow(QDialog):
         self.refresh_btn.setEnabled(True)
         self.refresh_btn.setText("بازبینی وضعیت")
 
+    def _refresh_preset_options(self):
+        from sync_app.core.config_presets import ACTIVE_CONFIG_PRESET_ID_KEY, list_presets
+        from sync_app.core.user_profile import read_profile_config_readonly
+
+        username = (self.username_input.currentText() or "").strip()
+        profile_cfg = read_profile_config_readonly(username) if username else {}
+        presets = list_presets(profile_cfg)
+
+        self.preset_input.blockSignals(True)
+        self.preset_input.clear()
+        self.preset_input.addItem("— بدونِ پیش‌تنظیمِ خاص (تنظیماتِ فعلیِ این پروفایل) —", "")
+        for p in presets:
+            self.preset_input.addItem(str(p.get("title") or "بدون عنوان"), str(p.get("id") or ""))
+        active_id = str(profile_cfg.get(ACTIVE_CONFIG_PRESET_ID_KEY) or "")
+        idx = self.preset_input.findData(active_id) if active_id else 0
+        self.preset_input.setCurrentIndex(idx if idx >= 0 else 0)
+        self.preset_input.setEnabled(bool(presets))
+        self.preset_input.blockSignals(False)
+
     def try_login(self):
         from sync_app.core.user_profile import (
             activate_profile,
@@ -624,8 +698,9 @@ class LoginWindow(QDialog):
             save_last_profile_id,
         )
 
-        entered_user = (self.username_input.text() or "").strip()
+        entered_user = (self.username_input.currentText() or "").strip()
         entered_pass = self.password_input.text() or ""
+        selected_preset_id = str(self.preset_input.currentData() or "")
 
         if not entered_user:
             QMessageBox.warning(self, "خطا", "نام کاربری را وارد کنید.")
@@ -642,6 +717,17 @@ class LoginWindow(QDialog):
             if entered_user != expected_user or entered_pass != expected_pass:
                 QMessageBox.warning(self, "خطا", "نام کاربری یا رمز عبور اشتباه است.")
                 return
+
+        if selected_preset_id:
+            from sync_app.core.config_presets import ACTIVE_CONFIG_PRESET_ID_KEY, apply_preset, find_preset, list_presets
+            from sync_app.core.secure_config_loader import save_secure_config
+
+            presets = list_presets(cfg)
+            preset = find_preset(presets, selected_preset_id)
+            if preset is not None:
+                new_cfg = apply_preset(cfg, preset)
+                new_cfg[ACTIVE_CONFIG_PRESET_ID_KEY] = selected_preset_id
+                save_secure_config(new_cfg)
 
         save_last_profile_id(entered_user)
         if callable(self.on_login_success):

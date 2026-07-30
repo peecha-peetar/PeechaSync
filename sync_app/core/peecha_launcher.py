@@ -3408,36 +3408,19 @@ def _present_startup_window(window, label: str) -> None:
 
     window.setWindowModality(Qt.NonModal)
 
-    # پنجره‌های بی‌فریم (مثل فرم ورود) رو نباید با تغییرِ windowFlag بعد از
-    # نمایش، دوباره‌ساخت کرد — روی ویندوز این کار باعث می‌شد handleِ
-    # نیتیوِ پنجره در وسطِ رندر دوباره ساخته بشه و فرم «نصفه باز» بمونه
-    # (گزارشِ تکراریِ کاربر). برای این پنجره‌ها فقط یک بار show/raise/
-    # activate کافیه، بدون بازی با WindowStaysOnTopHint.
-    is_frameless = bool(window.windowFlags() & Qt.FramelessWindowHint)
-
-    if is_frameless:
-        window.show()
-        window.raise_()
-        window.activateWindow()
-        if app is not None:
-            app.processEvents()
-    else:
-        was_on_top = bool(window.windowFlags() & Qt.WindowStaysOnTopHint)
-        if not was_on_top:
-            window.setWindowFlag(Qt.WindowStaysOnTopHint, True)
-
-        window.show()
-        window.raise_()
-        window.activateWindow()
-
-        if app is not None:
-            app.processEvents()
-
-        if not was_on_top:
-            window.setWindowFlag(Qt.WindowStaysOnTopHint, False)
-            window.show()
-            if app is not None:
-                app.processEvents()
+    # هیچ پنجره‌ای — چه بی‌فریم (فرم ورود) چه معمولی (فرمِ اصلی/داشبورد،
+    # فعال‌سازیِ لایسنس) — نباید با تغییرِ windowFlag بعد از نمایش، دوباره‌ساخته
+    # بشه: روی ویندوز این کار باعث می‌شد handleِ نیتیوِ پنجره در وسطِ رندر
+    # دوباره ساخته بشه و پنجره یه لحظه غیب/دوباره ظاهر بشه (چندتا فرم پشت سرِ
+    # هم موقعِ بازشدنِ برنامه باز و بسته می‌شدن). قبلاً این رفتار فقط برای
+    # پنجره‌های بی‌فریم اصلاح شده بود (با toggle کردنِ WindowStaysOnTopHint)؛
+    # حالا برای همه‌ی پنجره‌ها یکسان شده: فقط یک بار show/raise/activate،
+    # بدونِ دست‌زدن به WindowStaysOnTopHint.
+    window.show()
+    window.raise_()
+    window.activateWindow()
+    if app is not None:
+        app.processEvents()
 
     _startup_log.info("%s opened", label)
     if os.environ.get("PEECHA_DEBUG_CONSOLE", "").strip().lower() in ("1", "true", "yes"):

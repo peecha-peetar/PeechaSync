@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QLineEdit, QCheckBox,
     QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox, QAbstractItemView,
 )
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer
 
 from sync_app.core.content_calendar_store import (
     STATUS_CANCELLED,
@@ -38,7 +38,11 @@ class ContentCalendarTab(QWidget):
         self.setLayoutDirection(Qt.RightToLeft)
         self._row_checkboxes = {}  # post_id -> QCheckBox
         self._build_ui()
-        self.refresh()
+        # با تأخیرِ صفر (نه مستقیم تویِ __init__) تا خودِ تب اول رندر بشه،
+        # بعد لیست پر بشه — این تب معمولاً همراهِ چندتا زیرتبِ دیگه یک‌جا
+        # داخلِ «دستیارِ هوشمند» ساخته می‌شه، پس تأخیرِ صفر باعثِ نمی‌شه
+        # کلیکِ اول رویِ اون هاب حس بشه که قفل کرده.
+        QTimer.singleShot(0, self.refresh)
 
     def _build_ui(self):
         outer = QVBoxLayout(self)
@@ -121,8 +125,8 @@ class ContentCalendarTab(QWidget):
         self.table.verticalHeader().setVisible(False)
         outer.addWidget(self.table)
 
-    def _filtered_posts(self) -> list[dict]:
-        posts = load_scheduled_posts()
+    def _filtered_posts(self, posts: list[dict] | None = None) -> list[dict]:
+        posts = load_scheduled_posts() if posts is None else list(posts)
         posts.sort(key=lambda p: str(p.get("scheduled_at") or ""))
 
         platform_f = self.platform_filter.currentData()
@@ -145,8 +149,12 @@ class ContentCalendarTab(QWidget):
     def refresh(self):
         from datetime import datetime
 
-        all_count = len(load_scheduled_posts())
-        posts = self._filtered_posts()
+        # قبلاً اینجا load_scheduled_posts() جدا صدا زده می‌شد و بعد دوباره
+        # داخلِ _filtered_posts() — یعنی فایلِ تقویم دوبار از دیسک خونده و
+        # JSON‌پارس می‌شد. حالا فقط یک‌بار می‌خونیم.
+        all_posts = load_scheduled_posts()
+        all_count = len(all_posts)
+        posts = self._filtered_posts(all_posts)
         self._row_checkboxes = {}
 
         self.table.setRowCount(0)
