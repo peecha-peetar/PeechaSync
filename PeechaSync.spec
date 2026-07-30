@@ -85,6 +85,7 @@ a = Analysis(
         "sync_app.core.auto_sync_scope",
         "sync_app.core.auto_sync_preflight",
         "sync_app.core.headless_auto_sync_runner",
+        "sync_app.core.auto_sync_task_setup",
         "sync_app.core.content_studio_helper",
         "sync_app.core.smart_publish",
 
