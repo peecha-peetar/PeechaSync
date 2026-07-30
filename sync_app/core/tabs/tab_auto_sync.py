@@ -265,6 +265,16 @@ class AutoSyncTab(QWidget):
         info_body.setObjectName("autoSyncInfoBody")
         info_body.setWordWrap(True)
         info_layout.addWidget(info_body)
+
+        info_multi_profile = QLabel(
+            "چند فروشگاه/پروفایل دارید؟ تنظیماتِ این تب فقط برای همین پروفایل ذخیره می‌شود؛ "
+            "برای اینکه همگام‌سازیِ خودکارِ چند پروفایل هم‌زمان و مستقل از هم اجرا شود (حتی "
+            "وقتی برنامه باز نیست)، فایلِ setup-auto-sync-tasks.ps1 (کنارِ برنامه) را یک‌بار اجرا کنید "
+            "تا برایِ هر پروفایل، یک تسکِ زمان‌بندی‌شده‌ی ویندوزِ جداگانه ساخته شود."
+        )
+        info_multi_profile.setObjectName("autoSyncInfoBody")
+        info_multi_profile.setWordWrap(True)
+        info_layout.addWidget(info_multi_profile)
         layout.addWidget(info_card)
 
         jobs_card = QFrame()
