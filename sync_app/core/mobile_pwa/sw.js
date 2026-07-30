@@ -3,7 +3,7 @@
 // کار کنه، صرف‌نظر از وصل بودن به کامپیوتر). درخواست‌هایِ /ping، /upload
 // و /config عمداً کش نمی‌شن — چون همیشه باید تازه باشن.
 
-const CACHE_NAME = "peecha-camera-shell-v6";
+const CACHE_NAME = "peecha-camera-shell-v9";
 const SHELL_FILES = [
   "./",
   "./index.html",
@@ -39,6 +39,7 @@ self.addEventListener("fetch", (event) => {
   // فقط با اولین استفاده‌ی واقعی دانلود می‌شن، ولی بعدِ اولین بار کش می‌شن
   // تا دفعاتِ بعد آفلاین/بدونِ دانلودِ دوباره کار کنن.
   const runtimeCache = url.pathname.includes("/vendor/") || url.pathname.includes("/models/");
+  const isNavigation = event.request.mode === "navigate";
 
   event.respondWith(
     caches.match(event.request).then((cached) => {
@@ -51,7 +52,19 @@ self.addEventListener("fetch", (event) => {
           }
           return resp;
         })
-        .catch(() => cached);
+        .catch(() => {
+          // آفلاین + هیچ کشی دقیقاً هم‌آدرسِ این درخواست نبود. اگه این یه
+          // ناوبریِ صفحه‌ست (نه یه فایلِ فرعی مثلِ عکس/فونت)، به‌جایِ نمایشِ
+          // صفحه‌ی خطایِ خودِ مرورگر، پوسته‌ی اپ (index.html) رو برمی‌گردونیم —
+          // وگرنه هر بار که سیستم‌عامل (مثلاً بعدِ برگشت از دوربینِ گوشی، زیرِ
+          // فشارِ حافظه) صفحه رو دوباره لود می‌کنه، اگه آدرسِ دقیقِ اون
+          // درخواست تویِ کش نباشه (مثلاً یه اسلشِ اضافه/کم)، اپ کاملاً از
+          // دسترس خارج می‌شد، حتی با اینکه پوسته‌ش از قبل کش شده بود.
+          if (isNavigation) {
+            return caches.match("./index.html").then((shell) => shell || cached);
+          }
+          return cached;
+        });
     })
   );
 });

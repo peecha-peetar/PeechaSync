@@ -272,11 +272,27 @@ function withTimeout(promise, ms, message) {
 
 async function getBgSession() {
   if (!bgSessionPromise) {
-    ort.env.wasm.numThreads = 1;
-    ort.env.wasm.proxy = false;
-    bgSessionPromise = ort.InferenceSession.create(BG_MODEL_PATH, {
-      executionProviders: ["wasm"],
-    });
+    // ort-wasm-simd-threaded برای لود شدن (حتی با numThreads=1) به
+    // SharedArrayBuffer نیاز داره که فقط تویِ صفحه‌یِ crossOriginIsolated
+    // در دسترسه. اگه این شرط برقرار نباشه، ort با یه خطایِ داخلیِ نامفهوم
+    // شکست می‌خوره — این‌جا زودتر با یه پیامِ روشن رد می‌کنیم تا کاربر
+    // بدونه مشکل از کش/مرورگره، نه از خودِ عکس یا اتصال.
+    if (typeof SharedArrayBuffer === "undefined" || !window.crossOriginIsolated) {
+      bgSessionPromise = Promise.reject(
+        new Error(
+          (typeof SharedArrayBuffer === "undefined"
+            ? "SharedArrayBuffer در دسترس نیست"
+            : "crossOriginIsolated فعال نشده") +
+            " — این معمولاً یعنی نسخه‌ی کش‌شده‌ی قدیمیِ اپ هنوز رو گوشیه. اپ رو از صفحه‌ی اصلیِ گوشی کامل حذف کن، Safari رو ببند و دوباره از QR کد/آدرس باز کن."
+        )
+      );
+    } else {
+      ort.env.wasm.numThreads = 1;
+      ort.env.wasm.proxy = false;
+      bgSessionPromise = ort.InferenceSession.create(BG_MODEL_PATH, {
+        executionProviders: ["wasm"],
+      });
+    }
   }
   try {
     return await withTimeout(
@@ -564,7 +580,12 @@ function openEditor(file) {
           if (hintEl) hintEl.textContent = HINT_TEXT_PREVIEW;
         } catch (e) {
           confirmBtn.textContent = CONFIRM_TEXT_DEFAULT;
-          window.alert("حذفِ پس‌زمینه ناموفق بود — دوباره امتحان کنید یا تیکش رو بردارید.");
+          console.error("removeBackground failed:", e);
+          const detail = (e && e.message) ? e.message : String(e);
+          window.alert(
+            "حذفِ پس‌زمینه ناموفق بود:\n" + detail +
+              "\n\nدوباره امتحان کنید یا تیکش رو بردارید."
+          );
         } finally {
           cancelBtn.disabled = false;
           confirmBtn.disabled = false;
