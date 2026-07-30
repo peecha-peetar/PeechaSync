@@ -14,8 +14,8 @@ HTTP 403/429) از کار بیفته یا کند بشه. برایِ هر کال�
 from PyQt5.QtCore import Qt, QThread, QUrl, pyqtSignal
 from PyQt5.QtGui import QDesktopServices
 from PyQt5.QtWidgets import (
-    QAbstractItemView, QComboBox, QDoubleSpinBox, QGroupBox, QHBoxLayout,
-    QHeaderView, QLabel, QLineEdit, QMessageBox, QPushButton, QSpinBox,
+    QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QGroupBox, QHBoxLayout,
+    QHeaderView, QLabel, QLineEdit, QMessageBox, QPushButton,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -45,34 +45,49 @@ ALL_CATEGORIES = "— همه‌ی دسته‌ها —"
 class _TorobScanWorker(QThread):
     progress = pyqtSignal(int, int, str)
     row_ready = pyqtSignal(str, str, float, dict)
+    browser_start_failed = pyqtSignal(str)
     finished_all = pyqtSignal()
 
-    def __init__(self, items, delay_seconds, exclude_domain):
+    def __init__(self, items, delay_seconds, exclude_domain, use_browser=False):
         super().__init__()
         self._items = items  # لیستِ (sku, name, our_price, manual_url)
         self._delay_seconds = delay_seconds
         self._exclude_domain = exclude_domain
+        self._use_browser = use_browser
         self._cancelled = False
 
     def cancel(self):
         self._cancelled = True
 
     def run(self):
-        from sync_app.core.torob_price_helper import lookup_product
+        from sync_app.core.torob_price_helper import lookup_product, TorobBrowserSession
         import time
 
-        total = len(self._items)
-        for idx, (sku, name, our_price, manual_url) in enumerate(self._items):
-            if self._cancelled:
-                break
+        session = None
+        if self._use_browser:
             try:
-                info = lookup_product(name, manual_url, self._exclude_domain)
+                session = TorobBrowserSession()
+                session.start()
             except Exception as e:
-                info = {"found": False, "title": None, "price": None, "url": None, "error": str(e)}
-            self.row_ready.emit(sku, name, our_price, info)
-            self.progress.emit(idx + 1, total, sku)
-            if not self._cancelled and idx < total - 1 and self._delay_seconds:
-                time.sleep(self._delay_seconds)
+                self.browser_start_failed.emit(str(e))
+                session = None
+
+        try:
+            total = len(self._items)
+            for idx, (sku, name, our_price, manual_url) in enumerate(self._items):
+                if self._cancelled:
+                    break
+                try:
+                    info = lookup_product(name, manual_url, self._exclude_domain, session)
+                except Exception as e:
+                    info = {"found": False, "title": None, "price": None, "url": None, "error": str(e)}
+                self.row_ready.emit(sku, name, our_price, info)
+                self.progress.emit(idx + 1, total, sku)
+                if not self._cancelled and idx < total - 1 and self._delay_seconds:
+                    time.sleep(self._delay_seconds)
+        finally:
+            if session is not None:
+                session.close()
         self.finished_all.emit()
 
 
@@ -173,6 +188,15 @@ class TorobCompareTab(QWidget):
 
         # ردیفِ اسکن
         scan_row = QHBoxLayout()
+        self.use_browser_checkbox = QCheckBox("🌐 استفاده از مرورگرِ واقعی (پیشنهادی — کندتره ولی از محدودیتِ ضدربات رد می‌شه)")
+        self.use_browser_checkbox.setLayoutDirection(Qt.RightToLeft)
+        self.use_browser_checkbox.toggled.connect(self._save_config_from_ui)
+        scan_row.addWidget(self.use_browser_checkbox)
+
+        self.install_browser_btn = QPushButton("📥 نصبِ مرورگرِ لازم (یک‌بار، ~۱۵۰ مگابایت)")
+        self.install_browser_btn.clicked.connect(self._install_browser)
+        scan_row.addWidget(self.install_browser_btn)
+
         scan_row.addWidget(QLabel("تاخیرِ بینِ درخواست‌ها (ثانیه):"))
         self.delay_spin = QDoubleSpinBox()
         self.delay_spin.setRange(0.5, 10.0)
@@ -229,6 +253,7 @@ class TorobCompareTab(QWidget):
             self.delay_spin.setValue(float(cfg.get("TOROB_SCAN_DELAY_SECONDS") or 1.5))
         except (TypeError, ValueError):
             pass
+        self.use_browser_checkbox.setChecked(bool(cfg.get("TOROB_USE_BROWSER", True)))
 
     def _save_config_from_ui(self):
         cfg = load_secure_config(None) or {}
@@ -236,6 +261,7 @@ class TorobCompareTab(QWidget):
         cfg["TOROB_DISCOUNT_MODE"] = self.discount_mode_combo.currentData()
         cfg["TOROB_DISCOUNT_VALUE"] = self.discount_value_spin.value()
         cfg["TOROB_SCAN_DELAY_SECONDS"] = self.delay_spin.value()
+        cfg["TOROB_USE_BROWSER"] = self.use_browser_checkbox.isChecked()
         save_secure_config(cfg)
 
     def _manual_links(self) -> dict:
@@ -453,14 +479,30 @@ class TorobCompareTab(QWidget):
         self._save_config_from_ui()
         exclude_domain = self.exclude_domain_input.text().strip()
         delay = self.delay_spin.value()
+        use_browser = self.use_browser_checkbox.isChecked()
+
+        if use_browser:
+            from sync_app.core.torob_price_helper import browser_available
+
+            if not browser_available():
+                confirm = QMessageBox.question(
+                    self, "مرورگر نصب نیست",
+                    "برایِ «استفاده از مرورگرِ واقعی»، اول باید یه‌بار Chromium نصب بشه (~۱۵۰ مگابایت).\n"
+                    "الان نصب کنیم؟ (ممکنه چند دقیقه طول بکشه)",
+                    QMessageBox.Yes | QMessageBox.No,
+                )
+                if confirm == QMessageBox.Yes:
+                    self._install_browser()
+                return
 
         self.scan_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.status_label.setText(f"⏳ در حالِ اسکن... 0/{len(items)}")
 
-        self._worker = _TorobScanWorker(items, delay, exclude_domain)
+        self._worker = _TorobScanWorker(items, delay, exclude_domain, use_browser)
         self._worker.progress.connect(self._on_progress)
         self._worker.row_ready.connect(self._on_row_ready)
+        self._worker.browser_start_failed.connect(self._on_browser_start_failed)
         self._worker.finished_all.connect(self._on_scan_finished)
         self._worker.start()
 
@@ -478,11 +520,41 @@ class TorobCompareTab(QWidget):
         update_cache_entry(cache, sku, name, our_price, info)
         save_cache(cache)
 
+    def _on_browser_start_failed(self, error_msg):
+        self.status_label.setText(f"⚠️ راه‌اندازیِ مرورگر ناموفق بود — با درخواستِ ساده ادامه می‌ده: {error_msg[:200]}")
+
     def _on_scan_finished(self):
         self.scan_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.status_label.setText("✅ اسکن تمام شد.")
         self._worker = None
+
+    def _install_browser(self):
+        from sync_app.core.torob_price_helper import install_browser
+
+        self.install_browser_btn.setEnabled(False)
+        self.status_label.setText("⏳ در حالِ نصبِ مرورگر... (ممکنه چند دقیقه طول بکشه)")
+
+        def _worker():
+            return install_browser()
+
+        def _done(result):
+            ok, msg = result
+            self.install_browser_btn.setEnabled(True)
+            if ok:
+                self.status_label.setText("✅ مرورگر نصب شد — می‌تونید اسکن رو دوباره شروع کنید.")
+            else:
+                QMessageBox.warning(self, "نصب ناموفق بود", f"نصبِ مرورگر ناموفق بود:\n{msg}")
+                self.status_label.setText("❌ نصبِ مرورگر ناموفق بود.")
+
+        def _fail(msg):
+            self.install_browser_btn.setEnabled(True)
+            QMessageBox.warning(self, "نصب ناموفق بود", f"نصبِ مرورگر ناموفق بود:\n{msg}")
+            self.status_label.setText("❌ نصبِ مرورگر ناموفق بود.")
+
+        from sync_app.core.threading_helper import run_in_thread
+
+        run_in_thread(_worker, on_complete=_done, on_error=_fail)
 
     # ── نمایشِ نتیجه‌یِ اسکن روی ردیف ──────────────────────────────
     def _apply_scan_result(self, sku, our_price, info):

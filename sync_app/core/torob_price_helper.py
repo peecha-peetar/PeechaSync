@@ -84,6 +84,117 @@ def _fetch(url: str) -> str:
         return _fetch_once(url)
 
 
+def _chromium_launch_kwargs() -> dict:
+    """معمولاً خالیه (Playwright خودش مسیرِ Chromiumِ نصب‌شده رو پیدا
+    می‌کنه). فقط برایِ محیط‌هایِ خاص (مثلاً تست) که مسیرِ باینری رو باید
+    صریح مشخص کرد، از رویِ متغیرِ محیطیِ PEECHA_TOROB_CHROMIUM_PATH."""
+    import os
+
+    path = os.environ.get("PEECHA_TOROB_CHROMIUM_PATH")
+    return {"executable_path": path} if path else {}
+
+
+def browser_available() -> bool:
+    """آیا Playwright + مرورگرِ Chromium‌ش نصب و آماده‌ست؟ (برایِ عبور از
+    محدودیت‌هایِ ضدرباتی که با درخواستِ سادہ‌یِ HTTP رد نمی‌شن — مثلِ
+    HTTP 490 که ترب گاهی برمی‌گردونه.)"""
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return False
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True, **_chromium_launch_kwargs())
+            browser.close()
+        return True
+    except Exception:
+        return False
+
+
+def install_browser(progress_cb=None) -> tuple[bool, str]:
+    """دانلود/نصبِ یک‌بارِ Chromium برایِ Playwright (چند ده مگابایت) —
+    فقط وقتی کاربر صریحاً درخواست کنه (دکمه‌ی «نصبِ مرورگرِ لازم»)."""
+    import subprocess
+    import sys as _sys
+
+    try:
+        proc = subprocess.run(
+            [_sys.executable, "-m", "playwright", "install", "chromium"],
+            capture_output=True, text=True, timeout=600,
+        )
+    except Exception as e:
+        return False, str(e)
+    if proc.returncode != 0:
+        return False, (proc.stderr or proc.stdout or "نصب ناموفق بود")[-2000:]
+    return True, "نصب شد"
+
+
+class TorobBrowserSession:
+    """یه نشستِ مرورگرِ Chromیومِ واقعی که در طولِ یه اسکنِ کامل باز می‌مونه
+    (نه اینکه برایِ هر کالا یه مرورگرِ جدید باز/بسته بشه — که هم کنده هم
+    مشکوک‌تر به‌نظر می‌رسه). صفحاتِ ترب رو با اجرایِ واقعیِ جاوااسکریپت
+    باز می‌کنه — برایِ عبور از چالش‌هایِ ضدرباتی که یه درخواستِ HTTP سادہ
+    (بدونِ اجرایِ صفحه) نمی‌تونه ردشون کنه."""
+
+    def __init__(self):
+        self._pw = None
+        self._browser = None
+        self._context = None
+
+    def start(self) -> None:
+        from playwright.sync_api import sync_playwright
+
+        self._pw = sync_playwright().start()
+        self._browser = self._pw.chromium.launch(headless=True, **_chromium_launch_kwargs())
+        self._context = self._browser.new_context(
+            user_agent=_USER_AGENT,
+            locale="fa-IR",
+            viewport={"width": 1366, "height": 900},
+            extra_http_headers={"Accept-Language": "fa-IR,fa;q=0.9,en;q=0.8"},
+        )
+        # مخفی‌کردنِ نشونه‌یِ بدیهیِ اتوماسیون — خیلی از سیستم‌هایِ ضدربات
+        # با چک‌کردنِ navigator.webdriver تشخیص می‌دن که مرورگر اتوماتیزه‌ست.
+        self._context.add_init_script(
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
+        )
+
+    def fetch(self, url: str) -> str:
+        if self._context is None:
+            raise RuntimeError("TorobBrowserSession شروع نشده — اول start() رو صدا بزنید.")
+        page = self._context.new_page()
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=25000)
+            try:
+                page.wait_for_load_state("networkidle", timeout=8000)
+            except Exception:
+                pass
+            return page.content()
+        finally:
+            page.close()
+
+    def close(self) -> None:
+        for closer in (self._context, self._browser):
+            try:
+                if closer:
+                    closer.close()
+            except Exception:
+                pass
+        try:
+            if self._pw:
+                self._pw.stop()
+        except Exception:
+            pass
+        self._context = None
+        self._browser = None
+        self._pw = None
+
+
+def _fetch_page(url: str, session: "TorobBrowserSession | None" = None) -> str:
+    if session is not None:
+        return session.fetch(url)
+    return _fetch(url)
+
+
 def _extract_json_ld_entries(html: str) -> list[dict]:
     """آیتم‌هایِ schema.org (Product/ItemList/@graph) رو از تگ‌هایِ
     application/ld+json استخراج می‌کنه."""
@@ -208,11 +319,13 @@ def _lowest_from_html(html: str, page_url: str, exclude_domain: str | None) -> d
     return {"found": True, "title": best_title, "price": best_price, "url": best_url, "error": None}
 
 
-def lookup_lowest_price(product_name: str, exclude_domain: str | None = None) -> dict:
+def lookup_lowest_price(product_name: str, exclude_domain: str | None = None, session=None) -> dict:
     """برایِ یک نامِ کالا، تویِ ترب جستجو می‌کنه و کمترین قیمتِ پیداشده
     رو برمی‌گردونه (پیشنهادهایِ فروشنده‌ای که دامنه‌ش با exclude_domain
     یکی باشه، در محاسبه‌ی کمترین قیمت نادیده گرفته می‌شه — مثلاً برایِ
-    نادیده‌گرفتنِ خودِ سایتِ ما اگه تویِ نتایجِ ترب هم باشیم).
+    نادیده‌گرفتنِ خودِ سایتِ ما اگه تویِ نتایجِ ترب هم باشیم). اگه session
+    (یه TorobBrowserSession) داده بشه، به‌جایِ درخواستِ HTTP سادہ، از یه
+    مرورگرِ واقعی برایِ باز کردنِ صفحه استفاده می‌شه.
 
     خروجی: {"found": bool, "title": str|None, "price": float|None,
     "url": str, "error": str|None}
@@ -223,7 +336,7 @@ def lookup_lowest_price(product_name: str, exclude_domain: str | None = None) ->
         return {"found": False, "title": None, "price": None, "url": url, "error": "نامِ کالا خالیه"}
 
     try:
-        html = _fetch(url)
+        html = _fetch_page(url, session)
     except urllib.error.HTTPError as e:
         return {"found": False, "title": None, "price": None, "url": url, "error": f"HTTP {e.code}"}
     except Exception as e:
@@ -232,7 +345,7 @@ def lookup_lowest_price(product_name: str, exclude_domain: str | None = None) ->
     return _lowest_from_html(html, url, exclude_domain)
 
 
-def lookup_price_from_url(product_url: str, exclude_domain: str | None = None) -> dict:
+def lookup_price_from_url(product_url: str, exclude_domain: str | None = None, session=None) -> dict:
     """وقتی کاربر لینکِ دقیقِ صفحه‌ی محصول تویِ ترب رو وارد کرده، به‌جایِ
     جستجویِ نامی، مستقیم همون صفحه رو می‌خونه — دقیق‌تر از جستجوی خودکاره."""
     product_url = (product_url or "").strip()
@@ -240,7 +353,7 @@ def lookup_price_from_url(product_url: str, exclude_domain: str | None = None) -
         return {"found": False, "title": None, "price": None, "url": "", "error": "لینک خالیه"}
 
     try:
-        html = _fetch(product_url)
+        html = _fetch_page(product_url, session)
     except urllib.error.HTTPError as e:
         return {"found": False, "title": None, "price": None, "url": product_url, "error": f"HTTP {e.code}"}
     except Exception as e:
@@ -249,13 +362,13 @@ def lookup_price_from_url(product_url: str, exclude_domain: str | None = None) -
     return _lowest_from_html(html, product_url, exclude_domain)
 
 
-def lookup_product(product_name: str, manual_url: str | None = None, exclude_domain: str | None = None) -> dict:
+def lookup_product(product_name: str, manual_url: str | None = None, exclude_domain: str | None = None, session=None) -> dict:
     """اگه لینکِ دستیِ ترب برایِ این کالا وارد شده باشه، مستقیم از رویِ
     همون لینک قیمت رو می‌خونه؛ وگرنه جستجویِ خودکار بر اساسِ نام."""
     manual_url = (manual_url or "").strip()
     if manual_url:
-        return lookup_price_from_url(manual_url, exclude_domain)
-    return lookup_lowest_price(product_name, exclude_domain)
+        return lookup_price_from_url(manual_url, exclude_domain, session)
+    return lookup_lowest_price(product_name, exclude_domain, session)
 
 
 def lookup_many(
@@ -264,6 +377,7 @@ def lookup_many(
     progress_cb=None,
     should_stop=None,
     exclude_domain: str | None = None,
+    session=None,
 ):
     """items: لیستی از (sku, name, manual_url). برایِ کاهشِ ریسکِ مسدودشدن
     توسطِ ترب، بینِ هر درخواست یه مکثِ کوتاه می‌ذاره. should_stop() اگه
@@ -276,7 +390,7 @@ def lookup_many(
         if should_stop and should_stop():
             break
         try:
-            info = lookup_product(name, manual_url, exclude_domain)
+            info = lookup_product(name, manual_url, exclude_domain, session)
         except Exception as e:
             info = {"found": False, "title": None, "price": None, "url": None, "error": str(e)}
         results.append((sku, name, info))

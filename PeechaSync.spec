@@ -18,6 +18,13 @@ _image_hidden = (
 )
 _image_datas = collect_data_files("pillow_heif") + collect_data_files("arabic_reshaper")
 
+# Playwright (مرورگرِ واقعی برایِ مقایسه‌ی قیمت با ترب) — خودِ باینریِ
+# Chromium بخشی از پکیجِ pip نیست (خیلی حجیمه)، با دکمه‌ی «نصبِ مرورگر»
+# داخلِ برنامه توسطِ خودِ کاربر (playwright install chromium) دانلود
+# می‌شه؛ فقط درایورِ خودِ playwright باید بسته‌بندی بشه.
+_playwright_hidden = collect_submodules("playwright")
+_playwright_datas = collect_data_files("playwright")
+
 a = Analysis(
     ['sync_app/core/peecha_launcher.py'],   # فایل اصلی لانچر
     pathex=[],
@@ -31,7 +38,7 @@ a = Analysis(
         ('sync_app/core/license.json.example', '.'),
         ('sync_app/core/Peecha.gif', '.'),
         ('sync_app/core/mobile_pwa', 'mobile_pwa'),
-    ] + _image_datas,
+    ] + _image_datas + _playwright_datas,
     hiddenimports=[
         # تب‌ها
         "sync_app.core.tabs.tab_home",
@@ -96,7 +103,7 @@ a = Analysis(
         "sync_app.core.scripts.customersync",
         "sync_app.core.scripts.ordersync",
         "sync_app.core.scripts.woocommerce_store_setup",
-    ] + _image_hidden,
+    ] + _image_hidden + _playwright_hidden,
     hooksconfig={},
     runtime_hooks=[],
     excludes=[],
