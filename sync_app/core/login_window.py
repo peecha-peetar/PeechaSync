@@ -722,12 +722,19 @@ class LoginWindow(QDialog):
             from sync_app.core.config_presets import ACTIVE_CONFIG_PRESET_ID_KEY, apply_preset, find_preset, list_presets
             from sync_app.core.secure_config_loader import save_secure_config
 
-            presets = list_presets(cfg)
-            preset = find_preset(presets, selected_preset_id)
-            if preset is not None:
-                new_cfg = apply_preset(cfg, preset)
-                new_cfg[ACTIVE_CONFIG_PRESET_ID_KEY] = selected_preset_id
-                save_secure_config(new_cfg)
+            # اگه پیش‌تنظیمِ انتخاب‌شده همون پیش‌تنظیمی باشه که از قبل فعال بوده
+            # (که چون کمبو پیش‌فرض روی همون می‌مونه، حالتِ عادیِ اکثرِ ورودهاست)،
+            # نباید دوباره اسنپ‌شاتِ ذخیره‌شده‌ش رو روی کانفیگ بریزیم — وگرنه هر
+            # تغییری که با دکمه‌ی سادهٔ «ذخیره» تویِ تبِ تنظیمات ذخیره شده (و هنوز
+            # داخلِ خودِ پیش‌تنظیم آپدیت نشده) با اسنپ‌شاتِ قدیمی پاک می‌شه.
+            already_active_id = str(cfg.get(ACTIVE_CONFIG_PRESET_ID_KEY) or "")
+            if selected_preset_id != already_active_id:
+                presets = list_presets(cfg)
+                preset = find_preset(presets, selected_preset_id)
+                if preset is not None:
+                    new_cfg = apply_preset(cfg, preset)
+                    new_cfg[ACTIVE_CONFIG_PRESET_ID_KEY] = selected_preset_id
+                    save_secure_config(new_cfg)
 
         save_last_profile_id(entered_user)
         if callable(self.on_login_success):
