@@ -6,13 +6,15 @@ from __future__ import annotations
 
 import re
 
-from sync_app.core.seo_helper import SeoCheck, SeoResult, _clean
+from sync_app.core.seo_helper import SeoCheck, SeoResult, _STOPWORDS, _clean
 
 MIN_TITLE_LEN = 20
 MAX_TITLE_LEN = 70
 MIN_EXCERPT_LEN = 50
 MAX_EXCERPT_LEN = 160
 MIN_WORD_COUNT = 300
+MAX_PARAGRAPH_LEN = 700
+FOCUS_KEYWORD_WINDOW_WORDS = 60
 
 
 def _word_count(html: str) -> int:
@@ -35,6 +37,38 @@ def _images_without_alt(html: str) -> int:
     return missing
 
 
+def _plain_text(html: str) -> str:
+    text = re.sub(r"<[^>]+>", " ", html or "")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _focus_keyword(title: str) -> str:
+    """طولانی‌ترین کلمه‌ی معنادار (غیرِ حرفِ‌اضافه) تویِ عنوان — به‌عنوانِ
+    کلمه‌ی کلیدیِ محتمل برایِ چک‌کردنِ حضورش تویِ متن."""
+    words = [w.strip(".,،؛:!؟\"'()") for w in (title or "").split()]
+    candidates = [w for w in words if w and w not in _STOPWORDS and len(w) > 2]
+    if not candidates:
+        return ""
+    return max(candidates, key=len)
+
+
+def _keyword_near_start(content: str, keyword: str, *, window_words: int = FOCUS_KEYWORD_WINDOW_WORDS) -> bool:
+    if not keyword:
+        return True
+    plain = _plain_text(content)
+    first_words = " ".join(plain.split()[:window_words])
+    return keyword in first_words
+
+
+def _long_paragraph_count(html: str, *, limit: int = MAX_PARAGRAPH_LEN) -> int:
+    paragraphs = re.findall(r"<p[^>]*>(.*?)</p>", html or "", re.IGNORECASE | re.DOTALL)
+    return sum(1 for p in paragraphs if len(_plain_text(p)) > limit)
+
+
+def _has_link(html: str) -> bool:
+    return bool(re.search(r"<a\b[^>]*href\s*=", html or "", re.IGNORECASE))
+
+
 def score_article_seo(article: dict, *, supports_featured_image: bool = True) -> SeoResult:
     title = _clean(article.get("title"))
     content = article.get("content_html") or ""
@@ -42,6 +76,8 @@ def score_article_seo(article: dict, *, supports_featured_image: bool = True) ->
     word_count = _word_count(content)
     images_missing_alt = _images_without_alt(content)
     has_images = bool(re.search(r"<img\b", content, re.IGNORECASE))
+    focus_keyword = _focus_keyword(title)
+    long_paragraphs = _long_paragraph_count(content)
 
     title_ok = MIN_TITLE_LEN <= len(title) <= MAX_TITLE_LEN
     excerpt_ok = MIN_EXCERPT_LEN <= len(excerpt) <= MAX_EXCERPT_LEN
@@ -67,7 +103,24 @@ def score_article_seo(article: dict, *, supports_featured_image: bool = True) ->
             "زیرعنوان (H2/H3) دارد", _has_heading(content),
             missing_label="بدونِ زیرعنوان — خوانایی/سئو رو ضعیف می‌کنه",
         ),
+        SeoCheck(
+            "پاراگراف‌ها طولانی نیستن", long_paragraphs == 0,
+            f"{long_paragraphs} پاراگراف بیش از {MAX_PARAGRAPH_LEN} کاراکتر",
+            missing_label="بعضی پاراگراف‌ها خیلی طولانی‌ان — خوانایی رو کم می‌کنه",
+        ),
+        SeoCheck(
+            "لینک (داخلی/خارجی) داره", _has_link(content),
+            missing_label="محتوا هیچ لینکی نداره — لینک‌دهی به منابعِ مرتبط سئو رو تقویت می‌کنه",
+        ),
     ]
+    if focus_keyword:
+        checks.append(
+            SeoCheck(
+                "کلمه‌ی کلیدیِ عنوان در ابتدایِ متن هست", _keyword_near_start(content, focus_keyword),
+                f"کلمه‌یِ «{focus_keyword}» (از عنوان) باید تویِ همون {FOCUS_KEYWORD_WINDOW_WORDS} کلمه‌ی اول باشه",
+                missing_label=f"کلمه‌ی «{focus_keyword}» تویِ ابتدایِ متن نیست",
+            )
+        )
     if supports_featured_image:
         checks.append(
             SeoCheck("تصویرِ شاخص دارد", bool(article.get("featured_image_url")), missing_label="بدونِ تصویرِ شاخص")
@@ -109,4 +162,13 @@ def suggest_article_fixes(article: dict) -> dict:
         suggestions["heading"] = "حداقل یه زیرعنوان (H2) به محتوا اضافه کنید تا خواناتر/سئوپسندتر بشه."
     if not article.get("category_ids"):
         suggestions["category"] = "این مقاله هیچ دسته‌بندی‌ای نداره — یه دسته انتخاب کنید."
+
+    long_paragraphs = _long_paragraph_count(content)
+    if long_paragraphs:
+        suggestions["paragraphs"] = f"{long_paragraphs} پاراگراف بیش از {MAX_PARAGRAPH_LEN} کاراکتره — به پاراگراف‌هایِ کوتاه‌تر تقسیم کنید."
+    if not _has_link(content):
+        suggestions["link"] = "محتوا هیچ لینکی نداره — یه لینکِ داخلی (به مقاله/محصولِ مرتبط) یا خارجی (به منبعِ معتبر) اضافه کنید."
+    focus_keyword = _focus_keyword(title)
+    if focus_keyword and not _keyword_near_start(content, focus_keyword):
+        suggestions["focus_keyword"] = f"کلمه‌ی «{focus_keyword}» (از عنوان) تویِ {FOCUS_KEYWORD_WINDOW_WORDS} کلمه‌ی اولِ متن نیست — همون ابتدا یه‌بار ازش استفاده کنید."
     return suggestions

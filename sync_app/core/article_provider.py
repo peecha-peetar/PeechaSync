@@ -60,6 +60,14 @@ def create_category(config, name: str, parent: int = 0) -> dict:
     return _backend(config).create_category(config, name, parent)
 
 
+def update_category(config, category_id: int, *, name: str | None = None, parent: int | None = None) -> dict:
+    return _backend(config).update_category(config, category_id, name=name, parent=parent)
+
+
+def delete_category(config, category_id: int) -> bool:
+    return _backend(config).delete_category(config, category_id)
+
+
 def upload_image(config, image_data: bytes, filename: str) -> tuple[bool, int, str, str]:
     """آپلودِ عکس به کتابخانه‌ی رسانه — هم برایِ تصویرِ شاخص هم برایِ
     عکسِ داخلِ محتوا استفاده می‌شه. خروجی: (ok, media_id, source_url, error)."""

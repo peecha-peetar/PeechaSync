@@ -185,6 +185,24 @@ def create_category(config, name: str, parent: int = 0) -> dict:
     return {"id": r.get("id"), "name": r.get("name") or "", "parent": r.get("parent") or 0}
 
 
+def update_category(config, category_id: int, *, name: str | None = None, parent: int | None = None) -> dict:
+    body = {}
+    if name is not None:
+        body["name"] = name
+    if parent is not None:
+        body["parent"] = int(parent)
+    resp = _request(config, "POST", f"categories/{int(category_id)}", json_body=body)
+    _raise_for_status(resp, f"به‌روزرسانیِ دسته‌بندی #{category_id}")
+    r = resp.json() or {}
+    return {"id": r.get("id"), "name": r.get("name") or "", "parent": r.get("parent") or 0}
+
+
+def delete_category(config, category_id: int) -> bool:
+    resp = _request(config, "DELETE", f"categories/{int(category_id)}", params={"force": "true"})
+    _raise_for_status(resp, f"حذفِ دسته‌بندی #{category_id}")
+    return True
+
+
 def upload_featured_image(config, image_data: bytes, filename: str) -> tuple[bool, int, str, str]:
     """آپلودِ عکسِ شاخص — از همون آپلودرِ رسانه‌ی موجود استفاده می‌کنه.
     خروجی: (ok, media_id, source_url, error)"""

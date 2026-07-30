@@ -184,3 +184,53 @@ def create_category(config, name: str, parent: int = 0) -> dict:
     )
     new_id = _response_xml_id(resp, f"ایجادِ دسته‌بندیِ CMS '{name}'")
     return {"id": new_id, "name": name, "parent": parent_id}
+
+
+def _get_category(config, category_id: int) -> dict:
+    cfg = config or {}
+    lang_id = ps_lang_id(cfg)
+    resp = ps_call(
+        f"دریافتِ دسته‌بندیِ CMS #{category_id}",
+        lambda: ps_rest_request(cfg, "GET", f"cms_categories/{int(category_id)}"),
+    )
+    data = _response_json(resp, f"دریافتِ دسته‌بندیِ CMS #{category_id}")
+    entry = _unwrap_dict(data, "cms_category")
+    return _cms_category_to_dict(entry, lang_id)
+
+
+def update_category(config, category_id: int, *, name: str | None = None, parent: int | None = None) -> dict:
+    """PUT کامل — چون Webservice پرستاشاپ فیلدِ ست‌نشده رو خالی می‌کنه، اول رکوردِ فعلی خونده می‌شه."""
+    cfg = config or {}
+    all_lang_ids = ps_all_lang_ids(cfg)
+    current = _get_category(cfg, category_id)
+    final_name = name if name is not None else current.get("name")
+    final_parent = int(parent if parent is not None else (current.get("parent") or PS_DEFAULT_CMS_CATEGORY_ID))
+    slug = _slugify(final_name)
+
+    def _build(node):
+        _set_text(node, "id", int(category_id))
+        _set_text(node, "id_parent", final_parent)
+        _set_text(node, "active", 1)
+        _set_lang_text(node, "name", final_name, all_lang_ids)
+        _set_lang_text(node, "link_rewrite", slug, all_lang_ids)
+        _set_lang_text(node, "meta_title", final_name, all_lang_ids)
+
+    body = _build_xml("cms_category", _build)
+    resp = ps_call(
+        f"به‌روزرسانیِ دسته‌بندیِ CMS #{category_id}",
+        lambda: ps_rest_request(cfg, "PUT", f"cms_categories/{int(category_id)}", xml_body=body),
+    )
+    _raise_for_status(resp, f"به‌روزرسانیِ دسته‌بندیِ CMS #{category_id}")
+    return {"id": int(category_id), "name": final_name, "parent": final_parent}
+
+
+def delete_category(config, category_id: int) -> bool:
+    cfg = config or {}
+    resp = ps_call(
+        f"حذفِ دسته‌بندیِ CMS #{category_id}",
+        lambda: ps_rest_request(cfg, "DELETE", f"cms_categories/{int(category_id)}"),
+    )
+    if getattr(resp, "status_code", 0) == 404:
+        return True
+    _raise_for_status(resp, f"حذفِ دسته‌بندیِ CMS #{category_id}")
+    return True

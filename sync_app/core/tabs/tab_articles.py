@@ -112,9 +112,15 @@ class ArticlesTab(QWidget):
         form.setSpacing(8)
 
         form.addWidget(QLabel("عنوانِ مقاله:"))
+        title_row = QHBoxLayout()
         self.title_input = QLineEdit()
         self.title_input.textChanged.connect(self._refresh_seo_panel)
-        form.addWidget(self.title_input)
+        title_row.addWidget(self.title_input, 1)
+        self.ai_generate_btn = QPushButton("🤖 نوشتنِ خودکار با هوشِ مصنوعی")
+        self.ai_generate_btn.setToolTip("از رویِ همین عنوان، یه مقاله‌ی کامل با هوشِ مصنوعی (Gemini) تولید می‌کنه")
+        self.ai_generate_btn.clicked.connect(self._on_generate_with_ai)
+        title_row.addWidget(self.ai_generate_btn)
+        form.addLayout(title_row)
 
         cat_row = QHBoxLayout()
         cat_row.addWidget(QLabel("دسته‌بندی:"))
@@ -123,6 +129,12 @@ class ArticlesTab(QWidget):
         self.new_category_btn = QPushButton("+ دسته‌یِ جدید")
         self.new_category_btn.clicked.connect(self._on_new_category)
         cat_row.addWidget(self.new_category_btn)
+        self.rename_category_btn = QPushButton("✏️ ویرایشِ نام")
+        self.rename_category_btn.clicked.connect(self._on_rename_category)
+        cat_row.addWidget(self.rename_category_btn)
+        self.delete_category_btn = QPushButton("🗑 حذفِ دسته")
+        self.delete_category_btn.clicked.connect(self._on_delete_category)
+        cat_row.addWidget(self.delete_category_btn)
         form.addLayout(cat_row)
 
         self.featured_image_row = QWidget()
@@ -304,6 +316,49 @@ class ArticlesTab(QWidget):
         self.featured_image_label.setText(url)
         self._refresh_seo_panel()
 
+    # ── تولیدِ خودکار با هوشِ مصنوعی ──────────────────────────────
+    def _on_generate_with_ai(self):
+        title = self.title_input.text().strip()
+        if not title:
+            QMessageBox.information(self, "عنوان خالیه", "اول عنوانِ مقاله رو بنویسید تا هوشِ مصنوعی بر اساسِ اون متن بسازه.")
+            return
+
+        if self.content_edit.toPlainText().strip():
+            confirm = QMessageBox.question(
+                self, "جایگزینیِ محتوا",
+                "محتوایِ فعلی با متنِ تولیدشده جایگزین می‌شه. ادامه بدیم؟",
+                QMessageBox.Yes | QMessageBox.No,
+            )
+            if confirm != QMessageBox.Yes:
+                return
+
+        config = load_secure_config(None) or {}
+        self.ai_generate_btn.setEnabled(False)
+        self.ai_generate_btn.setText("⏳ در حالِ نوشتن...")
+
+        def _worker():
+            from sync_app.core.ai_content_helper import generate_article
+
+            return generate_article(config, title)
+
+        def _done(result):
+            self.ai_generate_btn.setEnabled(True)
+            self.ai_generate_btn.setText("🤖 نوشتنِ خودکار با هوشِ مصنوعی")
+            if not result.get("ok"):
+                QMessageBox.warning(self, "تولیدِ مقاله ناموفق بود", result.get("error") or "خطایِ نامشخص")
+                return
+            self.content_edit.setHtml(result.get("content_html") or "")
+            if result.get("excerpt"):
+                self.excerpt_input.setText(result["excerpt"])
+            self._refresh_seo_panel()
+
+        def _fail(msg):
+            self.ai_generate_btn.setEnabled(True)
+            self.ai_generate_btn.setText("🤖 نوشتنِ خودکار با هوشِ مصنوعی")
+            QMessageBox.critical(self, "خطا", f"تولیدِ مقاله ناموفق بود:\n{msg}")
+
+        run_in_thread(_worker, on_complete=_done, on_error=_fail)
+
     # ── دسته‌بندی ────────────────────────────────────────────────
     def _on_new_category(self):
         name, ok = QInputDialog.getText(self, "دسته‌یِ جدید", "نامِ دسته‌بندی:")
@@ -318,6 +373,50 @@ class ArticlesTab(QWidget):
         self._categories.append(new_cat)
         self.category_combo.addItem(new_cat["name"], new_cat["id"])
         self.category_combo.setCurrentIndex(self.category_combo.count() - 1)
+
+    def _on_rename_category(self):
+        cat_id = self.category_combo.currentData()
+        if not cat_id:
+            QMessageBox.information(self, "دسته‌ای انتخاب نشده", "اول یه دسته‌بندی رو از فهرست انتخاب کنید.")
+            return
+        current_name = self.category_combo.currentText()
+        new_name, ok = QInputDialog.getText(self, "ویرایشِ نامِ دسته", "نامِ جدید:", text=current_name)
+        if not ok or not new_name.strip():
+            return
+        config = load_secure_config(None) or {}
+        try:
+            updated = ap.update_category(config, cat_id, name=new_name.strip())
+        except Exception as e:
+            QMessageBox.warning(self, "خطا", f"ویرایشِ دسته‌بندی ناموفق بود:\n{e}")
+            return
+        idx = self.category_combo.currentIndex()
+        self.category_combo.setItemText(idx, updated["name"])
+        for cat in self._categories:
+            if cat["id"] == cat_id:
+                cat["name"] = updated["name"]
+                break
+
+    def _on_delete_category(self):
+        cat_id = self.category_combo.currentData()
+        if not cat_id:
+            QMessageBox.information(self, "دسته‌ای انتخاب نشده", "اول یه دسته‌بندی رو از فهرست انتخاب کنید.")
+            return
+        cat_name = self.category_combo.currentText()
+        confirm = QMessageBox.question(
+            self, "حذفِ دسته‌بندی",
+            f"دسته‌بندیِ «{cat_name}» حذف بشه؟ (مقاله‌هایِ همین دسته حذف نمی‌شن، فقط بی‌دسته می‌مونن)",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+        config = load_secure_config(None) or {}
+        try:
+            ap.delete_category(config, cat_id)
+        except Exception as e:
+            QMessageBox.warning(self, "خطا", f"حذفِ دسته‌بندی ناموفق بود:\n{e}")
+            return
+        self._categories = [c for c in self._categories if c["id"] != cat_id]
+        self.category_combo.removeItem(self.category_combo.currentIndex())
 
     # ── بارگذاریِ لیستِ مقالات ─────────────────────────────────────
     def _load_articles(self):

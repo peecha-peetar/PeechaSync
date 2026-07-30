@@ -52,6 +52,7 @@ a = Analysis(
         "sync_app.core.article_seo_helper",
         "sync_app.core.wp_posts_helper",
         "sync_app.core.ps_cms_helper",
+        "sync_app.core.ai_content_helper",
         "sync_app.core.adaptive_tab_bar",
         "sync_app.core.tabs.tab_marketing",
         "sync_app.core.tabs.tab_peecha_advisor",
