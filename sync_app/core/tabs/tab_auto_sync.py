@@ -996,9 +996,12 @@ class AutoSyncTab(QWidget):
         self.setup_tasks_btn.setEnabled(False)
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
-            interval_ms = AUTO_INTERVAL_MS.get(self._current_interval_text(), AUTO_INTERVAL_MS["4 ساعت"])
-            interval_minutes = max(1, interval_ms // 60000)
-            ok, output = run_setup_script(interval_minutes=min(interval_minutes, 15))
+            # این عددِ چک (poll) برایِ همه‌ی پروفایل‌هاست، نه فاصله‌ی واقعیِ
+            # همگام‌سازی — هر پروفایل با هر فاصله‌ای (۱۵ دقیقه یا ۲۴ ساعت)
+            # هر ۱۵ دقیقه چک می‌شه، ولی خودِ اجرایِ headless طبقِ
+            # AUTO_INTERVAL/AUTO_NEXT_RUN_AT همون پروفایل تشخیص می‌ده که
+            # آیا واقعاً موعدشه یا نه.
+            ok, output = run_setup_script(interval_minutes=15)
         finally:
             QApplication.restoreOverrideCursor()
             self.setup_tasks_btn.setEnabled(True)
