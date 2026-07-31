@@ -1,9 +1,8 @@
-"""تبِ «لیستِ قیمت» — تنظیمِ لیستِ قیمتِ عادی/ویژه و مارک‌آپِ مخصوصِ هر
-دسته‌بندی یا برندِ سایت (جدا از تبِ «دسته‌بندی و برند» تا اونجا شلوغ نشه).
-
-همه‌ی قاعده‌هایِ ثبت‌شده (چه رویِ دسته‌بندی، چه رویِ برند) پایینِ صفحه به‌صورتِ
-یه لیست/جدول دیده می‌شن — با کلیک رویِ هر ردیف می‌شه ویرایشش کرد، یا حذفش
-کرد.
+"""تبِ «لیستِ قیمت» — یه جدولِ خام: هر ردیف یک قاعده‌ست، همه‌چیز مستقیم
+تویِ خودِ ردیف تنظیم و ذخیره می‌شه (بدونِ فرم/هدرِ جدا). ستونِ اول یه
+دسته‌بندی یا برندِ سایت رو انتخاب می‌کنه (فقط یکی، هر ردیف مستقلِ خودشه)،
+بقیه‌ی ستون‌ها لیستِ قیمتِ عادی/ویژه و درصد/مبلغِ مارک‌آپِ همون هدف رو
+می‌گیرن. دکمه‌ی 💾 همون ردیف رو ذخیره می‌کنه، 🗑 همون ردیف رو حذف می‌کنه.
 
 اولویتِ نهایی موقعِ سینک: override رویِ خودِ محصول (اگه از قبل جایی ست
 شده باشه) → برندِ دستیِ سایتِ محصول → دسته‌بندیِ دستیِ سایتِ محصول → لیستِ
@@ -15,18 +14,15 @@ import logging
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
-    QAbstractItemView,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
-    QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QMessageBox,
     QPushButton,
     QTableWidget,
-    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -36,23 +32,20 @@ from sync_app.core.tabs.tab_category_brand_studio import SiteTaxonomyLoader
 
 log = logging.getLogger("SyncApp")
 
-_RULES_COLUMNS = [
-    "نوع", "نام", "لیستِ عادی", "٪ عادی", "مبلغِ عادی",
-    "ویژه", "لیستِ ویژه", "٪ ویژه", "مبلغِ ویژه",
+COL_TARGET = 0
+COL_REG_LIST = 1
+COL_REG_PCT = 2
+COL_REG_AMT = 3
+COL_SALE_ON = 4
+COL_SALE_LIST = 5
+COL_SALE_PCT = 6
+COL_SALE_AMT = 7
+COL_ACTIONS = 8
+
+_HEADERS = [
+    "دسته‌بندی/برند", "لیستِ عادی", "٪ عادی", "مبلغِ عادی",
+    "ویژه", "لیستِ ویژه", "٪ ویژه", "مبلغِ ویژه", "",
 ]
-
-
-def _index_label(idx) -> str:
-    if idx is None:
-        return "—"
-    return f"لیست {int(idx) + 1}"
-
-
-def _num_label(val) -> str:
-    val = float(val or 0)
-    if not val:
-        return "—"
-    return f"{val:g}"
 
 
 class PriceListStudioTab(QWidget):
@@ -73,144 +66,240 @@ class PriceListStudioTab(QWidget):
         root.setSpacing(8)
 
         hint = QLabel(
-            "یه دسته‌بندی یا برندِ سایت رو انتخاب کنید و لیستِ قیمت/مارک‌آپِ مخصوصِ اون رو ثبت "
-            "کنید — همه‌ی محصولاتی که الان یا بعداً به همون دسته‌بندی/برند وصل بشن (از تبِ «دسته‌بندی "
-            "و برند»)، با سینکِ بعدی خودکار همینو می‌گیرن. اگه یه محصول هم برندِ قیمت‌دار داشته باشه هم "
-            "دسته‌بندیِ قیمت‌دار، برند اولویت داره."
+            "هر ردیف یک قاعده‌ی مستقله: یا برایِ یه دسته‌بندیِ سایت، یا برایِ یه برندِ سایت. لیستِ "
+            "قیمتِ عادی/ویژه و درصد/مبلغِ مارک‌آپ رو مستقیم تویِ همون ردیف بدید و 💾 بزنید. همه‌ی "
+            "محصولاتی که به همون دسته‌بندی/برند وصل باشن، خودکار همینو می‌گیرن — اگه یه محصول هم "
+            "برندِ قیمت‌دار داشته باشه هم دسته‌بندیِ قیمت‌دار، برند اولویت داره."
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color:#475569; font-size:12px;")
         root.addWidget(hint)
 
-        target_row = QHBoxLayout()
-        target_row.addWidget(QLabel("دسته‌بندیِ سایت:"))
-        self.category_combo = QComboBox()
-        self.category_combo.setEditable(True)
-        self.category_combo.setInsertPolicy(QComboBox.NoInsert)
-        self.category_combo.setMinimumWidth(240)
-        self.category_combo.currentIndexChanged.connect(self._load_price_fields_for_current_category)
-        target_row.addWidget(self.category_combo, 1)
-
-        target_row.addWidget(QLabel("برندِ سایت:"))
-        self.brand_combo = QComboBox()
-        self.brand_combo.setEditable(True)
-        self.brand_combo.setInsertPolicy(QComboBox.NoInsert)
-        self.brand_combo.setMinimumWidth(240)
-        self.brand_combo.currentIndexChanged.connect(self._load_price_fields_for_current_brand)
-        target_row.addWidget(self.brand_combo, 1)
-
-        refresh_btn = QPushButton("🔄 بروزرسانی")
-        refresh_btn.setToolTip("دریافتِ دوباره‌ی لیستِ دسته‌بندی/برندِ سایت")
+        top_row = QHBoxLayout()
+        add_btn = QPushButton("➕ افزودنِ ردیفِ جدید")
+        add_btn.clicked.connect(lambda: self._add_row())
+        top_row.addWidget(add_btn)
+        top_row.addStretch(1)
+        refresh_btn = QPushButton("🔄 بروزرسانیِ دسته‌بندی/برندِ سایت")
         refresh_btn.clicked.connect(self._load_site_taxonomy)
-        target_row.addWidget(refresh_btn)
-        root.addLayout(target_row)
+        top_row.addWidget(refresh_btn)
+        root.addLayout(top_row)
 
-        root.addWidget(self._build_price_list_panel())
-
-        rules_title = QLabel("📋 قاعده‌هایِ ثبت‌شده (کلیک رویِ ردیف = ویرایش)")
-        rules_title.setStyleSheet("font-weight:700; margin-top:6px;")
-        root.addWidget(rules_title)
-
-        self.rules_table = QTableWidget(0, len(_RULES_COLUMNS))
+        self.rules_table = QTableWidget(0, len(_HEADERS))
         self.rules_table.setLayoutDirection(Qt.RightToLeft)
-        self.rules_table.setHorizontalHeaderLabels(_RULES_COLUMNS)
-        self.rules_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.rules_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.rules_table.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.rules_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.rules_table.itemSelectionChanged.connect(self._on_rule_row_selected)
+        self.rules_table.setHorizontalHeaderLabels(_HEADERS)
+        self.rules_table.horizontalHeader().setSectionResizeMode(COL_TARGET, QHeaderView.Stretch)
+        self.rules_table.verticalHeader().setVisible(False)
         root.addWidget(self.rules_table, 1)
-
-        delete_row = QHBoxLayout()
-        delete_row.addStretch(1)
-        self.delete_rule_btn = QPushButton("🗑️ حذفِ ردیفِ انتخاب‌شده")
-        self.delete_rule_btn.clicked.connect(self._delete_selected_rule)
-        delete_row.addWidget(self.delete_rule_btn)
-        root.addLayout(delete_row)
 
         self.status_label = QLabel("در حالِ دریافتِ دسته‌بندی/برندِ سایت...")
         self.status_label.setStyleSheet("color:#64748b; font-size:12px;")
         root.addWidget(self.status_label)
 
-    def _build_price_list_panel(self) -> QWidget:
-        box = QFrame()
-        box.setFrameShape(QFrame.StyledPanel)
-        v = QVBoxLayout(box)
+    # ------------------------------------------------------------------
+    # ویجت‌سازهایِ کمکی
+    # ------------------------------------------------------------------
+    def _make_target_combo(self) -> QComboBox:
+        combo = QComboBox()
+        self._fill_target_combo(combo)
+        return combo
 
-        title = QLabel("💰 لیستِ قیمتِ مخصوصِ دسته‌بندی/برندِ انتخاب‌شده")
-        title.setStyleSheet("font-weight:700;")
-        v.addWidget(title)
+    def _fill_target_combo(self, combo: QComboBox, keep_selection=None):
+        # نکته: dataِ آیتمِ کمبو رو tuple نمی‌ذاریم — findData()ِ پی‌کیوت۵
+        # QVariantِ اشیایِ پایتونیِ پیچیده (مثلِ tuple) رو گاهی با مقایسه‌ی
+        # identity (نه ==) چک می‌کنه، پس یه tupleِ جداگانه‌ساخته‌شده با همون
+        # مقدار پیدا نمی‌شه. یه رشته‌ی ساده («category:5») همیشه درست کار می‌کنه.
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("— انتخاب کنید —", "")
+        for cat in sorted(self._categories, key=lambda c: str(c.get("name") or "")):
+            cid = int(cat.get("id") or 0)
+            if cid:
+                combo.addItem(f"🏷️ {cat.get('name')}", f"category:{cid}")
+        for b in sorted(self._brands, key=lambda c: str(c.get("name") or "")):
+            bid = int(b.get("id") or 0)
+            if bid:
+                combo.addItem(f"🏢 {b.get('name')}", f"brand:{bid}")
+        if keep_selection:
+            idx = combo.findData(keep_selection)
+            if idx >= 0:
+                combo.setCurrentIndex(idx)
+        combo.blockSignals(False)
 
-        reg_row = QHBoxLayout()
-        reg_row.addWidget(QLabel("لیستِ قیمتِ عادی:"))
-        self.price_list_combo = QComboBox()
-        self.price_list_combo.addItem("— بدونِ override (ارثِ خودکار) —", -1)
+    def _make_price_list_combo(self) -> QComboBox:
+        combo = QComboBox()
+        combo.addItem("—", -1)
         for i in range(1, 11):
-            self.price_list_combo.addItem(f"لیست قیمت {i}", i - 1)
-        reg_row.addWidget(self.price_list_combo, 1)
+            combo.addItem(str(i), i - 1)
+        return combo
 
-        reg_row.addWidget(QLabel("٪ عادی:"))
-        self.regular_markup_percent_spin = QDoubleSpinBox()
-        self.regular_markup_percent_spin.setRange(-90.0, 500.0)
-        self.regular_markup_percent_spin.setDecimals(1)
-        self.regular_markup_percent_spin.setSuffix(" %")
-        reg_row.addWidget(self.regular_markup_percent_spin)
+    def _make_percent_spin(self) -> QDoubleSpinBox:
+        spin = QDoubleSpinBox()
+        spin.setRange(-90.0, 500.0)
+        spin.setDecimals(1)
+        spin.setSuffix(" %")
+        return spin
 
-        reg_row.addWidget(QLabel("مبلغِ عادی:"))
-        self.regular_markup_amount_spin = QDoubleSpinBox()
-        self.regular_markup_amount_spin.setRange(-1_000_000_000.0, 1_000_000_000.0)
-        self.regular_markup_amount_spin.setDecimals(0)
-        reg_row.addWidget(self.regular_markup_amount_spin)
-        v.addLayout(reg_row)
+    def _make_amount_spin(self) -> QDoubleSpinBox:
+        spin = QDoubleSpinBox()
+        spin.setRange(-1_000_000_000.0, 1_000_000_000.0)
+        spin.setDecimals(0)
+        return spin
 
-        sale_row = QHBoxLayout()
-        self.sale_enabled_cb = QCheckBox("قیمتِ ویژه فعال:")
-        sale_row.addWidget(self.sale_enabled_cb)
-        self.sale_price_list_combo = QComboBox()
-        self.sale_price_list_combo.addItem("— بدونِ override —", -1)
-        for i in range(1, 11):
-            self.sale_price_list_combo.addItem(f"لیست قیمت {i}", i - 1)
-        sale_row.addWidget(self.sale_price_list_combo, 1)
+    def _centered(self, widget: QWidget) -> QWidget:
+        container = QWidget()
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setAlignment(Qt.AlignCenter)
+        layout.addWidget(widget)
+        return container
 
-        sale_row.addWidget(QLabel("٪ ویژه:"))
-        self.sale_markup_percent_spin = QDoubleSpinBox()
-        self.sale_markup_percent_spin.setRange(-90.0, 500.0)
-        self.sale_markup_percent_spin.setDecimals(1)
-        self.sale_markup_percent_spin.setSuffix(" %")
-        sale_row.addWidget(self.sale_markup_percent_spin)
+    # ------------------------------------------------------------------
+    # ردیف‌سازی
+    # ------------------------------------------------------------------
+    def _add_row(self, kind: str | None = None, entity_id: int | None = None, record: dict | None = None):
+        row = self.rules_table.rowCount()
+        self.rules_table.insertRow(row)
 
-        sale_row.addWidget(QLabel("مبلغِ ویژه:"))
-        self.sale_markup_amount_spin = QDoubleSpinBox()
-        self.sale_markup_amount_spin.setRange(-1_000_000_000.0, 1_000_000_000.0)
-        self.sale_markup_amount_spin.setDecimals(0)
-        sale_row.addWidget(self.sale_markup_amount_spin)
-        v.addLayout(sale_row)
+        target_combo = self._make_target_combo()
+        if kind and entity_id:
+            idx = target_combo.findData(f"{kind}:{entity_id}")
+            if idx >= 0:
+                target_combo.setCurrentIndex(idx)
+        self.rules_table.setCellWidget(row, COL_TARGET, target_combo)
 
-        hint = QLabel(
-            "درصد اول رویِ قیمتِ پایه اعمال می‌شه، بعد مبلغِ ثابت به نتیجه اضافه/کم می‌شه — عادی و ویژه "
-            "کاملاً جدا از هم. اولویتِ نهایی: override رویِ خودِ محصول → برندِ سایتِ محصول → دسته‌بندیِ "
-            "سایتِ محصول → لیستِ قیمتِ دژاوو/ERP → پیش‌فرضِ سراسریِ تبِ تنظیمات."
-        )
-        hint.setWordWrap(True)
-        hint.setStyleSheet("color:#64748b; font-size:11px;")
-        v.addWidget(hint)
+        reg_list = self._make_price_list_combo()
+        reg_pct = self._make_percent_spin()
+        reg_amt = self._make_amount_spin()
+        sale_cb = QCheckBox()
+        sale_list = self._make_price_list_combo()
+        sale_pct = self._make_percent_spin()
+        sale_amt = self._make_amount_spin()
 
-        btn_row = QHBoxLayout()
-        save_cat_btn = QPushButton("💾 ثبت برایِ دسته‌بندیِ انتخاب‌شده")
-        save_cat_btn.clicked.connect(self._save_price_settings_for_category)
-        btn_row.addWidget(save_cat_btn)
+        if record:
+            if record.get("regular_index") is not None:
+                i = reg_list.findData(int(record["regular_index"]))
+                if i >= 0:
+                    reg_list.setCurrentIndex(i)
+            reg_pct.setValue(float(record.get("regular_markup_percent") or 0))
+            reg_amt.setValue(float(record.get("regular_markup_amount") or 0))
+            sale_cb.setChecked(bool(record.get("sale_enabled")))
+            if record.get("sale_index") is not None:
+                i = sale_list.findData(int(record["sale_index"]))
+                if i >= 0:
+                    sale_list.setCurrentIndex(i)
+            sale_pct.setValue(float(record.get("sale_markup_percent") or 0))
+            sale_amt.setValue(float(record.get("sale_markup_amount") or 0))
 
-        save_brand_btn = QPushButton("💾 ثبت برایِ برندِ انتخاب‌شده")
-        save_brand_btn.clicked.connect(self._save_price_settings_for_brand)
-        btn_row.addWidget(save_brand_btn)
+        self.rules_table.setCellWidget(row, COL_REG_LIST, reg_list)
+        self.rules_table.setCellWidget(row, COL_REG_PCT, reg_pct)
+        self.rules_table.setCellWidget(row, COL_REG_AMT, reg_amt)
+        self.rules_table.setCellWidget(row, COL_SALE_ON, self._centered(sale_cb))
+        self.rules_table.setCellWidget(row, COL_SALE_LIST, sale_list)
+        self.rules_table.setCellWidget(row, COL_SALE_PCT, sale_pct)
+        self.rules_table.setCellWidget(row, COL_SALE_AMT, sale_amt)
 
-        clear_btn = QPushButton("🆕 فرمِ خالیِ جدید")
-        clear_btn.setToolTip("پاک‌کردنِ فیلدها برایِ ثبتِ یه قاعده‌ی جدید")
-        clear_btn.clicked.connect(self._clear_price_fields)
-        btn_row.addWidget(clear_btn)
-        v.addLayout(btn_row)
+        actions = QWidget()
+        actions_layout = QHBoxLayout(actions)
+        actions_layout.setContentsMargins(2, 2, 2, 2)
+        save_btn = QPushButton("💾")
+        save_btn.setToolTip("ذخیره‌یِ همین ردیف")
+        del_btn = QPushButton("🗑")
+        del_btn.setToolTip("حذفِ همین ردیف")
+        actions_layout.addWidget(save_btn)
+        actions_layout.addWidget(del_btn)
+        self.rules_table.setCellWidget(row, COL_ACTIONS, actions)
 
-        return box
+        save_btn.clicked.connect(lambda _checked=False, w=actions: self._save_row(w))
+        del_btn.clicked.connect(lambda _checked=False, w=actions: self._delete_row(w))
+        return row
+
+    def _parse_target(self, raw: str | None) -> tuple[str, int] | None:
+        if not raw:
+            return None
+        kind, _sep, id_str = str(raw).partition(":")
+        if not id_str.isdigit():
+            return None
+        return kind, int(id_str)
+
+    def _row_for_actions_widget(self, actions_widget: QWidget) -> int:
+        for r in range(self.rules_table.rowCount()):
+            if self.rules_table.cellWidget(r, COL_ACTIONS) is actions_widget:
+                return r
+        return -1
+
+    def _collect_row_record(self, row: int) -> dict:
+        reg_list = self.rules_table.cellWidget(row, COL_REG_LIST)
+        reg_pct = self.rules_table.cellWidget(row, COL_REG_PCT)
+        reg_amt = self.rules_table.cellWidget(row, COL_REG_AMT)
+        sale_cb = self.rules_table.cellWidget(row, COL_SALE_ON).findChild(QCheckBox)
+        sale_list = self.rules_table.cellWidget(row, COL_SALE_LIST)
+        sale_pct = self.rules_table.cellWidget(row, COL_SALE_PCT)
+        sale_amt = self.rules_table.cellWidget(row, COL_SALE_AMT)
+        return {
+            "regular_index": int(reg_list.currentData()) if int(reg_list.currentData() or -1) >= 0 else None,
+            "regular_markup_percent": float(reg_pct.value()),
+            "regular_markup_amount": float(reg_amt.value()),
+            "sale_enabled": sale_cb.isChecked(),
+            "sale_index": int(sale_list.currentData()) if int(sale_list.currentData() or -1) >= 0 else None,
+            "sale_markup_percent": float(sale_pct.value()),
+            "sale_markup_amount": float(sale_amt.value()),
+        }
+
+    def _save_row(self, actions_widget: QWidget):
+        row = self._row_for_actions_widget(actions_widget)
+        if row < 0:
+            return
+        target_combo = self.rules_table.cellWidget(row, COL_TARGET)
+        target = self._parse_target(target_combo.currentData())
+        if not target:
+            QMessageBox.warning(self, "توجه", "یک دسته‌بندی یا برند از ستونِ اول انتخاب کنید.")
+            return
+        kind, entity_id = target
+        record = self._collect_row_record(row)
+        from sync_app.core.site_taxonomy_price_list import set_brand_price_settings, set_category_price_settings
+
+        if kind == "category":
+            set_category_price_settings(entity_id, record)
+        else:
+            set_brand_price_settings(entity_id, record)
+        self.config = load_secure_config(None) or {}
+        self.status_label.setText(f"✅ ذخیره شد: {target_combo.currentText()}")
+
+    def _delete_row(self, actions_widget: QWidget):
+        row = self._row_for_actions_widget(actions_widget)
+        if row < 0:
+            return
+        target_combo = self.rules_table.cellWidget(row, COL_TARGET)
+        target = self._parse_target(target_combo.currentData())
+        if target:
+            answer = QMessageBox.question(
+                self, "حذف", "این قاعده حذف بشه؟", QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
+            kind, entity_id = target
+            from sync_app.core.site_taxonomy_price_list import (
+                delete_brand_price_settings,
+                delete_category_price_settings,
+            )
+
+            if kind == "category":
+                delete_category_price_settings(entity_id)
+            else:
+                delete_brand_price_settings(entity_id)
+            self.config = load_secure_config(None) or {}
+        self.rules_table.removeRow(row)
+
+    # ------------------------------------------------------------------
+    def _refresh_rules_table(self):
+        from sync_app.core.site_taxonomy_price_list import list_brand_price_settings, list_category_price_settings
+
+        self.rules_table.setRowCount(0)
+        for cid_str, record in list_category_price_settings(self.config).items():
+            self._add_row(kind="category", entity_id=int(cid_str), record=record)
+        for bid_str, record in list_brand_price_settings(self.config).items():
+            self._add_row(kind="brand", entity_id=int(bid_str), record=record)
 
     # ------------------------------------------------------------------
     def _load_site_taxonomy(self):
@@ -229,217 +318,12 @@ class PriceListStudioTab(QWidget):
             return
         self._categories = categories or []
         self._brands = brands or []
-
-        self.category_combo.clear()
-        for cat in sorted(self._categories, key=lambda c: str(c.get("name") or "")):
-            cid = int(cat.get("id") or 0)
-            if cid:
-                self.category_combo.addItem(f"{cat.get('name')} ({cid})", cid)
-
-        self.brand_combo.clear()
-        for b in sorted(self._brands, key=lambda c: str(c.get("name") or "")):
-            bid = int(b.get("id") or 0)
-            if bid:
-                self.brand_combo.addItem(f"{b.get('name')} ({bid})", bid)
-
         self.status_label.setText(
             f"✅ {len(self._categories)} دسته‌بندی و {len(self._brands)} برند از سایت دریافت شد."
         )
         self._refresh_rules_table()
 
     # ------------------------------------------------------------------
-    # جدولِ قاعده‌هایِ ثبت‌شده
-    # ------------------------------------------------------------------
-    def _refresh_rules_table(self):
-        from sync_app.core.site_taxonomy_price_list import (
-            list_brand_price_settings,
-            list_category_price_settings,
-        )
-
-        cat_names = {int(c["id"]): str(c.get("name") or f"#{c['id']}") for c in self._categories if c.get("id")}
-        brand_names = {int(b["id"]): str(b.get("name") or f"#{b['id']}") for b in self._brands if b.get("id")}
-
-        rows: list[tuple[str, int, str, dict]] = []
-        for cid_str, record in list_category_price_settings(self.config).items():
-            cid = int(cid_str)
-            rows.append(("category", cid, cat_names.get(cid, f"#{cid}"), record))
-        for bid_str, record in list_brand_price_settings(self.config).items():
-            bid = int(bid_str)
-            rows.append(("brand", bid, brand_names.get(bid, f"#{bid}"), record))
-
-        self.rules_table.setRowCount(0)
-        for kind, entity_id, name, record in rows:
-            row_idx = self.rules_table.rowCount()
-            self.rules_table.insertRow(row_idx)
-            type_item = QTableWidgetItem("🏷️ دسته‌بندی" if kind == "category" else "🏢 برند")
-            type_item.setData(Qt.UserRole, (kind, entity_id))
-            values = [
-                type_item.text(),
-                name,
-                _index_label(record.get("regular_index")),
-                _num_label(record.get("regular_markup_percent")),
-                _num_label(record.get("regular_markup_amount")),
-                "✅" if record.get("sale_enabled") else "—",
-                _index_label(record.get("sale_index")) if record.get("sale_enabled") else "—",
-                _num_label(record.get("sale_markup_percent")) if record.get("sale_enabled") else "—",
-                _num_label(record.get("sale_markup_amount")) if record.get("sale_enabled") else "—",
-            ]
-            for col, text in enumerate(values):
-                cell = QTableWidgetItem(text)
-                if col == 0:
-                    cell.setData(Qt.UserRole, (kind, entity_id))
-                self.rules_table.setItem(row_idx, col, cell)
-
-    def _selected_rule(self):
-        items = self.rules_table.selectedItems()
-        if not items:
-            return None
-        row = items[0].row()
-        first_cell = self.rules_table.item(row, 0)
-        if first_cell is None:
-            return None
-        return first_cell.data(Qt.UserRole)
-
-    def _on_rule_row_selected(self):
-        rule = self._selected_rule()
-        if not rule:
-            return
-        kind, entity_id = rule
-        if kind == "category":
-            idx = self.category_combo.findData(entity_id)
-            if idx >= 0:
-                self.category_combo.setCurrentIndex(idx)
-        else:
-            idx = self.brand_combo.findData(entity_id)
-            if idx >= 0:
-                self.brand_combo.setCurrentIndex(idx)
-
-    def _delete_selected_rule(self):
-        rule = self._selected_rule()
-        if not rule:
-            QMessageBox.warning(self, "توجه", "یک ردیف از جدول انتخاب کنید.")
-            return
-        kind, entity_id = rule
-        answer = QMessageBox.question(
-            self, "حذف", "این قاعده حذف بشه؟", QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
-        )
-        if answer != QMessageBox.Yes:
-            return
-        from sync_app.core.site_taxonomy_price_list import (
-            delete_brand_price_settings,
-            delete_category_price_settings,
-        )
-
-        if kind == "category":
-            delete_category_price_settings(entity_id)
-        else:
-            delete_brand_price_settings(entity_id)
-        self.config = load_secure_config(None) or {}
-        self._refresh_rules_table()
-
-    # ------------------------------------------------------------------
-    def _clear_price_fields(self):
-        self.price_list_combo.setCurrentIndex(0)
-        self.regular_markup_percent_spin.setValue(0)
-        self.regular_markup_amount_spin.setValue(0)
-        self.sale_enabled_cb.setChecked(False)
-        self.sale_price_list_combo.setCurrentIndex(0)
-        self.sale_markup_percent_spin.setValue(0)
-        self.sale_markup_amount_spin.setValue(0)
-
-    def _load_price_fields_from_record(self, record: dict | None):
-        self._clear_price_fields()
-        if not record:
-            return
-        if record.get("regular_index") is not None:
-            idx = self.price_list_combo.findData(int(record["regular_index"]))
-            if idx >= 0:
-                self.price_list_combo.setCurrentIndex(idx)
-        self.regular_markup_percent_spin.setValue(float(record.get("regular_markup_percent") or 0))
-        self.regular_markup_amount_spin.setValue(float(record.get("regular_markup_amount") or 0))
-        self.sale_enabled_cb.setChecked(bool(record.get("sale_enabled")))
-        if record.get("sale_index") is not None:
-            idx = self.sale_price_list_combo.findData(int(record["sale_index"]))
-            if idx >= 0:
-                self.sale_price_list_combo.setCurrentIndex(idx)
-        self.sale_markup_percent_spin.setValue(float(record.get("sale_markup_percent") or 0))
-        self.sale_markup_amount_spin.setValue(float(record.get("sale_markup_amount") or 0))
-
-    def _load_price_fields_for_current_category(self, *_args):
-        from sync_app.core.site_taxonomy_price_list import get_category_price_settings
-
-        cid = self.category_combo.currentData()
-        if not cid:
-            return
-        self._load_price_fields_from_record(get_category_price_settings(self.config, cid))
-
-    def _load_price_fields_for_current_brand(self, *_args):
-        from sync_app.core.site_taxonomy_price_list import get_brand_price_settings
-
-        bid = self.brand_combo.currentData()
-        if not bid:
-            return
-        self._load_price_fields_from_record(get_brand_price_settings(self.config, bid))
-
-    def _collect_price_record(self) -> dict:
-        return {
-            "regular_index": (
-                int(self.price_list_combo.currentData())
-                if int(self.price_list_combo.currentData() or -1) >= 0
-                else None
-            ),
-            "regular_markup_percent": float(self.regular_markup_percent_spin.value()),
-            "regular_markup_amount": float(self.regular_markup_amount_spin.value()),
-            "sale_enabled": self.sale_enabled_cb.isChecked(),
-            "sale_index": (
-                int(self.sale_price_list_combo.currentData())
-                if int(self.sale_price_list_combo.currentData() or -1) >= 0
-                else None
-            ),
-            "sale_markup_percent": float(self.sale_markup_percent_spin.value()),
-            "sale_markup_amount": float(self.sale_markup_amount_spin.value()),
-        }
-
-    def _save_price_settings_for_category(self):
-        cid = self.category_combo.currentData()
-        if not cid:
-            QMessageBox.warning(self, "توجه", "یک دسته‌بندی از لیست انتخاب کنید.")
-            return
-        from sync_app.core.site_taxonomy_price_list import set_category_price_settings
-
-        set_category_price_settings(cid, self._collect_price_record())
-        self.config = load_secure_config(None) or {}
-        title = self.category_combo.currentText()
-        # فرم رو خالی می‌کنیم — وگرنه اگه بعدش بدونِ دستکاریِ فیلدها رویِ
-        # «ثبت برایِ برند» هم کلیک بشه، همین مقادیر (که برایِ دسته‌بندی
-        # بودن) اشتباهی رویِ برند هم ثبت می‌شدن.
-        self._clear_price_fields()
-        self._refresh_rules_table()
-        QMessageBox.information(
-            self, "ثبت شد",
-            f"لیستِ قیمت/مارک‌آپ برایِ دسته‌بندیِ «{title}» ذخیره شد — "
-            "این محصولات با سینکِ بعدی این قیمت رو می‌گیرن.",
-        )
-
-    def _save_price_settings_for_brand(self):
-        bid = self.brand_combo.currentData()
-        if not bid:
-            QMessageBox.warning(self, "توجه", "یک برند از لیست انتخاب کنید.")
-            return
-        from sync_app.core.site_taxonomy_price_list import set_brand_price_settings
-
-        set_brand_price_settings(bid, self._collect_price_record())
-        self.config = load_secure_config(None) or {}
-        title = self.brand_combo.currentText()
-        self._clear_price_fields()
-        self._refresh_rules_table()
-        QMessageBox.information(
-            self, "ثبت شد",
-            f"لیستِ قیمت/مارک‌آپ برایِ برندِ «{title}» ذخیره شد — "
-            "این محصولات با سینکِ بعدی این قیمت رو می‌گیرن.",
-        )
-
-    # ------------------------------------------------------------------
     def ensure_tab_data_loaded(self):
-        if self.category_combo.count() == 0 and self.brand_combo.count() == 0:
+        if not self._categories and not self._brands:
             self._load_site_taxonomy()
