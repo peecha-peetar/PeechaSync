@@ -373,6 +373,93 @@ def update_wc_product_images(config, product_id, images, timeout=None, *, allow_
     return False, resp, wc_product_images_update_error(resp, config)
 
 
+def create_wc_category(config, name: str, parent: int = 0, timeout=None) -> dict:
+    """ساختِ دسته‌بندیِ محصولِ جدید در ووکامرس — POST products/categories."""
+    body = {"name": name}
+    if int(parent or 0) > 0:
+        body["parent"] = int(parent)
+    data = wc_rest_json(
+        config, "POST", "products/categories",
+        json_body=body, label="ایجاد دسته‌بندی", timeout=timeout,
+    )
+    return {
+        "id": int(data.get("id") or 0),
+        "name": data.get("name") or name,
+        "slug": data.get("slug") or "",
+        "parent": int(data.get("parent") or 0),
+    }
+
+
+def set_wc_product_categories(config, product_id, category_ids: list[int], timeout=None):
+    """تنظیمِ کاملِ لیستِ دسته‌بندی‌هایِ محصول — هم‌الگویِ update_wc_product_images."""
+    pid = int(product_id or 0)
+    if pid <= 0:
+        return False, None, "شناسه محصول ووکامرس نامعتبر است."
+    resp = wc_rest_request(
+        config, "PUT", f"products/{pid}",
+        json_body={"categories": [{"id": int(c)} for c in (category_ids or [])]},
+        timeout=timeout,
+    )
+    if resp.status_code in (200, 201):
+        return True, resp, ""
+    return False, resp, wc_product_images_update_error(resp, config)
+
+
+def fetch_wc_brands(config, timeout=None) -> list[dict]:
+    """همه‌ی برندهایِ ووکامرس (تکسونومیِ داخلیِ Brands، نسخه‌ی ۸.۹ به بعد) —
+    products/brands، هم‌شکلِ products/categories."""
+    out: list[dict] = []
+    page = 1
+    while True:
+        check_cancelled()
+        batch = wc_rest_json(
+            config, "GET", "products/brands",
+            params={"per_page": 100, "page": page},
+            label="دریافتِ برندها", timeout=timeout,
+        )
+        if not isinstance(batch, list) or not batch:
+            break
+        for entry in batch:
+            if isinstance(entry, dict) and entry.get("id"):
+                out.append({
+                    "id": int(entry["id"]),
+                    "name": entry.get("name") or "",
+                    "slug": entry.get("slug") or "",
+                })
+        if len(batch) < 100:
+            break
+        page += 1
+    return out
+
+
+def create_wc_brand(config, name: str, timeout=None) -> dict:
+    data = wc_rest_json(
+        config, "POST", "products/brands",
+        json_body={"name": name}, label="ایجاد برند", timeout=timeout,
+    )
+    return {
+        "id": int(data.get("id") or 0),
+        "name": data.get("name") or name,
+        "slug": data.get("slug") or "",
+    }
+
+
+def set_wc_product_brands(config, product_id, brand_ids: list[int], timeout=None):
+    """تنظیمِ برندِ(هایِ) محصول — wc_rest_request + User-Agent، هم‌الگویِ
+    update_wc_product_images."""
+    pid = int(product_id or 0)
+    if pid <= 0:
+        return False, None, "شناسه محصول ووکامرس نامعتبر است."
+    resp = wc_rest_request(
+        config, "PUT", f"products/{pid}",
+        json_body={"brands": [{"id": int(b)} for b in (brand_ids or [])]},
+        timeout=timeout,
+    )
+    if resp.status_code in (200, 201):
+        return True, resp, ""
+    return False, resp, wc_product_images_update_error(resp, config)
+
+
 def wc_http_error_message(response, config=None, *, prefix: str = "") -> str:
     """پیام فارسی از پاسخ HTTP ووکامرس — 401/403/timeout."""
     from sync_app.core.connectivity_service import (
