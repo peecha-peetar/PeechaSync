@@ -287,6 +287,20 @@ class PriceListStudioTab(QWidget):
                 return r
         return -1
 
+    def _combo_index_value(self, combo: QComboBox) -> int | None:
+        """currentData() رو به int تبدیل می‌کنه، ولی برخلافِ اصطلاحِ
+        رایجِ `x or default`، مقدارِ ۰ (که یعنی «لیستِ ۱» — اولین لیستِ
+        قیمت) رو falsy نمی‌گیره؛ فقط -1 (یعنی «—» انتخاب نشده) یا دیتایِ
+        نامعتبر None برمی‌گردونه."""
+        data = combo.currentData()
+        if data is None:
+            return None
+        try:
+            val = int(data)
+        except (TypeError, ValueError):
+            return None
+        return val if val >= 0 else None
+
     def _collect_row_record(self, row: int) -> dict:
         reg_list = self.rules_table.cellWidget(row, COL_REG_LIST)
         reg_pct = self.rules_table.cellWidget(row, COL_REG_PCT)
@@ -297,11 +311,11 @@ class PriceListStudioTab(QWidget):
         sale_amt = self.rules_table.cellWidget(row, COL_SALE_AMT)
         stock_combo = self.rules_table.cellWidget(row, COL_STOCK_MODE)
         return {
-            "regular_index": int(reg_list.currentData()) if int(reg_list.currentData() or -1) >= 0 else None,
+            "regular_index": self._combo_index_value(reg_list),
             "regular_markup_percent": float(reg_pct.value()),
             "regular_markup_amount": float(reg_amt.value()),
             "sale_enabled": sale_cb.isChecked(),
-            "sale_index": int(sale_list.currentData()) if int(sale_list.currentData() or -1) >= 0 else None,
+            "sale_index": self._combo_index_value(sale_list),
             "sale_markup_percent": float(sale_pct.value()),
             "sale_markup_amount": float(sale_amt.value()),
             "stock_mode": stock_combo.currentData() or None,
