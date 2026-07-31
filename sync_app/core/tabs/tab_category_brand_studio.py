@@ -14,9 +14,7 @@ import logging
 
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtWidgets import (
-    QCheckBox,
     QComboBox,
-    QDoubleSpinBox,
     QFrame,
     QHBoxLayout,
     QInputDialog,
@@ -35,7 +33,7 @@ from sync_app.core.secure_config_loader import load_secure_config
 log = logging.getLogger("SyncApp")
 
 
-class _SiteTaxonomyLoader(QThread):
+class SiteTaxonomyLoader(QThread):
     """دریافتِ لیستِ زنده‌ی دسته‌بندی‌ها و برندهایِ سایت — تویِ ترد جدا."""
 
     done = pyqtSignal(list, list, str)  # categories, brands, error
@@ -74,6 +72,7 @@ class CategoryBrandStudioTab(QWidget):
         self._brands: list[dict] = []
         self._slug_map: dict = {}
         self._id_to_name: dict = {}
+        self._brand_id_to_name: dict = {}
         self._erp_code_index: dict = {}
         self._loader = None
         self.init_ui()
@@ -194,173 +193,11 @@ class CategoryBrandStudioTab(QWidget):
         brand_row.addWidget(apply_brand_btn)
         v.addLayout(brand_row)
 
-        v.addWidget(self._build_price_list_panel())
-
         self.status_label = QLabel("در حالِ دریافتِ دسته‌بندی/برندِ سایت...")
         self.status_label.setStyleSheet("color:#64748b; font-size:12px;")
         v.addWidget(self.status_label)
 
         return panel
-
-    def _build_price_list_panel(self) -> QWidget:
-        """لیستِ قیمتِ عادی/ویژه + مارک‌آپِ مخصوصِ دسته‌بندی/برندِ انتخاب‌شده —
-        دقیقاً هم‌الگویِ فیلدهایِ لیستِ قیمتِ سراسری تویِ تبِ تنظیمات، ولی
-        این‌جا فقط رویِ دسته‌بندی/برندی که بالا انتخاب کردید اثر می‌ذاره
-        (نه کلِ فروشگاه)."""
-        box = QFrame()
-        box.setFrameShape(QFrame.StyledPanel)
-        v = QVBoxLayout(box)
-
-        title = QLabel("💰 لیستِ قیمتِ مخصوصِ دسته‌بندی/برندِ انتخاب‌شده")
-        title.setStyleSheet("font-weight:700;")
-        v.addWidget(title)
-
-        row1 = QHBoxLayout()
-        row1.addWidget(QLabel("لیستِ قیمتِ عادی:"))
-        self.price_list_combo = QComboBox()
-        self.price_list_combo.addItem("— بدونِ override (ارثِ خودکار) —", -1)
-        for i in range(1, 11):
-            self.price_list_combo.addItem(f"لیست قیمت {i}", i - 1)
-        row1.addWidget(self.price_list_combo, 1)
-
-        self.sale_enabled_cb = QCheckBox("قیمتِ ویژه:")
-        row1.addWidget(self.sale_enabled_cb)
-        self.sale_price_list_combo = QComboBox()
-        self.sale_price_list_combo.addItem("— بدونِ override —", -1)
-        for i in range(1, 11):
-            self.sale_price_list_combo.addItem(f"لیست قیمت {i}", i - 1)
-        row1.addWidget(self.sale_price_list_combo, 1)
-        v.addLayout(row1)
-
-        row2 = QHBoxLayout()
-        row2.addWidget(QLabel("درصدِ افزایش/کاهشِ قیمت:"))
-        self.markup_percent_spin = QDoubleSpinBox()
-        self.markup_percent_spin.setRange(-90.0, 500.0)
-        self.markup_percent_spin.setDecimals(1)
-        self.markup_percent_spin.setSuffix(" %")
-        row2.addWidget(self.markup_percent_spin)
-
-        row2.addWidget(QLabel("مبلغِ ثابتِ افزایش/کاهش:"))
-        self.markup_amount_spin = QDoubleSpinBox()
-        self.markup_amount_spin.setRange(-1_000_000_000.0, 1_000_000_000.0)
-        self.markup_amount_spin.setDecimals(0)
-        row2.addWidget(self.markup_amount_spin)
-        v.addLayout(row2)
-
-        hint = QLabel(
-            "درصد اول رویِ قیمتِ پایه اعمال می‌شه، بعد مبلغِ ثابت به نتیجه اضافه/کم می‌شه. "
-            "این تنظیمات رویِ دسته‌بندی/برندِ *انتخاب‌شده در بالا* ذخیره می‌شه — همه‌ی محصولاتی که "
-            "الان یا بعداً به همون دسته‌بندی/برند وصل بشن، خودکار همینو می‌گیرن (اولویت روی لیستِ "
-            "قیمتِ دژاوو/ERP و مارک‌آپِ سراسریِ تبِ تنظیمات داره، مگر خودِ محصول override‌ِ شخصی داشته باشه)."
-        )
-        hint.setWordWrap(True)
-        hint.setStyleSheet("color:#64748b; font-size:11px;")
-        v.addWidget(hint)
-
-        btn_row = QHBoxLayout()
-        save_cat_btn = QPushButton("💾 ثبت برایِ دسته‌بندیِ انتخاب‌شده")
-        save_cat_btn.clicked.connect(self._save_price_settings_for_category)
-        btn_row.addWidget(save_cat_btn)
-
-        save_brand_btn = QPushButton("💾 ثبت برایِ برندِ انتخاب‌شده")
-        save_brand_btn.clicked.connect(self._save_price_settings_for_brand)
-        btn_row.addWidget(save_brand_btn)
-
-        clear_btn = QPushButton("🗑️ پاک‌کردنِ فیلدها")
-        clear_btn.clicked.connect(self._clear_price_fields)
-        btn_row.addWidget(clear_btn)
-        v.addLayout(btn_row)
-
-        self.category_combo.currentIndexChanged.connect(self._load_price_fields_for_current_category)
-        self.brand_combo.currentIndexChanged.connect(self._load_price_fields_for_current_brand)
-
-        return box
-
-    def _clear_price_fields(self):
-        self.price_list_combo.setCurrentIndex(0)
-        self.sale_enabled_cb.setChecked(False)
-        self.sale_price_list_combo.setCurrentIndex(0)
-        self.markup_percent_spin.setValue(0)
-        self.markup_amount_spin.setValue(0)
-
-    def _load_price_fields_from_record(self, record: dict | None):
-        self._clear_price_fields()
-        if not record:
-            return
-        if record.get("regular_index") is not None:
-            idx = self.price_list_combo.findData(int(record["regular_index"]))
-            if idx >= 0:
-                self.price_list_combo.setCurrentIndex(idx)
-        self.sale_enabled_cb.setChecked(bool(record.get("sale_enabled")))
-        if record.get("sale_index") is not None:
-            idx = self.sale_price_list_combo.findData(int(record["sale_index"]))
-            if idx >= 0:
-                self.sale_price_list_combo.setCurrentIndex(idx)
-        self.markup_percent_spin.setValue(float(record.get("markup_percent") or 0))
-        self.markup_amount_spin.setValue(float(record.get("markup_amount") or 0))
-
-    def _load_price_fields_for_current_category(self, *_args):
-        from sync_app.core.site_taxonomy_price_list import get_category_price_settings
-
-        cid = self.category_combo.currentData()
-        if not cid:
-            return
-        self._load_price_fields_from_record(get_category_price_settings(self.config, cid))
-
-    def _load_price_fields_for_current_brand(self, *_args):
-        from sync_app.core.site_taxonomy_price_list import get_brand_price_settings
-
-        bid = self.brand_combo.currentData()
-        if not bid:
-            return
-        self._load_price_fields_from_record(get_brand_price_settings(self.config, bid))
-
-    def _collect_price_record(self) -> dict:
-        return {
-            "regular_index": (
-                int(self.price_list_combo.currentData())
-                if int(self.price_list_combo.currentData() or -1) >= 0
-                else None
-            ),
-            "sale_enabled": self.sale_enabled_cb.isChecked(),
-            "sale_index": (
-                int(self.sale_price_list_combo.currentData())
-                if int(self.sale_price_list_combo.currentData() or -1) >= 0
-                else None
-            ),
-            "markup_percent": float(self.markup_percent_spin.value()),
-            "markup_amount": float(self.markup_amount_spin.value()),
-        }
-
-    def _save_price_settings_for_category(self):
-        cid = self.category_combo.currentData()
-        if not cid:
-            QMessageBox.warning(self, "توجه", "یک دسته‌بندی از لیست انتخاب کنید.")
-            return
-        from sync_app.core.site_taxonomy_price_list import set_category_price_settings
-
-        set_category_price_settings(cid, self._collect_price_record())
-        self.config = load_secure_config(None) or {}
-        QMessageBox.information(
-            self, "ثبت شد",
-            f"لیستِ قیمت/مارک‌آپ برایِ دسته‌بندیِ «{self.category_combo.currentText()}» ذخیره شد — "
-            "این محصولات با سینکِ بعدی این قیمت رو می‌گیرن.",
-        )
-
-    def _save_price_settings_for_brand(self):
-        bid = self.brand_combo.currentData()
-        if not bid:
-            QMessageBox.warning(self, "توجه", "یک برند از لیست انتخاب کنید.")
-            return
-        from sync_app.core.site_taxonomy_price_list import set_brand_price_settings
-
-        set_brand_price_settings(bid, self._collect_price_record())
-        self.config = load_secure_config(None) or {}
-        QMessageBox.information(
-            self, "ثبت شد",
-            f"لیستِ قیمت/مارک‌آپ برایِ برندِ «{self.brand_combo.currentText()}» ذخیره شد — "
-            "این محصولات با سینکِ بعدی این قیمت رو می‌گیرن.",
-        )
 
     # ------------------------------------------------------------------
     # بارگذاریِ محصولات (از خودِ تبِ محصولات — بدونِ کوئریِ دوباره‌ی SQL)
@@ -368,6 +205,7 @@ class CategoryBrandStudioTab(QWidget):
     def _reload_products(self):
         from sync_app.core.product_woo_map_helper import load_product_woo_map
         from sync_app.core.product_category_override import load_category_overrides
+        from sync_app.core.product_brand_override import load_brand_overrides
         from sync_app.core.category_rules import resolve_product_categories, sku_to_category_codes
         from sync_app.core.category_resolver import load_category_map
 
@@ -376,6 +214,7 @@ class CategoryBrandStudioTab(QWidget):
 
         product_map = load_product_woo_map()
         overrides = load_category_overrides()
+        brand_overrides = load_brand_overrides()
         cat_map = load_category_map()
 
         erp_codes_seen: set[str] = set()
@@ -414,12 +253,15 @@ class CategoryBrandStudioTab(QWidget):
             else:
                 site_cat_label = "بدونِ دسته‌بندیِ سایت"
 
+            brand_id = brand_overrides.get(sku)
+            brand_label = self._brand_id_to_name.get(brand_id, f"#{brand_id}") if brand_id else "بدونِ برند"
+
             label_bits = []
             label_bits.append("✅" if is_linked else "⭕")
             if has_override:
                 label_bits.append("🏷️")
             label_bits.append(
-                f"{name} — کد: {sku} | دژاوو: {erp_label} | سایت: {site_cat_label}"
+                f"{name} — کد: {sku} | دژاوو: {erp_label} | سایت: {site_cat_label} | برند: {brand_label}"
             )
             item = QListWidgetItem(" ".join(label_bits))
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
@@ -510,7 +352,7 @@ class CategoryBrandStudioTab(QWidget):
             self.status_label.setText("⚠️ ابتدا آدرسِ فروشگاه را در تبِ تنظیمات وارد کنید.")
             return
         self.status_label.setText("⏳ در حالِ دریافتِ دسته‌بندی/برندِ سایت...")
-        self._loader = _SiteTaxonomyLoader(self.config)
+        self._loader = SiteTaxonomyLoader(self.config)
         self._loader.done.connect(self._on_taxonomy_loaded)
         self._loader.start()
 
@@ -527,6 +369,11 @@ class CategoryBrandStudioTab(QWidget):
             int(c["id"]): str(c.get("name") or f"#{c['id']}")
             for c in self._categories
             if c.get("id")
+        }
+        self._brand_id_to_name = {
+            int(b["id"]): str(b.get("name") or f"#{b['id']}")
+            for b in self._brands
+            if b.get("id")
         }
         self._erp_code_index = build_code_index_from_slug_map(self._slug_map)
 
@@ -738,14 +585,16 @@ class CategoryBrandStudioTab(QWidget):
                     ok, _resp, err = set_wc_product_brands(self.config, pid, [brand_id])
                     if not ok:
                         raise RuntimeError(err)
-                # برایِ اینکه لیستِ قیمتِ مخصوصِ این برند (بخشِ پایینِ همین تب)
-                # موقعِ سینکِ بعدی بتونه محلی resolve بشه — بدونِ نیاز به یه
-                # فراخوانیِ زنده‌ی API برایِ «برندِ فعلیِ این SKU چیه».
+                # برایِ اینکه لیستِ قیمتِ مخصوصِ این برند (تبِ «لیستِ قیمت») موقعِ
+                # سینکِ بعدی بتونه محلی resolve بشه — بدونِ نیاز به یه فراخوانیِ
+                # زنده‌ی API برایِ «برندِ فعلیِ این SKU چیه». هم‌زمان روی خودِ
+                # ردیفِ محصول تویِ همین تب هم نشون داده می‌شه.
                 set_manual_brand_id(sku, brand_id)
                 ok_count += 1
             except Exception as exc:
                 fail_count += 1
                 log.warning(f"⚠️ الصاقِ برند برایِ {sku} ناموفق بود: {exc}")
+        self._reload_products()
         QMessageBox.information(
             self, "نتیجه", f"برند برایِ {ok_count} محصول اعمال شد" + (f" — {fail_count} ناموفق." if fail_count else ".")
         )

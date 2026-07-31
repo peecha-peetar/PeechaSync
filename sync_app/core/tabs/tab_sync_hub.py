@@ -19,6 +19,7 @@ from sync_app.core.adaptive_tab_bar import AdaptiveTabBar
 from sync_app.core.product_mode import is_simple_only
 from sync_app.core.tabs.tab_categories import CategoryTab
 from sync_app.core.tabs.tab_category_brand_studio import CategoryBrandStudioTab
+from sync_app.core.tabs.tab_price_list_studio import PriceListStudioTab
 from sync_app.core.tabs.tab_properties import PropertiesTab
 from sync_app.core.tabs.tab_products import ProductTab
 from sync_app.core.tabs.tab_variations import VariationsTab
@@ -45,6 +46,7 @@ class SyncHubTab(QWidget):
         self.customer_tab = CustomerTab()
         self.order_tab = OrderTab()
         self.category_brand_studio_tab = CategoryBrandStudioTab(product_tab_ref=self.product_tab)
+        self.price_list_studio_tab = PriceListStudioTab()
 
         # اگه فروشگاه فقط محصول ساده داره (بدون ویژگی/متغیر)، این دو زیرتب
         # رو اصلاً نشون نده — نمونه‌شون همچنان ساخته می‌شه (برای سازگاری با
@@ -61,6 +63,7 @@ class SyncHubTab(QWidget):
         self.sub_tabs.addTab(self.customer_tab, "👥 مشتریان")
         self.sub_tabs.addTab(self.order_tab, "🧾 سفارشات")
         self.sub_tabs.addTab(self.category_brand_studio_tab, "🏷️ دسته‌بندی و برند")
+        self.sub_tabs.addTab(self.price_list_studio_tab, "💰 لیستِ قیمت")
 
         layout.addWidget(self.sub_tabs)
         self.setLayout(layout)
@@ -75,6 +78,7 @@ class SyncHubTab(QWidget):
             "customer_tab": self.customer_tab,
             "order_tab": self.order_tab,
             "category_brand_studio_tab": self.category_brand_studio_tab,
+            "price_list_studio_tab": self.price_list_studio_tab,
         }
 
     def select_sub_tab(self, attr_name: str) -> bool:
@@ -87,6 +91,7 @@ class SyncHubTab(QWidget):
             "customer_tab": self.customer_tab,
             "order_tab": self.order_tab,
             "category_brand_studio_tab": self.category_brand_studio_tab,
+            "price_list_studio_tab": self.price_list_studio_tab,
         }
         widget = mapping.get(attr_name)
         if widget is None:
