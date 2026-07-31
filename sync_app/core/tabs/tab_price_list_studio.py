@@ -1,12 +1,14 @@
 """تبِ «لیستِ قیمت» — یه جدولِ خام: هر ردیف یک قاعده‌ست، همه‌چیز مستقیم
 تویِ خودِ ردیف تنظیم و ذخیره می‌شه (بدونِ فرم/هدرِ جدا). ستونِ اول یه
 دسته‌بندی یا برندِ سایت رو انتخاب می‌کنه (فقط یکی، هر ردیف مستقلِ خودشه)،
-بقیه‌ی ستون‌ها لیستِ قیمتِ عادی/ویژه و درصد/مبلغِ مارک‌آپِ همون هدف رو
-می‌گیرن. دکمه‌ی 💾 همون ردیف رو ذخیره می‌کنه، 🗑 همون ردیف رو حذف می‌کنه.
+بقیه‌ی ستون‌ها لیستِ قیمتِ عادی/ویژه و درصد/مبلغِ مارک‌آپِ همون هدف، و
+یه ستونِ «نوعِ موجودی» رو می‌گیرن. دکمه‌ی 💾 همون ردیف رو ذخیره می‌کنه،
+🗑 همون ردیف رو حذف می‌کنه.
 
-اولویتِ نهایی موقعِ سینک: override رویِ خودِ محصول (اگه از قبل جایی ست
-شده باشه) → برندِ دستیِ سایتِ محصول → دسته‌بندیِ دستیِ سایتِ محصول → لیستِ
-قیمتِ دژاوو/ERP → پیش‌فرضِ سراسریِ تبِ تنظیمات."""
+اولویتِ نهایی موقعِ سینک (هم برایِ قیمت هم برایِ نوعِ موجودی): override
+رویِ خودِ محصول (اگه از قبل جایی ست شده باشه) → برندِ دستیِ سایتِ محصول
+→ دسته‌بندیِ دستیِ سایتِ محصول (همینِ جدول) → لیستِ قیمتِ دژاوو/ERP یا
+تنظیمِ نوعِ موجودیِ دسته‌بندیِ ERP → پیش‌فرضِ سراسریِ تبِ تنظیمات."""
 
 from __future__ import annotations
 
@@ -40,11 +42,12 @@ COL_SALE_ON = 4
 COL_SALE_LIST = 5
 COL_SALE_PCT = 6
 COL_SALE_AMT = 7
-COL_ACTIONS = 8
+COL_STOCK_MODE = 8
+COL_ACTIONS = 9
 
 _HEADERS = [
     "دسته‌بندی/برند", "لیستِ عادی", "٪ عادی", "مبلغِ عادی",
-    "ویژه", "لیستِ ویژه", "٪ ویژه", "مبلغِ ویژه", "",
+    "ویژه", "لیستِ ویژه", "٪ ویژه", "مبلغِ ویژه", "نوعِ موجودی", "",
 ]
 
 
@@ -67,9 +70,10 @@ class PriceListStudioTab(QWidget):
 
         hint = QLabel(
             "هر ردیف یک قاعده‌ی مستقله: یا برایِ یه دسته‌بندیِ سایت، یا برایِ یه برندِ سایت. لیستِ "
-            "قیمتِ عادی/ویژه و درصد/مبلغِ مارک‌آپ رو مستقیم تویِ همون ردیف بدید و 💾 بزنید. همه‌ی "
+            "قیمتِ عادی/ویژه، درصد/مبلغِ مارک‌آپ و نوعِ موجودی رو مستقیم تویِ همون ردیف بدید و 💾 "
+            "بزنید (نوعِ موجودی رو خالی بذارید یعنی از تنظیمِ دسته‌بندیِ ERP ارث ببره). همه‌ی "
             "محصولاتی که به همون دسته‌بندی/برند وصل باشن، خودکار همینو می‌گیرن — اگه یه محصول هم "
-            "برندِ قیمت‌دار داشته باشه هم دسته‌بندیِ قیمت‌دار، برند اولویت داره."
+            "برندِ قاعده‌دار داشته باشه هم دسته‌بندیِ قاعده‌دار، برند اولویت داره."
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color:#475569; font-size:12px;")
@@ -113,6 +117,7 @@ class PriceListStudioTab(QWidget):
         # QVariantِ اشیایِ پایتونیِ پیچیده (مثلِ tuple) رو گاهی با مقایسه‌ی
         # identity (نه ==) چک می‌کنه، پس یه tupleِ جداگانه‌ساخته‌شده با همون
         # مقدار پیدا نمی‌شه. یه رشته‌ی ساده («category:5») همیشه درست کار می‌کنه.
+        combo.setLayoutDirection(Qt.RightToLeft)
         combo.blockSignals(True)
         combo.clear()
         combo.addItem("— انتخاب کنید —", "")
@@ -132,9 +137,20 @@ class PriceListStudioTab(QWidget):
 
     def _make_price_list_combo(self) -> QComboBox:
         combo = QComboBox()
+        combo.setLayoutDirection(Qt.RightToLeft)
         combo.addItem("—", -1)
         for i in range(1, 11):
             combo.addItem(str(i), i - 1)
+        return combo
+
+    def _make_stock_mode_combo(self) -> QComboBox:
+        from sync_app.core.stock_mode import STOCK_MODE_LABELS
+
+        combo = QComboBox()
+        combo.setLayoutDirection(Qt.RightToLeft)
+        combo.addItem("— (دسته‌بندیِ ERP) —", "")
+        for key, label in STOCK_MODE_LABELS.items():
+            combo.addItem(label, key)
         return combo
 
     def _make_percent_spin(self) -> QDoubleSpinBox:
@@ -142,12 +158,14 @@ class PriceListStudioTab(QWidget):
         spin.setRange(-90.0, 500.0)
         spin.setDecimals(1)
         spin.setSuffix(" %")
+        spin.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         return spin
 
     def _make_amount_spin(self) -> QDoubleSpinBox:
         spin = QDoubleSpinBox()
         spin.setRange(-1_000_000_000.0, 1_000_000_000.0)
         spin.setDecimals(0)
+        spin.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         return spin
 
     def _centered(self, widget: QWidget) -> QWidget:
@@ -180,6 +198,7 @@ class PriceListStudioTab(QWidget):
         sale_list = self._make_price_list_combo()
         sale_pct = self._make_percent_spin()
         sale_amt = self._make_amount_spin()
+        stock_combo = self._make_stock_mode_combo()
 
         if record:
             if record.get("regular_index") is not None:
@@ -195,6 +214,10 @@ class PriceListStudioTab(QWidget):
                     sale_list.setCurrentIndex(i)
             sale_pct.setValue(float(record.get("sale_markup_percent") or 0))
             sale_amt.setValue(float(record.get("sale_markup_amount") or 0))
+            if record.get("stock_mode"):
+                i = stock_combo.findData(record["stock_mode"])
+                if i >= 0:
+                    stock_combo.setCurrentIndex(i)
 
         self.rules_table.setCellWidget(row, COL_REG_LIST, reg_list)
         self.rules_table.setCellWidget(row, COL_REG_PCT, reg_pct)
@@ -203,6 +226,7 @@ class PriceListStudioTab(QWidget):
         self.rules_table.setCellWidget(row, COL_SALE_LIST, sale_list)
         self.rules_table.setCellWidget(row, COL_SALE_PCT, sale_pct)
         self.rules_table.setCellWidget(row, COL_SALE_AMT, sale_amt)
+        self.rules_table.setCellWidget(row, COL_STOCK_MODE, stock_combo)
 
         actions = QWidget()
         actions_layout = QHBoxLayout(actions)
@@ -241,6 +265,7 @@ class PriceListStudioTab(QWidget):
         sale_list = self.rules_table.cellWidget(row, COL_SALE_LIST)
         sale_pct = self.rules_table.cellWidget(row, COL_SALE_PCT)
         sale_amt = self.rules_table.cellWidget(row, COL_SALE_AMT)
+        stock_combo = self.rules_table.cellWidget(row, COL_STOCK_MODE)
         return {
             "regular_index": int(reg_list.currentData()) if int(reg_list.currentData() or -1) >= 0 else None,
             "regular_markup_percent": float(reg_pct.value()),
@@ -249,6 +274,7 @@ class PriceListStudioTab(QWidget):
             "sale_index": int(sale_list.currentData()) if int(sale_list.currentData() or -1) >= 0 else None,
             "sale_markup_percent": float(sale_pct.value()),
             "sale_markup_amount": float(sale_amt.value()),
+            "stock_mode": stock_combo.currentData() or None,
         }
 
     def _save_row(self, actions_widget: QWidget):

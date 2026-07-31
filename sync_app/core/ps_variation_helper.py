@@ -518,7 +518,7 @@ def ps_sync_product_variations(
     has_default = any(c.get("default_on") for c in existing_by_ref.values())
 
     from sync_app.core.stock_mode import (
-        STOCK_MODE_ALWAYS, STOCK_MODE_DOWNLOAD, resolve_variation_stock_mode,
+        STOCK_MODE_ALWAYS, STOCK_MODE_DOWNLOAD, STOCK_MODE_OUT_OF_STOCK, resolve_variation_stock_mode,
         get_variation_stock_mode_override, get_product_stock_mode_override,
     )
     from sync_app.core.field_sync_config import is_field_enabled
@@ -588,11 +588,16 @@ def ps_sync_product_variations(
             log.info(f"📦 [{a_code}] واریانت {sku} حالت موجودی resolve شد: {v_mode} (منبع: {_mode_source})")
             # «همیشه موجود»/«دانلودی» — سفارش با موجودیِ صفر هم مجاز باشه
             # (out_of_stock=1)، نه فقط یک عدد بزرگ که بالاخره تموم بشه؛ حالت
-            # دیتابیس با صفر شدن موجودی سفارش رو رد می‌کنه (out_of_stock=0) —
+            # دیتابیس با صفر شدن موجودی سفارش رو رد می‌کنه (out_of_stock=0)؛
+            # «ناموجود» صریحاً غیرقابل‌سفارشه (موجودی=۰ و out_of_stock=۰) —
             # دقیقاً همون منطق محصول ساده در commerce_provider._ps_apply_stock_from_payload.
-            always_available = v_mode in (STOCK_MODE_ALWAYS, STOCK_MODE_DOWNLOAD)
-            stock_qty = 9999 if always_available else raw_stock_qty
-            stock_out_of_stock = 1 if always_available else 0
+            if v_mode == STOCK_MODE_OUT_OF_STOCK:
+                stock_qty = 0
+                stock_out_of_stock = 0
+            else:
+                always_available = v_mode in (STOCK_MODE_ALWAYS, STOCK_MODE_DOWNLOAD)
+                stock_qty = 9999 if always_available else raw_stock_qty
+                stock_out_of_stock = 1 if always_available else 0
 
         try:
             existing_combo = existing_by_ref.get(sku)

@@ -1,13 +1,18 @@
 """
-حالت موجودی محصول — سه حالت:
-  db      : مدیریت موجودی از دیتابیس ERP (manage_stock=True, تعداد واقعی)
-  always  : همیشه موجود (manage_stock=False, stock_status=instock)
-  download: دانلودی/بدون نیاز به موجودی فیزیکی (مثل always رفتار می‌کنه
-            سمت ووکامرس، چون ووکامرس ساده فیلد «دانلودی مستقل» نداره —
-            manage_stock=False و stock_status=instock)
+حالت موجودی محصول — چهار حالت:
+  db       : مدیریت موجودی از دیتابیس ERP (manage_stock=True, تعداد واقعی)
+  always   : همیشه موجود (manage_stock=False, stock_status=instock)
+  download : دانلودی/بدون نیاز به موجودی فیزیکی (مثل always رفتار می‌کنه
+             سمت ووکامرس، چون ووکامرس ساده فیلد «دانلودی مستقل» نداره —
+             manage_stock=False و stock_status=instock)
+  outofstock: ناموجود — صریحاً غیرقابل‌سفارش، صرف‌نظر از موجودیِ دیتابیس
+             (manage_stock=False, stock_status=outofstock)
 
 پیش‌فرض هر محصول از دسته‌بندیش ارث می‌بره؛ می‌شه روی هر محصول هم جدا
-override کرد.
+override کرد. یه لایه‌ی دیگه هم بینِ override محصول و دسته‌بندیِ ERP هست:
+اگه دسته‌بندی/برندِ سایتِ محصول (تبِ «لیستِ قیمت») حالتِ موجودیِ مخصوصِ
+خودش رو ست کرده باشه، همون استفاده می‌شه — برند اول، بعد دسته‌بندی (دقیقاً
+همون اولویتِ لیستِ قیمت).
 """
 
 from __future__ import annotations
@@ -15,11 +20,13 @@ from __future__ import annotations
 STOCK_MODE_DB = "db"
 STOCK_MODE_ALWAYS = "always"
 STOCK_MODE_DOWNLOAD = "download"
+STOCK_MODE_OUT_OF_STOCK = "outofstock"
 
 STOCK_MODE_LABELS = {
     STOCK_MODE_DB: "بر اساس موجودی دیتابیس",
     STOCK_MODE_ALWAYS: "همیشه موجود",
     STOCK_MODE_DOWNLOAD: "دانلودی (بدون نیاز به موجودی)",
+    STOCK_MODE_OUT_OF_STOCK: "ناموجود",
 }
 
 CATEGORY_STOCK_MODE_KEY = "CATEGORY_STOCK_MODE"   # {group_code: mode}
@@ -125,13 +132,34 @@ def resolve_variation_stock_mode(variation_sku: str, parent_sku: str, group_code
     return resolve_stock_mode(parent_sku, group_code, config)
 
 
+def _site_taxonomy_stock_mode(config: dict, sku: str) -> str | None:
+    """حالتِ موجودیِ ست‌شده رویِ دسته‌بندی/برندِ سایتِ این SKU (تبِ «لیستِ
+    قیمت») — برند اول، بعد دسته‌بندی؛ اگه چیزی ست نشده باشه None."""
+    if not sku:
+        return None
+    try:
+        from sync_app.core.site_taxonomy_price_list import resolve_site_price_settings
+
+        settings = resolve_site_price_settings(config, sku)
+    except Exception:
+        return None
+    if not settings:
+        return None
+    mode = settings.get("stock_mode")
+    return mode if mode in STOCK_MODE_LABELS else None
+
+
 def resolve_stock_mode(sku: str, group_code: str, config: dict) -> str:
     """
-    اولویت: override روی خودِ محصول → تنظیم دسته‌بندی → پیش‌فرض «db».
+    اولویت: override روی خودِ محصول → حالتِ ست‌شده رویِ دسته‌بندی/برندِ سایت
+    (تبِ «لیستِ قیمت»، برند اول) → تنظیمِ دسته‌بندیِ ERP → پیش‌فرض «db».
     """
     override = get_product_stock_mode_override(config, sku)
     if override:
         return override
+    site_mode = _site_taxonomy_stock_mode(config, sku)
+    if site_mode:
+        return site_mode
     return get_category_stock_mode(config, group_code)
 
 
@@ -140,7 +168,11 @@ def apply_stock_mode_to_payload(payload: dict, mode: str, stock_quantity: int) -
     payload رو طبق حالت موجودی اصلاح می‌کنه — این دقیقاً همون فیلدهاییه که
     روی ووکامرس اعمال می‌شه (manage_stock/stock_quantity/stock_status).
     """
-    if mode in (STOCK_MODE_ALWAYS, STOCK_MODE_DOWNLOAD):
+    if mode == STOCK_MODE_OUT_OF_STOCK:
+        payload["manage_stock"] = False
+        payload["stock_status"] = "outofstock"
+        payload.pop("stock_quantity", None)
+    elif mode in (STOCK_MODE_ALWAYS, STOCK_MODE_DOWNLOAD):
         payload["manage_stock"] = False
         payload["stock_status"] = "instock"
         payload.pop("stock_quantity", None)

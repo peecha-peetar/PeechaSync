@@ -5,10 +5,13 @@ idِ دسته‌بندی/برندِ واقعیِ سایته که از تبِ «�
 هر رکورد:
 {"regular_index": int|None, "regular_markup_percent": float, "regular_markup_amount": float,
  "sale_enabled": bool, "sale_index": int|None,
- "sale_markup_percent": float, "sale_markup_amount": float}
+ "sale_markup_percent": float, "sale_markup_amount": float,
+ "stock_mode": str|None}
 دقیقاً مثلِ سراسری (PRICE_MARKUP_PERCENT/SALE_PRICE_MARKUP_PERCENT تویِ تبِ
 تنظیمات)، درصد/مبلغِ عادی و ویژه جدا از همن — هر فیلد که None/خالی باشه
-یعنی «از سطحِ بعدی ارث ببر».
+یعنی «از سطحِ بعدی ارث ببر». stock_mode هم یکی از کلیدهایِ
+stock_mode.STOCK_MODE_LABELS ـه (db/always/download/outofstock) — همون
+اولویتِ برند→دسته‌بندی برایِ حالتِ موجودی هم اعمال می‌شه (stock_mode.py).
 
 اولویتِ resolve: برندِ دستیِ سایتِ SKU → دسته‌بندیِ دستیِ سایتِ SKU → None
 (یعنی از سطحِ بعدی — دسته‌بندیِ ERP/پیش‌فرضِ سراسری — استفاده بشه). برند
@@ -46,6 +49,12 @@ def _clean_record(record: dict | None) -> dict:
                     out[key] = f
             except (TypeError, ValueError):
                 pass
+    stock_mode = record.get("stock_mode")
+    if stock_mode:
+        from sync_app.core.stock_mode import STOCK_MODE_LABELS
+
+        if stock_mode in STOCK_MODE_LABELS:
+            out["stock_mode"] = stock_mode
     return out
 
 
