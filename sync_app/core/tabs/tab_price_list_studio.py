@@ -90,6 +90,10 @@ class PriceListStudioTab(QWidget):
         self.rules_table.setHorizontalHeaderLabels(_HEADERS)
         self.rules_table.horizontalHeader().setSectionResizeMode(COL_TARGET, QHeaderView.Stretch)
         self.rules_table.verticalHeader().setVisible(False)
+        # ویجت‌هایی که تویِ هر ردیف می‌ذاریم (کمبو/اسپین‌باکس) با ارتفاعِ
+        # پیش‌فرضِ خیلی کمِ QTableWidget جمع‌وجور و روی‌هم می‌افتادن — یه
+        # ارتفاعِ ثابتِ بزرگ‌تر برایِ همه‌ی ردیف‌ها تنظیم می‌کنیم.
+        self.rules_table.verticalHeader().setDefaultSectionSize(44)
         root.addWidget(self.rules_table, 1)
 
         self.status_label = QLabel("در حالِ دریافتِ دسته‌بندی/برندِ سایت...")
@@ -160,6 +164,7 @@ class PriceListStudioTab(QWidget):
     def _add_row(self, kind: str | None = None, entity_id: int | None = None, record: dict | None = None):
         row = self.rules_table.rowCount()
         self.rules_table.insertRow(row)
+        self.rules_table.setRowHeight(row, 44)
 
         target_combo = self._make_target_combo()
         if kind and entity_id:
