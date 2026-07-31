@@ -982,11 +982,15 @@ class CategoryTab(QWidget):
         self._tree_bulk_update = True
         self.tree.blockSignals(True)
         try:
-            touched_parents = set()
+            # QTreeWidgetItemِ پی‌کیوت۵ مقایسه (__eq__/__lt__) داره ولی هش نداره،
+            # پس نمی‌شه مستقیم تویِ set/dict به‌عنوانِ کلید گذاشتش (TypeError:
+            # unhashable type) — با id() کلیدش می‌کنیم تا هم یکتا بمونه هم
+            # خودِ آبجکتِ اصلی رو نگه داریم.
+            touched_parents = {}
             for parent, child in self._iter_visible_sub_groups():
                 child.setCheckState(0, Qt.Checked)
-                touched_parents.add(parent)
-            for parent in touched_parents:
+                touched_parents[id(parent)] = parent
+            for parent in touched_parents.values():
                 visible_children = [
                     parent.child(j)
                     for j in range(parent.childCount())
@@ -1013,11 +1017,11 @@ class CategoryTab(QWidget):
         self._tree_bulk_update = True
         self.tree.blockSignals(True)
         try:
-            touched_parents = set()
+            touched_parents = {}
             for parent, child in self._iter_visible_sub_groups():
                 child.setCheckState(0, Qt.Unchecked)
-                touched_parents.add(parent)
-            for parent in touched_parents:
+                touched_parents[id(parent)] = parent
+            for parent in touched_parents.values():
                 visible_children = [
                     parent.child(j)
                     for j in range(parent.childCount())
