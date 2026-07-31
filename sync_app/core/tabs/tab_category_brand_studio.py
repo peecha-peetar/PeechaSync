@@ -115,8 +115,16 @@ class CategoryBrandStudioTab(QWidget):
         self.override_filter_combo.addItem("— همه —", "all")
         self.override_filter_combo.addItem("🏷️ با دسته‌بندیِ دستی", "manual")
         self.override_filter_combo.addItem("⚙️ فقط خودکار (ERP)", "auto")
+        self.override_filter_combo.addItem("🚫 بدونِ دسته‌بندیِ سایت", "no_category")
         self.override_filter_combo.currentIndexChanged.connect(self._apply_filters)
         filter_row.addWidget(self.override_filter_combo, 1)
+
+        self.brand_filter_combo = QComboBox()
+        self.brand_filter_combo.addItem("— همه —", "all")
+        self.brand_filter_combo.addItem("🚫 بدونِ برند", "no_brand")
+        self.brand_filter_combo.addItem("🏢 دارایِ برند", "has_brand")
+        self.brand_filter_combo.currentIndexChanged.connect(self._apply_filters)
+        filter_row.addWidget(self.brand_filter_combo, 1)
 
         self.refresh_products_btn = QPushButton("🔄 بروزرسانیِ لیست")
         self.refresh_products_btn.setToolTip("خواندنِ دوباره‌ی لیستِ محصولات از تبِ «محصولات»")
@@ -272,6 +280,8 @@ class CategoryBrandStudioTab(QWidget):
             item.setData(Qt.UserRole + 3, has_override)
             item.setData(Qt.UserRole + 4, codes)
             item.setData(Qt.UserRole + 5, (name + " " + sku).lower())
+            item.setData(Qt.UserRole + 6, bool(effective_ids))  # دارایِ دسته‌بندیِ سایت (مؤثر)
+            item.setData(Qt.UserRole + 7, bool(brand_id))  # دارایِ برند
             self.product_list.addItem(item)
 
         current_erp = self.erp_category_combo.currentData()
@@ -294,6 +304,7 @@ class CategoryBrandStudioTab(QWidget):
         erp_code = self.erp_category_combo.currentData() or ""
         link_mode = self.link_filter_combo.currentData() or "all"
         override_mode = self.override_filter_combo.currentData() or "all"
+        brand_mode = self.brand_filter_combo.currentData() or "all"
 
         for i in range(self.product_list.count()):
             item = self.product_list.item(i)
@@ -309,6 +320,12 @@ class CategoryBrandStudioTab(QWidget):
             if visible and override_mode == "manual" and not item.data(Qt.UserRole + 3):
                 visible = False
             if visible and override_mode == "auto" and item.data(Qt.UserRole + 3):
+                visible = False
+            if visible and override_mode == "no_category" and item.data(Qt.UserRole + 6):
+                visible = False
+            if visible and brand_mode == "no_brand" and item.data(Qt.UserRole + 7):
+                visible = False
+            if visible and brand_mode == "has_brand" and not item.data(Qt.UserRole + 7):
                 visible = False
             item.setHidden(not visible)
         self._update_count_label()
