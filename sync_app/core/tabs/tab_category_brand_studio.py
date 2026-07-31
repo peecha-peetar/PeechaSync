@@ -70,6 +70,9 @@ class CategoryBrandStudioTab(QWidget):
         self.product_tab_ref = product_tab_ref
         self._categories: list[dict] = []
         self._brands: list[dict] = []
+        self._slug_map: dict = {}
+        self._id_to_name: dict = {}
+        self._erp_code_index: dict = {}
         self._loader = None
         self.init_ui()
 
@@ -201,13 +204,15 @@ class CategoryBrandStudioTab(QWidget):
     def _reload_products(self):
         from sync_app.core.product_woo_map_helper import load_product_woo_map
         from sync_app.core.product_category_override import load_category_overrides
-        from sync_app.core.category_rules import sku_to_category_codes
+        from sync_app.core.category_rules import resolve_product_categories, sku_to_category_codes
+        from sync_app.core.category_resolver import load_category_map
 
         self.product_list.blockSignals(True)
         self.product_list.clear()
 
         product_map = load_product_woo_map()
         overrides = load_category_overrides()
+        cat_map = load_category_map()
 
         erp_codes_seen: set[str] = set()
         source_list = getattr(self.product_tab_ref, "product_list", None)
@@ -224,15 +229,34 @@ class CategoryBrandStudioTab(QWidget):
             sku = str(sku)
             name = str(src_item.data(Qt.UserRole + 4) or "")
             is_linked = bool(src_item.data(Qt.UserRole + 12))
-            has_override = sku in overrides
+            manual_ids = overrides.get(sku)
+            has_override = bool(manual_ids)
             codes = sku_to_category_codes(sku)
             erp_codes_seen.update(codes)
+            leaf_code = codes[0] if codes else ""
+            erp_label = self._erp_code_index.get(leaf_code, {}).get("name") or (
+                f"کدِ {leaf_code}" if leaf_code else "—"
+            )
+
+            if manual_ids:
+                effective_ids = list(manual_ids)
+            else:
+                effective_ids = [
+                    int(c["id"]) for c in resolve_product_categories(sku, cat_map, self._slug_map)
+                ]
+            if effective_ids:
+                cat_names = [self._id_to_name.get(cid, f"#{cid}") for cid in effective_ids]
+                site_cat_label = "، ".join(cat_names)
+            else:
+                site_cat_label = "بدونِ دسته‌بندیِ سایت"
 
             label_bits = []
             label_bits.append("✅" if is_linked else "⭕")
             if has_override:
                 label_bits.append("🏷️")
-            label_bits.append(f"{name} — کد: {sku}")
+            label_bits.append(
+                f"{name} — کد: {sku} | دژاوو: {erp_label} | سایت: {site_cat_label}"
+            )
             item = QListWidgetItem(" ".join(label_bits))
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
             item.setCheckState(Qt.Unchecked)
@@ -249,7 +273,9 @@ class CategoryBrandStudioTab(QWidget):
         self.erp_category_combo.clear()
         self.erp_category_combo.addItem("— همه‌ی دسته‌بندی‌هایِ دژاوو —", "")
         for code in sorted(erp_codes_seen):
-            self.erp_category_combo.addItem(f"کدِ {code}", code)
+            entry_name = self._erp_code_index.get(code, {}).get("name")
+            label = f"{entry_name} (کدِ {code})" if entry_name else f"کدِ {code}"
+            self.erp_category_combo.addItem(label, code)
         idx = self.erp_category_combo.findData(current_erp)
         self.erp_category_combo.setCurrentIndex(idx if idx >= 0 else 0)
         self.erp_category_combo.blockSignals(False)
@@ -328,8 +354,17 @@ class CategoryBrandStudioTab(QWidget):
         if error:
             self.status_label.setText(f"⚠️ دریافتِ دسته‌بندی/برند ناموفق بود: {error}")
             return
+        from sync_app.core.category_resolver import build_code_index_from_slug_map
+
         self._categories = categories or []
         self._brands = brands or []
+        self._slug_map = {c.get("slug"): c for c in self._categories if c.get("slug")}
+        self._id_to_name = {
+            int(c["id"]): str(c.get("name") or f"#{c['id']}")
+            for c in self._categories
+            if c.get("id")
+        }
+        self._erp_code_index = build_code_index_from_slug_map(self._slug_map)
 
         self.category_combo.clear()
         for cat in sorted(self._categories, key=lambda c: str(c.get("name") or "")):
@@ -346,6 +381,10 @@ class CategoryBrandStudioTab(QWidget):
         self.status_label.setText(
             f"✅ {len(self._categories)} دسته‌بندی و {len(self._brands)} برند از سایت دریافت شد."
         )
+        # حالا که اسم‌هایِ واقعیِ دسته‌بندی‌هایِ سایت در دسترسه، لیستِ محصولات
+        # رو دوباره بساز تا ستونِ «سایت: ...» و فیلترِ دژاوو، به‌جایِ idِ خام،
+        # اسمِ واقعی نشون بدن.
+        self._reload_products()
 
     # ------------------------------------------------------------------
     # دسته‌بندی: ساخت/اعمال/بازگردانی
