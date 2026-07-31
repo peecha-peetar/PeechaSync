@@ -563,6 +563,14 @@ def main():
     # اینجا هم سازگار با آن فراخوانی می‌کنیم
     config = load_secure_config(None)
 
+    if bool(config.get("DISABLE_ERP_CATEGORY_SYNC", False)):
+        log.info(
+            "ℹ️ سینکِ خودکارِ دسته‌بندیِ ERP در تنظیمات خاموشه — درختِ دسته‌بندی به سایت ارسال نمی‌شه "
+            "و محصولات بدونِ دسته‌بندی سینک می‌شن. دسته‌بندیِ سایت رو از تبِ «دسته‌بندی و برند» "
+            "دستی الصاق کنید."
+        )
+        return {"synced": 0, "failed": [], "total": 0, "disabled": True}
+
     SQL_CONN_STRING = config.get("SQL_CONN_STRING", "")
 
     selected_main_groups = config.get("SELECTED_CATEGORY_GROUPS", [])

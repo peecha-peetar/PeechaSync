@@ -251,6 +251,9 @@ def _ps_resolve_stock_fields(body):
         # (معادل رفتار پیش‌فرض ووکامرس برای manage_stock=True بدون backorder).
         return qty, 0
     if body.get("manage_stock") is False:
+        if str(body.get("stock_status") or "").strip() == "outofstock":
+            # «ناموجود» — صریحاً غیرقابل‌سفارش، نه فقط موجودیِ صفرِ قابل‌ذخیره.
+            return 0, 0
         # «همیشه موجود» / «دانلودی» — با موجودیِ صفر هم سفارش مجاز باشه
         # (out_of_stock=1)، نه فقط یک عدد بزرگ که بالاخره روزی تموم بشه.
         return 9999, 1

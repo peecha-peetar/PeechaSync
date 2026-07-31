@@ -734,7 +734,8 @@ def ps_update_product(
     config, product_id: int, *, sku: str | None = None, name: str | None = None,
     price=None, description: str | None = None, category_ids: list[int] | None = None,
     active: bool | None = None, catalog_visibility: str | None = None,
-    out_of_stock: int | None = None, has_variants: bool | None = None, timeout=None,
+    out_of_stock: int | None = None, has_variants: bool | None = None,
+    manufacturer_id: int | None = None, timeout=None,
 ) -> dict:
     cfg = config or {}
     lang_id = ps_lang_id(cfg)
@@ -795,6 +796,14 @@ def ps_update_product(
             else _int_or_default(current.get("out_of_stock"), 2)
         )
         _set_text(node, "out_of_stock", final_out_of_stock)
+        # id_manufacturer — اگه صریح پاس داده نشده باشه، مقدارِ فعلیِ محصول
+        # حفظ می‌شه (نه ریست به ۰)؛ وگرنه هر سینکِ عادیِ محصول، برندی که از
+        # طریقِ تبِ دسته‌بندی/برند ست شده رو بی‌صدا پاک می‌کرد.
+        final_manufacturer = (
+            int(manufacturer_id) if manufacturer_id is not None
+            else int(current.get("id_manufacturer") or 0)
+        )
+        _set_text(node, "id_manufacturer", final_manufacturer)
         # این تابع اصلاً پارامتری برای description_short/meta_* نمی‌گیره — این
         # فیلدها فقط از طریق دستیار هوشمندِ سئو (ps_update_product_seo) نوشته
         # می‌شن، نه از ERP. قبلاً چون این‌جا کلاً جا نمی‌افتادن، هر سینکِ عادیِ
@@ -868,6 +877,9 @@ def ps_try_set_price_visibility(config, product_id: int, *, timeout=None) -> boo
             # «standard» ریست می‌شه و پنل ادمین دیگه ترکیب‌های ساخته‌شده رو
             # به رسمیت نمی‌شناسه.
             _set_text(node, "product_type", str(current.get("product_type") or "standard"))
+            # حفظ id_manufacturer فعلی — این PUT هم مثلِ بقیه‌ی فیلدهایی که
+            # اینجا حفظ می‌شن، نباید برندِ ست‌شده رو بی‌صدا ریست کنه.
+            _set_text(node, "id_manufacturer", int(current.get("id_manufacturer") or 0))
             # علتِ ریشه‌ایِ باگِ «توضیحات محصول نمایش داده نمی‌شه»: این PUT قبلاً
             # description/description_short/meta_* رو کلاً از XML جا می‌نداخت.
             # چون ps_update_product همیشه *قبل* از این تابع صدا زده می‌شه، توضیحاتِ
@@ -1256,6 +1268,57 @@ def ps_get_product_image_ids(config, product_id: int, *, timeout=None) -> list[i
             except (TypeError, ValueError):
                 continue
     return out
+
+
+# ---------------------------------------------------------------------------
+# برند (manufacturer)
+# ---------------------------------------------------------------------------
+
+
+def ps_list_manufacturers(config, *, timeout=None) -> list[dict]:
+    """همه‌ی برندها — شکل {id, name}. برخلافِ دسته‌بندی، name تویِ
+    manufacturer یه فیلدِ ساده‌ست (غیرِ چندزبانه)."""
+    cfg = config or {}
+    out: list[dict] = []
+    offset = 0
+    page_size = 100
+    while True:
+        check_cancelled()
+        resp = ps_call(
+            f"دریافت manufacturers offset={offset}",
+            lambda o=offset: ps_rest_request(
+                cfg, "GET", "manufacturers",
+                params={"limit": f"{o},{page_size}", "display": "full"},
+                timeout=timeout,
+            ),
+        )
+        data = _response_json(resp, "دریافت manufacturers")
+        batch = _unwrap_list(data, "manufacturers")
+        if not batch:
+            break
+        for entry in batch:
+            if isinstance(entry, dict) and entry.get("id"):
+                out.append({"id": int(entry["id"]), "name": str(entry.get("name") or "")})
+        if len(batch) < page_size:
+            break
+        offset += page_size
+    return out
+
+
+def ps_create_manufacturer(config, *, name: str, timeout=None) -> dict:
+    cfg = config or {}
+
+    def _build(node):
+        _set_text(node, "name", name)
+        _set_text(node, "active", 1)
+
+    body = _build_xml("manufacturer", _build)
+    resp = ps_call(
+        f"ایجاد برند '{name}'",
+        lambda: ps_rest_request(cfg, "POST", "manufacturers", xml_body=body, timeout=timeout),
+    )
+    new_id = _response_xml_id(resp, f"ایجاد برند '{name}'")
+    return {"id": new_id, "name": name}
 
 
 # ---------------------------------------------------------------------------
