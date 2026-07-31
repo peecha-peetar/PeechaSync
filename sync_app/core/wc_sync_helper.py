@@ -347,12 +347,18 @@ def wc_product_images_update_error(response, config=None) -> str:
     return wc_http_error_message(response, config) or f"HTTP {status}"
 
 
-def update_wc_product_images(config, product_id, images, timeout=None):
-    """تنظیم گالری تصاویر محصول — wc_rest_request + User-Agent."""
+def update_wc_product_images(config, product_id, images, timeout=None, *, allow_empty=False):
+    """تنظیم گالری تصاویر محصول — wc_rest_request + User-Agent.
+
+    allow_empty=True فقط برایِ حذفِ عمدیِ آخرین عکسِ باقی‌مانده (که نتیجه‌ش
+    یه گالریِ کاملاً خالیه) لازمه — حالتِ پیش‌فرض (False) همچنان جلویِ
+    خالی‌فرستادنِ سهوی رو می‌گیره."""
     pid = int(product_id or 0)
     if pid <= 0:
         return False, None, "شناسه محصول ووکامرس نامعتبر است."
-    if not isinstance(images, list) or not images:
+    if not isinstance(images, list):
+        return False, None, "لیست تصاویر نامعتبر است."
+    if not images and not allow_empty:
         return False, None, "لیست تصاویر خالی است."
 
     resp = wc_rest_request(

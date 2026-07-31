@@ -569,6 +569,12 @@ class ProductTab(QWidget):
         self.upload_images_button.setToolTip("انتقال تصاویر محصولات انتخابی به فروشگاه")
         self.upload_images_button.clicked.connect(self._on_upload_images_clicked)
 
+        self.site_images_button = CompactCaptionButton("🗑️ مدیریتِ عکس‌هایِ سایت")
+        self.site_images_button.setToolTip(
+            "دیدنِ عکس‌هایِ فعلیِ محصولاتِ تیک‌خورده روی سایت و حذفِ تک‌تکِ آن‌ها"
+        )
+        self.site_images_button.clicked.connect(self._open_site_images_manager)
+
         self.wc_admin_button = make_wc_admin_open_button(
             self, "products", button_factory=CompactCaptionButton
         )
@@ -634,7 +640,7 @@ class ProductTab(QWidget):
         layout.addWidget(
             build_responsive_action_row(
                 [self.refresh_button, self.sync_button, self.upload_images_button,
-                 self.check_wc_images_button, self.batch_schedule_button,
+                 self.site_images_button, self.check_wc_images_button, self.batch_schedule_button,
                  self.mobile_inbox_button, self.wc_admin_button],
                 parent=right_panel,
             )
@@ -3007,6 +3013,23 @@ class ProductTab(QWidget):
 
     def _on_upload_images_clicked(self):
         self._action_ops.handle_click("images", self._send_selected_images_to_woo)
+
+    def _open_site_images_manager(self):
+        checked_skus = []
+        for i in range(self.product_list.count()):
+            item = self.product_list.item(i)
+            sku = item.data(Qt.UserRole)
+            row_widget = self.product_list.itemWidget(item)
+            if isinstance(row_widget, ProductRowWidget) and row_widget.checkbox.isChecked() and sku:
+                checked_skus.append(str(sku))
+        if not checked_skus:
+            QMessageBox.information(self, "توجه", "حداقل یک محصول را تیک بزنید.")
+            return
+        from sync_app.core.site_images_manager_dialog import SiteImagesManagerDialog
+
+        cfg = load_secure_config(None) or {}
+        dlg = SiteImagesManagerDialog(self, cfg, checked_skus)
+        dlg.exec_()
 
     def _end_prod_images_ui(self):
         if self._action_ops.active == "images":
