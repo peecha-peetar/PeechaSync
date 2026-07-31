@@ -106,6 +106,10 @@ def _categories_for_sku(sku, cat_map, slug_map=None, config=None):
     manual_ids = get_manual_category_ids(sku)
     if manual_ids:
         return [{"id": cid} for cid in manual_ids]
+    if bool((config or {}).get("DISABLE_ERP_CATEGORY_SYNC", False)):
+        # سینکِ خودکارِ دسته‌بندیِ ERP خاموشه — فقط الصاقِ دستی (تبِ «دسته‌بندی
+        # و برند») معتبره؛ بدونِ اون، محصول بدونِ دسته‌بندی ارسال می‌شه.
+        return []
     subgroups_only = bool((config or {}).get("CATEGORY_SYNC_SUBGROUPS_ONLY", False))
     return resolve_product_categories(sku, cat_map, slug_map or {}, include_parent=not subgroups_only)
 
@@ -510,6 +514,12 @@ def _apply_product_categories(
 def patch_product_categories(config=None):
     """دسته محصولات را با map زنده Woo روی محصولات اعمال کن."""
     config = config or load_secure_config(None) or {}
+    if bool(config.get("DISABLE_ERP_CATEGORY_SYNC", False)):
+        log.info(
+            "ℹ️ سینکِ خودکارِ دسته‌بندیِ ERP خاموشه — اعمالِ دسته‌بندی رویِ محصولات رد شد "
+            "(دسته‌بندیِ سایت رو از تبِ «دسته‌بندی و برند» الصاق کنید)."
+        )
+        return {"ok": 0, "skipped": 0, "failed": 0, "failed_skus": []}
     if not is_prestashop(config):
         apply_network_overrides(config)
     wcapi = build_store_api(config)
@@ -797,7 +807,11 @@ def main():
         stock_quantity = combined_stock_for_primary(sku, int(row[7] or 0), raw_config, _stock_lookup)
         description = str(row[8] or "").strip()
 
-        cat_id = _category_id_for_sku(sku, cat_map, slug_map)
+        disable_erp_categories = bool((raw_config or {}).get("DISABLE_ERP_CATEGORY_SYNC", False))
+        # وقتی سینکِ خودکارِ دسته‌بندیِ ERP خاموشه، cat_id هم نباید fallback
+        # بشه — وگرنه همون دسته‌بندیِ خودکار از یه راهِ دیگه (این‌بار بدونِ
+        # اطلاعِ کاربر) دوباره اعمال می‌شد.
+        cat_id = None if disable_erp_categories else _category_id_for_sku(sku, cat_map, slug_map)
         categories = _categories_for_sku(sku, cat_map, slug_map, raw_config)
 
         p_data = {
@@ -815,6 +829,11 @@ def main():
             p_data["categories"] = categories
         elif cat_id:
             p_data["categories"] = [{"id": int(cat_id)}]
+        elif disable_erp_categories:
+            log.info(
+                f"ℹ️ [{sku}] سینکِ خودکارِ دسته‌بندیِ ERP خاموشه — بدونِ دسته‌بندی ارسال می‌شه "
+                "(بعداً از تبِ «دسته‌بندی و برند» الصاق کنید)."
+            )
         else:
             log.warning(f"⚠️ {explain_category_miss(sku, cat_map, slug_map)}")
         if has_variants:
