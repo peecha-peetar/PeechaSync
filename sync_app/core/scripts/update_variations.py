@@ -335,7 +335,7 @@ def fetch_variations_from_db(
     selected_groups = [str(g).strip() for g in (config or {}).get("SELECTED_SUB_GROUPS", []) if str(g).strip()]
     matched_group = next((g for g in selected_groups if str(a_code).startswith(g)), "")
     sc_id = resolve_article_price_sc_id(str(a_code), matched_group, config or {})
-    sale_sc_id = article_price_sale_list_id(config or {})
+    sale_sc_id = article_price_sale_list_id(config or {}, sku=str(a_code))
     price_map = load_article_variant_prices(cursor, a_code, sc_id=sc_id)
     sale_map = (
         load_article_variant_prices(cursor, a_code, sc_id=sale_sc_id)
@@ -345,8 +345,8 @@ def fetch_variations_from_db(
     cursor.close()
 
     from sync_app.core.article_price import apply_price_markup
-    price_map = {k: apply_price_markup(v, config or {}, is_sale=False) for k, v in price_map.items()}
-    sale_map = {k: apply_price_markup(v, config or {}, is_sale=True) for k, v in sale_map.items()}
+    price_map = {k: apply_price_markup(v, config or {}, is_sale=False, sku=str(a_code)) for k, v in price_map.items()}
+    sale_map = {k: apply_price_markup(v, config or {}, is_sale=True, sku=str(a_code)) for k, v in sale_map.items()}
 
     def _woo_price(val):
         return _apply_price(val, config or {})
@@ -2020,7 +2020,7 @@ def _main_prestashop(config, selected_groups, price_col):
 
             log.info(f"▸ [{a_code}] {len(erp_variations)} واریانت — در حال ارسال به پرستاشاپ...")
 
-            base_price = _apply_price(apply_price_markup(raw_price, config, is_sale=False), config)
+            base_price = _apply_price(apply_price_markup(raw_price, config, is_sale=False, sku=a_code), config)
             ok = ps_sync_product_variations(
                 config, product_id, erp_variations, attr_map, base_price, a_code=a_code,
             )

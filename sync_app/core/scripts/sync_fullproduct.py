@@ -788,10 +788,10 @@ def main():
 
         price_col = resolve_article_price_column(sku, matched_group, raw_config)
         raw_price = _resolve_article_price(row, price_col)
-        raw_price = apply_price_markup(raw_price, raw_config, is_sale=False)
+        raw_price = apply_price_markup(raw_price, raw_config, is_sale=False, sku=sku)
         price = str(int(raw_price / price_div)) if raw_price > 0 else "0"
-        raw_sale = resolve_sale_article_price(row, raw_config)
-        raw_sale = apply_price_markup(raw_sale, raw_config, is_sale=True)
+        raw_sale = resolve_sale_article_price(row, raw_config, sku=sku)
+        raw_sale = apply_price_markup(raw_sale, raw_config, is_sale=True, sku=sku)
         sale_price = woo_sale_price_str(raw_price, raw_sale, price_div)
         has_variants = _has_variations(conn, sku, variable_codes)
         stock_quantity = combined_stock_for_primary(sku, int(row[7] or 0), raw_config, _stock_lookup)

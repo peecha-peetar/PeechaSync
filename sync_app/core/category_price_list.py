@@ -84,12 +84,19 @@ def set_product_price_list_override(sku: str, index: int | None) -> None:
 
 
 def resolve_price_list_index(sku: str, group_code: str, config: dict) -> int:
-    """اولویت: override رویِ خودِ محصول → تنظیمِ دسته‌بندی → پیش‌فرضِ
-    سراسریِ PRICE_LIST_INDEX. خروجی همیشه 0-based (مثلِ خودِ
-    PRICE_LIST_INDEX تویِ تنظیمات) هست."""
+    """اولویت: override رویِ خودِ محصول → دسته‌بندی/برندِ سایت (تبِ «دسته‌بندی
+    و برند») → تنظیمِ دسته‌بندیِ ERP → پیش‌فرضِ سراسریِ PRICE_LIST_INDEX.
+    خروجی همیشه 0-based (مثلِ خودِ PRICE_LIST_INDEX تویِ تنظیمات) هست."""
     override = get_product_price_list_override(config, sku)
     if override is not None:
         return override
+
+    from sync_app.core.site_taxonomy_price_list import resolve_site_price_settings
+
+    site_settings = resolve_site_price_settings(config, sku)
+    if site_settings and site_settings.get("regular_index") is not None:
+        return int(site_settings["regular_index"])
+
     cat_index = get_category_price_list_index(config, group_code)
     if cat_index is not None:
         return cat_index

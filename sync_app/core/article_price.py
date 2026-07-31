@@ -29,11 +29,38 @@ def price_list_id_from_config(config, *, key: str = "PRICE_LIST_INDEX") -> int:
         return 1
 
 
-def apply_price_markup(price: float, config: dict, *, is_sale: bool = False) -> float:
+def _site_markup_override(config: dict, sku: str | None, *, is_sale: bool) -> tuple[float, float] | None:
+    """(percent, amount) از تنظیماتِ دسته‌بندی/برندِ سایتِ این SKU (تبِ
+    «دسته‌بندی و برند») — اگه چیزی ست نشده باشه None (یعنی از مارک‌آپِ
+    سراسری استفاده بشه، رفتارِ قبلی بدونِ تغییر)."""
+    if not sku:
+        return None
+    try:
+        from sync_app.core.site_taxonomy_price_list import resolve_site_price_settings
+
+        settings = resolve_site_price_settings(config, sku)
+    except Exception:
+        return None
+    if not settings:
+        return None
+    if is_sale and not settings.get("sale_enabled"):
+        return None
+    percent = float(settings.get("markup_percent") or 0)
+    amount = float(settings.get("markup_amount") or 0)
+    if not percent and not amount:
+        return None
+    return percent, amount
+
+
+def apply_price_markup(price: float, config: dict, *, is_sale: bool = False, sku: str | None = None) -> float:
     """
-    درصد افزایش قیمت رو (اگه تنظیم شده باشه) روی قیمت اعمال می‌کنه —
-    برای قیمت عادی از PRICE_MARKUP_PERCENT، برای قیمت ویژه از
-    SALE_PRICE_MARKUP_PERCENT. مقدار صفر یا خالی یعنی بدون تغییر.
+    درصد/مبلغِ افزایشِ قیمت رو (اگه تنظیم شده باشه) روی قیمت اعمال می‌کنه.
+
+    اولویت: اگه sku پاس داده بشه و دسته‌بندی/برندِ سایتِ اون SKU (تبِ
+    «دسته‌بندی و برند») مارک‌آپِ مخصوصِ خودش رو داشته باشه، همون استفاده
+    می‌شه (درصد اول، بعد مبلغِ ثابت روی نتیجه اضافه/کم می‌شه)؛ وگرنه مثلِ
+    قبل از تنظیماتِ سراسریِ PRICE_MARKUP_PERCENT/SALE_PRICE_MARKUP_PERCENT.
+    مقدارِ صفر یا خالی یعنی بدونِ تغییر.
     """
     try:
         price = float(price or 0)
@@ -41,6 +68,12 @@ def apply_price_markup(price: float, config: dict, *, is_sale: bool = False) -> 
         return 0.0
     if price <= 0:
         return price
+
+    site_override = _site_markup_override(config, sku, is_sale=is_sale)
+    if site_override is not None:
+        percent, amount = site_override
+        return price * (1 + percent / 100.0) + amount
+
     key = "SALE_PRICE_MARKUP_PERCENT" if is_sale else "PRICE_MARKUP_PERCENT"
     try:
         percent = float((config or {}).get(key, 0) or 0)
@@ -80,22 +113,45 @@ def price_list_column_for_index(index: int) -> str:
     return "Sel_Price" if n <= 1 else f"Sel_Price{n}"
 
 
-def article_price_sale_list_id(config) -> int | None:
-    """لیست قیمت ویژه — اگر در تنظیمات فعال باشد."""
+def _sale_site_index(config, sku: str | None) -> int | None:
+    """ایندکسِ لیستِ قیمتِ ویژه از تنظیماتِ دسته‌بندی/برندِ سایتِ این SKU —
+    فقط اگه sale_enabled روی همون رکورد صریحاً ست شده باشه."""
+    if not sku:
+        return None
+    try:
+        from sync_app.core.site_taxonomy_price_list import resolve_site_price_settings
+
+        settings = resolve_site_price_settings(config, sku)
+    except Exception:
+        return None
+    if settings and settings.get("sale_enabled") and settings.get("sale_index") is not None:
+        return int(settings["sale_index"])
+    return None
+
+
+def article_price_sale_list_id(config, sku: str | None = None) -> int | None:
+    """لیست قیمت ویژه — اولویت با تنظیمِ دسته‌بندی/برندِ سایت (اگه sku
+    پاس داده بشه)، وگرنه SALE_PRICE_LIST_ENABLED سراسری."""
+    site_index = _sale_site_index(config, sku)
+    if site_index is not None:
+        return site_index + 1
     if not (config or {}).get("SALE_PRICE_LIST_ENABLED"):
         return None
     return price_list_id_from_config(config, key="SALE_PRICE_LIST_INDEX")
 
 
-def sale_price_list_column(config) -> str | None:
+def sale_price_list_column(config, sku: str | None = None) -> str | None:
+    site_index = _sale_site_index(config, sku)
+    if site_index is not None:
+        return price_list_column_for_index(site_index)
     if not (config or {}).get("SALE_PRICE_LIST_ENABLED"):
         return None
     return price_list_column_for_index((config or {}).get("SALE_PRICE_LIST_INDEX", 1))
 
 
-def resolve_sale_article_price(row, config, *, price_start_index=2) -> float:
+def resolve_sale_article_price(row, config, *, price_start_index=2, sku: str | None = None) -> float:
     """قیمت ویژه محصول ساده از ستون‌های Article."""
-    col = sale_price_list_column(config)
+    col = sale_price_list_column(config, sku)
     if not col:
         return 0.0
     return resolve_article_price(row, col, price_start_index=price_start_index)
