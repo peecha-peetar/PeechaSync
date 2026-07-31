@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QEvent, Qt
 from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -22,6 +22,7 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QPushButton,
     QTableWidget,
@@ -92,7 +93,12 @@ class PriceListStudioTab(QWidget):
         self.rules_table = QTableWidget(0, len(_HEADERS))
         self.rules_table.setLayoutDirection(Qt.RightToLeft)
         self.rules_table.setHorizontalHeaderLabels(_HEADERS)
-        self.rules_table.horizontalHeader().setSectionResizeMode(COL_TARGET, QHeaderView.Stretch)
+        # قبلاً ستونِ دسته‌بندی/برند Stretch بود و کلِ فضایِ اضافه رو می‌خورد؛
+        # عرضش ثابت و کمتر شد و همون مقدار به ستونِ نوعِ موجودی (که برچسبِ
+        # طولانی مثلِ «دانلودی (بدون نیاز به موجودی)» داره) اضافه شد.
+        self.rules_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.rules_table.setColumnWidth(COL_TARGET, 170)
+        self.rules_table.setColumnWidth(COL_STOCK_MODE, 230)
         self.rules_table.verticalHeader().setVisible(False)
         # ویجت‌هایی که تویِ هر ردیف می‌ذاریم (کمبو/اسپین‌باکس) با ارتفاعِ
         # پیش‌فرضِ خیلی کمِ QTableWidget جمع‌وجور و روی‌هم می‌افتادن — یه
@@ -107,8 +113,33 @@ class PriceListStudioTab(QWidget):
     # ------------------------------------------------------------------
     # ویجت‌سازهایِ کمکی
     # ------------------------------------------------------------------
+    def eventFilter(self, obj, event):
+        # کمبوهایِ غیرِقابل‌ویرایش رویِ استایلِ ویندوز حتی با
+        # layoutDirection=RTL متنِ داخلشون رو چپ‌چین رسم می‌کنن (کوئرکِ
+        # شناخته‌شده‌یِ QWindowsVistaStyle). برایِ راست‌چین‌شدنِ واقعی، این
+        # کمبوها editable ولی lineEditشون read-only شدن و alignment مستقیم
+        # رویِ لاین‌ادیت ست شده؛ در عوض کلیکِ رویِ خودِ متن دیگه پاپ‌آپ رو باز
+        # نمی‌کنه (فقط دکمه‌ی فلش) — این فیلتر همون رفتارِ «کلیک روی هرجایِ
+        # کمبو = بازشدنِ لیست» رو برمی‌گردونه.
+        if isinstance(obj, QLineEdit) and event.type() == QEvent.MouseButtonPress:
+            combo = obj.parent()
+            if isinstance(combo, QComboBox):
+                combo.showPopup()
+                return True
+        return super().eventFilter(obj, event)
+
+    def _rtl_align_combo(self, combo: QComboBox) -> QComboBox:
+        combo.setLayoutDirection(Qt.RightToLeft)
+        combo.setEditable(True)
+        line_edit = combo.lineEdit()
+        line_edit.setReadOnly(True)
+        line_edit.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        line_edit.installEventFilter(self)
+        return combo
+
     def _make_target_combo(self) -> QComboBox:
         combo = QComboBox()
+        self._rtl_align_combo(combo)
         self._fill_target_combo(combo)
         return combo
 
@@ -117,7 +148,6 @@ class PriceListStudioTab(QWidget):
         # QVariantِ اشیایِ پایتونیِ پیچیده (مثلِ tuple) رو گاهی با مقایسه‌ی
         # identity (نه ==) چک می‌کنه، پس یه tupleِ جداگانه‌ساخته‌شده با همون
         # مقدار پیدا نمی‌شه. یه رشته‌ی ساده («category:5») همیشه درست کار می‌کنه.
-        combo.setLayoutDirection(Qt.RightToLeft)
         combo.blockSignals(True)
         combo.clear()
         combo.addItem("— انتخاب کنید —", "")
@@ -137,7 +167,7 @@ class PriceListStudioTab(QWidget):
 
     def _make_price_list_combo(self) -> QComboBox:
         combo = QComboBox()
-        combo.setLayoutDirection(Qt.RightToLeft)
+        self._rtl_align_combo(combo)
         combo.addItem("—", -1)
         for i in range(1, 11):
             combo.addItem(str(i), i - 1)
@@ -147,7 +177,7 @@ class PriceListStudioTab(QWidget):
         from sync_app.core.stock_mode import STOCK_MODE_LABELS
 
         combo = QComboBox()
-        combo.setLayoutDirection(Qt.RightToLeft)
+        self._rtl_align_combo(combo)
         combo.addItem("— (دسته‌بندیِ ERP) —", "")
         for key, label in STOCK_MODE_LABELS.items():
             combo.addItem(label, key)
