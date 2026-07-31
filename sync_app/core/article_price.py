@@ -45,8 +45,9 @@ def _site_markup_override(config: dict, sku: str | None, *, is_sale: bool) -> tu
         return None
     if is_sale and not settings.get("sale_enabled"):
         return None
-    percent = float(settings.get("markup_percent") or 0)
-    amount = float(settings.get("markup_amount") or 0)
+    prefix = "sale_markup_" if is_sale else "regular_markup_"
+    percent = float(settings.get(prefix + "percent") or 0)
+    amount = float(settings.get(prefix + "amount") or 0)
     if not percent and not amount:
         return None
     return percent, amount
