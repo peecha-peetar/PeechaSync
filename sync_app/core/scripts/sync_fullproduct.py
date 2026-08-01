@@ -515,9 +515,11 @@ def patch_product_categories(config=None):
     """دسته محصولات را با map زنده Woo روی محصولات اعمال کن."""
     config = config or load_secure_config(None) or {}
     if bool(config.get("DISABLE_ERP_CATEGORY_SYNC", False)):
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+
         log.info(
-            "ℹ️ سینکِ خودکارِ دسته‌بندیِ ERP خاموشه — اعمالِ دسته‌بندی رویِ محصولات رد شد "
-            "(دسته‌بندیِ سایت رو از تبِ «دسته‌بندی و برند» الصاق کنید)."
+            f"ℹ️ سینکِ خودکارِ دسته‌بندیِ {erp_provider_label(config)} خاموشه — اعمالِ دسته‌بندی رویِ "
+            "محصولات رد شد (دسته‌بندیِ سایت رو از تبِ «دسته‌بندی و برند» الصاق کنید)."
         )
         return {"ok": 0, "skipped": 0, "failed": 0, "failed_skus": []}
     if not is_prestashop(config):
@@ -830,9 +832,11 @@ def main():
         elif cat_id:
             p_data["categories"] = [{"id": int(cat_id)}]
         elif disable_erp_categories:
+            from sync_app.core.integrations.erp_provider import erp_provider_label
+
             log.info(
-                f"ℹ️ [{sku}] سینکِ خودکارِ دسته‌بندیِ ERP خاموشه — بدونِ دسته‌بندی ارسال می‌شه "
-                "(بعداً از تبِ «دسته‌بندی و برند» الصاق کنید)."
+                f"ℹ️ [{sku}] سینکِ خودکارِ دسته‌بندیِ {erp_provider_label(raw_config)} خاموشه — بدونِ "
+                "دسته‌بندی ارسال می‌شه (بعداً از تبِ «دسته‌بندی و برند» الصاق کنید)."
             )
         else:
             log.warning(f"⚠️ {explain_category_miss(sku, cat_map, slug_map)}")

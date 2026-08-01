@@ -44,11 +44,12 @@ COL_SALE_LIST = 5
 COL_SALE_PCT = 6
 COL_SALE_AMT = 7
 COL_STOCK_MODE = 8
-COL_ACTIONS = 9
+COL_NOTE = 9
+COL_ACTIONS = 10
 
 _HEADERS = [
     "دسته‌بندی/برند", "لیستِ عادی", "٪ عادی", "مبلغِ عادی",
-    "ویژه", "لیستِ ویژه", "٪ ویژه", "مبلغِ ویژه", "نوعِ موجودی", "",
+    "ویژه", "لیستِ ویژه", "٪ ویژه", "مبلغِ ویژه", "نوعِ موجودی", "توضیحات", "",
 ]
 
 
@@ -65,16 +66,20 @@ class PriceListStudioTab(QWidget):
 
     # ------------------------------------------------------------------
     def init_ui(self):
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+
+        erp_label = erp_provider_label(self.config)
+
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(8)
 
         hint = QLabel(
             "هر ردیف یک قاعده‌ی مستقله: یا برایِ یه دسته‌بندیِ سایت، یا برایِ یه برندِ سایت. لیستِ "
-            "قیمتِ عادی/ویژه، درصد/مبلغِ مارک‌آپ و نوعِ موجودی رو مستقیم تویِ همون ردیف بدید و 💾 "
-            "بزنید (نوعِ موجودی رو خالی بذارید یعنی از تنظیمِ دسته‌بندیِ ERP ارث ببره). همه‌ی "
-            "محصولاتی که به همون دسته‌بندی/برند وصل باشن، خودکار همینو می‌گیرن — اگه یه محصول هم "
-            "برندِ قاعده‌دار داشته باشه هم دسته‌بندیِ قاعده‌دار، برند اولویت داره."
+            "قیمتِ عادی/ویژه، درصد/مبلغِ مارک‌آپ، توضیحات و نوعِ موجودی رو مستقیم تویِ همون ردیف بدید "
+            f"و 💾 بزنید (نوعِ موجودی رو خالی بذارید یعنی از تنظیمِ دسته‌بندیِ {erp_label} ارث ببره). "
+            "همه‌ی محصولاتی که به همون دسته‌بندی/برند وصل باشن، خودکار همینو می‌گیرن — اگه یه محصول "
+            "هم برندِ قاعده‌دار داشته باشه هم دسته‌بندیِ قاعده‌دار، برند اولویت داره."
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color:#475569; font-size:12px;")
@@ -99,6 +104,8 @@ class PriceListStudioTab(QWidget):
         self.rules_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.rules_table.setColumnWidth(COL_TARGET, 170)
         self.rules_table.setColumnWidth(COL_STOCK_MODE, 230)
+        # ستونِ توضیحات (متنِ آزاد) فضایِ اضافه رو می‌گیره تا جا برایِ نوشتن داشته باشه.
+        self.rules_table.horizontalHeader().setSectionResizeMode(COL_NOTE, QHeaderView.Stretch)
         self.rules_table.verticalHeader().setVisible(False)
         # ویجت‌هایی که تویِ هر ردیف می‌ذاریم (کمبو/اسپین‌باکس) با ارتفاعِ
         # پیش‌فرضِ خیلی کمِ QTableWidget جمع‌وجور و روی‌هم می‌افتادن — یه
@@ -143,6 +150,24 @@ class PriceListStudioTab(QWidget):
         self._fill_target_combo(combo)
         return combo
 
+    def _category_path_label(self, cat: dict, by_id: dict[int, dict]) -> str:
+        """مسیرِ کاملِ دسته‌بندی («دستهٔ اصلی › زیردسته») — چون فقط اسمِ خودِ
+        دسته کافی نیست: اگه دو زیردسته زیرِ دو دستهٔ اصلیِ متفاوت هم‌نام
+        باشن، بدونِ نمایشِ سطح/والد قابلِ‌تشخیص از هم نیستن."""
+        parts = [str(cat.get("name") or "").strip()]
+        seen = {int(cat.get("id") or 0)}
+        parent_id = int(cat.get("parent") or 0)
+        while parent_id and parent_id not in seen:
+            parent = by_id.get(parent_id)
+            if not parent:
+                break
+            parent_name = str(parent.get("name") or "").strip()
+            if parent_name:
+                parts.append(parent_name)
+            seen.add(parent_id)
+            parent_id = int(parent.get("parent") or 0)
+        return " › ".join(reversed(parts))
+
     def _fill_target_combo(self, combo: QComboBox, keep_selection=None):
         # نکته: dataِ آیتمِ کمبو رو tuple نمی‌ذاریم — findData()ِ پی‌کیوت۵
         # QVariantِ اشیایِ پایتونیِ پیچیده (مثلِ tuple) رو گاهی با مقایسه‌ی
@@ -151,10 +176,13 @@ class PriceListStudioTab(QWidget):
         combo.blockSignals(True)
         combo.clear()
         combo.addItem("— انتخاب کنید —", "")
-        for cat in sorted(self._categories, key=lambda c: str(c.get("name") or "")):
+        by_id = {int(c["id"]): c for c in self._categories if c.get("id")}
+        cats_with_path = [
+            (self._category_path_label(cat, by_id), cat) for cat in self._categories if cat.get("id")
+        ]
+        for path_label, cat in sorted(cats_with_path, key=lambda pair: pair[0]):
             cid = int(cat.get("id") or 0)
-            if cid:
-                combo.addItem(f"🏷️ {cat.get('name')}", f"category:{cid}")
+            combo.addItem(f"🏷️ {path_label}", f"category:{cid}")
         for b in sorted(self._brands, key=lambda c: str(c.get("name") or "")):
             bid = int(b.get("id") or 0)
             if bid:
@@ -174,11 +202,12 @@ class PriceListStudioTab(QWidget):
         return combo
 
     def _make_stock_mode_combo(self) -> QComboBox:
+        from sync_app.core.integrations.erp_provider import erp_provider_label
         from sync_app.core.stock_mode import STOCK_MODE_LABELS
 
         combo = QComboBox()
         self._rtl_align_combo(combo)
-        combo.addItem("— (دسته‌بندیِ ERP) —", "")
+        combo.addItem(f"— (دسته‌بندیِ {erp_provider_label(self.config)}) —", "")
         for key, label in STOCK_MODE_LABELS.items():
             combo.addItem(label, key)
         return combo
@@ -229,6 +258,9 @@ class PriceListStudioTab(QWidget):
         sale_pct = self._make_percent_spin()
         sale_amt = self._make_amount_spin()
         stock_combo = self._make_stock_mode_combo()
+        note_input = QLineEdit()
+        note_input.setPlaceholderText("توضیحِ اختیاری برایِ این قاعده...")
+        note_input.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
         if record:
             if record.get("regular_index") is not None:
@@ -248,6 +280,7 @@ class PriceListStudioTab(QWidget):
                 i = stock_combo.findData(record["stock_mode"])
                 if i >= 0:
                     stock_combo.setCurrentIndex(i)
+            note_input.setText(str(record.get("note") or ""))
 
         self.rules_table.setCellWidget(row, COL_REG_LIST, reg_list)
         self.rules_table.setCellWidget(row, COL_REG_PCT, reg_pct)
@@ -257,6 +290,7 @@ class PriceListStudioTab(QWidget):
         self.rules_table.setCellWidget(row, COL_SALE_PCT, sale_pct)
         self.rules_table.setCellWidget(row, COL_SALE_AMT, sale_amt)
         self.rules_table.setCellWidget(row, COL_STOCK_MODE, stock_combo)
+        self.rules_table.setCellWidget(row, COL_NOTE, note_input)
 
         actions = QWidget()
         actions_layout = QHBoxLayout(actions)
@@ -310,6 +344,7 @@ class PriceListStudioTab(QWidget):
         sale_pct = self.rules_table.cellWidget(row, COL_SALE_PCT)
         sale_amt = self.rules_table.cellWidget(row, COL_SALE_AMT)
         stock_combo = self.rules_table.cellWidget(row, COL_STOCK_MODE)
+        note_input = self.rules_table.cellWidget(row, COL_NOTE)
         return {
             "regular_index": self._combo_index_value(reg_list),
             "regular_markup_percent": float(reg_pct.value()),
@@ -319,6 +354,7 @@ class PriceListStudioTab(QWidget):
             "sale_markup_percent": float(sale_pct.value()),
             "sale_markup_amount": float(sale_amt.value()),
             "stock_mode": stock_combo.currentData() or None,
+            "note": (note_input.text() or "").strip(),
         }
 
     def _save_row(self, actions_widget: QWidget):

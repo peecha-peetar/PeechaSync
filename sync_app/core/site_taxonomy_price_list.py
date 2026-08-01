@@ -6,12 +6,14 @@ idِ دسته‌بندی/برندِ واقعیِ سایته که از تبِ «�
 {"regular_index": int|None, "regular_markup_percent": float, "regular_markup_amount": float,
  "sale_enabled": bool, "sale_index": int|None,
  "sale_markup_percent": float, "sale_markup_amount": float,
- "stock_mode": str|None}
+ "stock_mode": str|None, "note": str}
 دقیقاً مثلِ سراسری (PRICE_MARKUP_PERCENT/SALE_PRICE_MARKUP_PERCENT تویِ تبِ
 تنظیمات)، درصد/مبلغِ عادی و ویژه جدا از همن — هر فیلد که None/خالی باشه
 یعنی «از سطحِ بعدی ارث ببر». stock_mode هم یکی از کلیدهایِ
 stock_mode.STOCK_MODE_LABELS ـه (db/always/download/outofstock) — همون
 اولویتِ برند→دسته‌بندی برایِ حالتِ موجودی هم اعمال می‌شه (stock_mode.py).
+note فقط یادداشتِ آزادِ خودِ کاربره — تویِ هیچ‌جایِ منطقِ resolve/سینک
+خونده نمی‌شه، فقط برایِ یادآوریِ «این قاعده برایِ چیه» تویِ خودِ جدوله.
 
 اولویتِ resolve: برندِ دستیِ سایتِ SKU → دسته‌بندیِ دستیِ سایتِ SKU → None
 (یعنی از سطحِ بعدی — دسته‌بندیِ ERP/پیش‌فرضِ سراسری — استفاده بشه). برند
@@ -55,6 +57,9 @@ def _clean_record(record: dict | None) -> dict:
 
         if stock_mode in STOCK_MODE_LABELS:
             out["stock_mode"] = stock_mode
+    note = str(record.get("note") or "").strip()
+    if note:
+        out["note"] = note
     return out
 
 

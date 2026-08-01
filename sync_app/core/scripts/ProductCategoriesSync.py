@@ -564,10 +564,12 @@ def main():
     config = load_secure_config(None)
 
     if bool(config.get("DISABLE_ERP_CATEGORY_SYNC", False)):
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+
         log.info(
-            "ℹ️ سینکِ خودکارِ دسته‌بندیِ ERP در تنظیمات خاموشه — درختِ دسته‌بندی به سایت ارسال نمی‌شه "
-            "و محصولات بدونِ دسته‌بندی سینک می‌شن. دسته‌بندیِ سایت رو از تبِ «دسته‌بندی و برند» "
-            "دستی الصاق کنید."
+            f"ℹ️ سینکِ خودکارِ دسته‌بندیِ {erp_provider_label(config)} در تنظیمات خاموشه — درختِ "
+            "دسته‌بندی به سایت ارسال نمی‌شه و محصولات بدونِ دسته‌بندی سینک می‌شن. دسته‌بندیِ سایت رو "
+            "از تبِ «دسته‌بندی و برند» دستی الصاق کنید."
         )
         return {"synced": 0, "failed": [], "total": 0, "disabled": True}
 

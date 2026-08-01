@@ -549,15 +549,18 @@ class CategoryTab(QWidget):
         self.subgroups_only_checkbox.toggled.connect(self._on_subgroups_only_toggled)
         layout.addWidget(self.subgroups_only_checkbox)
 
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+
+        erp_label = erp_provider_label(self.config)
         self.disable_erp_category_sync_checkbox = QCheckBox(
-            "⛔ غیرفعال‌کردنِ سینکِ خودکارِ دسته‌بندیِ ERP به سایت"
+            f"⛔ غیرفعال‌کردنِ سینکِ خودکارِ دسته‌بندیِ {erp_label} به سایت"
         )
         self.disable_erp_category_sync_checkbox.setLayoutDirection(Qt.RightToLeft)
         self.disable_erp_category_sync_checkbox.setToolTip(
-            "فعال: نه درختِ دسته‌بندیِ ERP به سایت ارسال می‌شه، نه محصولات به‌صورتِ خودکار به "
-            "دسته‌بندیِ ERP وصل می‌شن — محصولات بدونِ دسته‌بندی سینک می‌شن (مگر SKUای که از تبِ "
+            f"فعال: نه درختِ دسته‌بندیِ {erp_label} به سایت ارسال می‌شه، نه محصولات به‌صورتِ خودکار به "
+            f"دسته‌بندیِ {erp_label} وصل می‌شن — محصولات بدونِ دسته‌بندی سینک می‌شن (مگر SKUای که از تبِ "
             "«دسته‌بندی و برند» دستی به یه دسته‌بندی/برندِ سایت وصل شده باشه — اون همچنان کار می‌کنه).\n"
-            "غیرفعال (پیش‌فرض): رفتارِ قبلی — دسته‌بندیِ ERP خودکار به سایت سینک و به محصولات وصل می‌شه."
+            f"غیرفعال (پیش‌فرض): رفتارِ قبلی — دسته‌بندیِ {erp_label} خودکار به سایت سینک و به محصولات وصل می‌شه."
         )
         self.disable_erp_category_sync_checkbox.setChecked(
             bool(self.config.get("DISABLE_ERP_CATEGORY_SYNC", False))
@@ -1390,16 +1393,19 @@ class CategoryTab(QWidget):
         self._apply_disable_erp_category_sync_ui_state()
 
     def _apply_disable_erp_category_sync_ui_state(self):
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+
         disabled = bool(self.config.get("DISABLE_ERP_CATEGORY_SYNC", False))
         self.sync_button.setEnabled(not disabled)
         if disabled:
+            erp_label = erp_provider_label(self.config)
             self.sync_button.setToolTip(
-                "غیرفعاله — چون «غیرفعال‌کردنِ سینکِ خودکارِ دسته‌بندیِ ERP» تیک خورده.\n"
+                f"غیرفعاله — چون «غیرفعال‌کردنِ سینکِ خودکارِ دسته‌بندیِ {erp_label}» تیک خورده.\n"
                 "برایِ ارسال، اول تیک را بردارید."
             )
             self._set_categories_status(
                 "info",
-                "ℹ️ سینکِ خودکارِ دسته‌بندیِ ERP خاموشه — چیزی به سایت ارسال نمی‌شه. "
+                f"ℹ️ سینکِ خودکارِ دسته‌بندیِ {erp_label} خاموشه — چیزی به سایت ارسال نمی‌شه. "
                 "دسته‌بندیِ سایت را از تبِ «دسته‌بندی و برند» دستی الصاق کنید.",
             )
         else:
@@ -1763,11 +1769,14 @@ class CategoryTab(QWidget):
         """همگام‌سازی فقط گروه‌های تیک‌خورده (و نمایان — طبق فیلتر) — پس‌زمینه"""
         self.config = load_secure_config(None) or {}
         if bool(self.config.get("DISABLE_ERP_CATEGORY_SYNC", False)):
+            from sync_app.core.integrations.erp_provider import erp_provider_label
+
+            erp_label = erp_provider_label(self.config)
             QMessageBox.information(
                 self,
                 "غیرفعال",
-                "سینکِ خودکارِ دسته‌بندیِ ERP خاموشه (تیکِ «غیرفعال‌کردنِ سینکِ خودکارِ "
-                "دسته‌بندیِ ERP» در همین تب زده شده).\nبرایِ ارسال، اول تیک را بردارید — یا "
+                f"سینکِ خودکارِ دسته‌بندیِ {erp_label} خاموشه (تیکِ «غیرفعال‌کردنِ سینکِ خودکارِ "
+                f"دسته‌بندیِ {erp_label}» در همین تب زده شده).\nبرایِ ارسال، اول تیک را بردارید — یا "
                 "دسته‌بندیِ سایت را از تبِ «دسته‌بندی و برند» دستی الصاق کنید.",
             )
             return
@@ -1825,14 +1834,17 @@ class CategoryTab(QWidget):
             self.refresh_logs()
             stats = result if isinstance(result, dict) else {}
             if stats.get("disabled"):
+                from sync_app.core.integrations.erp_provider import erp_provider_label
+
+                erp_label = erp_provider_label(self.config)
                 self._set_categories_status(
-                    "ready", "ℹ️ سینکِ خودکارِ دسته‌بندیِ ERP در تنظیمات خاموشه — کاری انجام نشد."
+                    "ready", f"ℹ️ سینکِ خودکارِ دسته‌بندیِ {erp_label} در تنظیمات خاموشه — کاری انجام نشد."
                 )
                 QMessageBox.information(
                     self,
                     "غیرفعال",
-                    "سینکِ خودکارِ دسته‌بندیِ ERP خاموشه (تیکِ «غیرفعال‌کردنِ سینکِ خودکارِ "
-                    "دسته‌بندیِ ERP» را در همین تب زده‌اید).\n"
+                    f"سینکِ خودکارِ دسته‌بندیِ {erp_label} خاموشه (تیکِ «غیرفعال‌کردنِ سینکِ خودکارِ "
+                    f"دسته‌بندیِ {erp_label}» را در همین تب زده‌اید).\n"
                     "درختِ دسته‌بندی به سایت ارسال نشد و دسته‌ای هم روی محصولات اعمال نشد — "
                     "دسته‌بندیِ سایت را از تبِ «دسته‌بندی و برند» دستی الصاق کنید.",
                 )
