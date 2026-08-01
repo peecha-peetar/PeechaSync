@@ -45,7 +45,9 @@ class SyncHubTab(QWidget):
         self.variation_tab = VariationsTab()
         self.customer_tab = CustomerTab()
         self.order_tab = OrderTab()
-        self.category_brand_studio_tab = CategoryBrandStudioTab(product_tab_ref=self.product_tab)
+        self.category_brand_studio_tab = CategoryBrandStudioTab(
+            product_tab_ref=self.product_tab, category_tab_ref=self.category_tab,
+        )
         self.price_list_studio_tab = PriceListStudioTab()
 
         # اگه فروشگاه فقط محصول ساده داره (بدون ویژگی/متغیر)، این دو زیرتب

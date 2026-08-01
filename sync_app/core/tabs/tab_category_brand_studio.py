@@ -1,5 +1,5 @@
 """تبِ «دسته‌بندی و برند» — ابزارِ گروهی برایِ الصاقِ دسته‌بندی/برندِ واقعیِ
-سایت (نه دژاوو/ERP) به چند محصولِ فیلترشده هم‌زمان: فیلترِ محصولات، انتخابِ
+سایت (نه ERP) به چند محصولِ فیلترشده هم‌زمان: فیلترِ محصولات، انتخابِ
 دسته‌بندیِ موجود یا ساختِ دسته‌بندیِ جدید، انتخابِ برندِ موجود یا ساختِ برندِ
 جدید، اعمالِ گروهی، و بازگردانیِ محصول به منطقِ خودکارِ (ERP→دسته‌بندی).
 
@@ -14,6 +14,7 @@ import logging
 
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFrame,
     QHBoxLayout,
@@ -22,15 +23,88 @@ from PyQt5.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QMessageBox,
     QPushButton,
+    QToolButton,
     QVBoxLayout,
     QWidget,
+    QWidgetAction,
 )
 
 from sync_app.core.secure_config_loader import load_secure_config
 
 log = logging.getLogger("SyncApp")
+
+
+class MultiCheckFilterButton(QToolButton):
+    """دکمه‌ای که با کلیک، منویی با چک‌باکسِ چندتایی باز می‌کنه — برایِ
+    فیلترهایی که باید بشه هم‌زمان چند مقدار (مثلاً چند دسته‌بندیِ ERP) رو
+    با هم انتخاب کرد، نه فقط یکی مثلِ QComboBoxِ معمولی."""
+
+    selectionChanged = pyqtSignal()
+
+    def __init__(self, placeholder: str, parent=None):
+        super().__init__(parent)
+        self._placeholder = placeholder
+        self._checkboxes: dict[str, QCheckBox] = {}
+        self._labels: dict[str, str] = {}
+        self.setPopupMode(QToolButton.InstantPopup)
+        self.setLayoutDirection(Qt.RightToLeft)
+        self.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self._menu = QMenu(self)
+        self._menu.setLayoutDirection(Qt.RightToLeft)
+        self.setMenu(self._menu)
+        self._update_text()
+
+    def set_options(self, options: list[tuple[str, str]]):
+        """options: [(code, label), ...] — منو رو کامل بازمی‌سازه؛ انتخاب‌هایِ
+        قبلی (بر اساسِ code) اگه هنوز تویِ لیستِ جدید باشن حفظ می‌شن."""
+        prev_checked = {code for code, cb in self._checkboxes.items() if cb.isChecked()}
+        self._menu.clear()
+        self._checkboxes = {}
+        self._labels = {}
+        select_all_action = self._menu.addAction("✅ انتخابِ همه")
+        select_all_action.triggered.connect(lambda: self._set_all(True))
+        clear_action = self._menu.addAction("◻️ پاک‌کردنِ انتخاب")
+        clear_action.triggered.connect(lambda: self._set_all(False))
+        self._menu.addSeparator()
+        for code, label in options:
+            cb = QCheckBox(label)
+            cb.setLayoutDirection(Qt.RightToLeft)
+            cb.setChecked(code in prev_checked)
+            cb.toggled.connect(self._on_toggled)
+            action = QWidgetAction(self._menu)
+            action.setDefaultWidget(cb)
+            self._menu.addAction(action)
+            self._checkboxes[code] = cb
+            self._labels[code] = label
+        self._update_text()
+
+    def _set_all(self, checked: bool):
+        for cb in self._checkboxes.values():
+            cb.blockSignals(True)
+            cb.setChecked(checked)
+            cb.blockSignals(False)
+        self._update_text()
+        self.selectionChanged.emit()
+
+    def _on_toggled(self, _checked=False):
+        self._update_text()
+        self.selectionChanged.emit()
+
+    def _update_text(self):
+        codes = self.selected_codes()
+        if not codes:
+            self.setText(self._placeholder)
+        elif len(codes) == 1:
+            code = next(iter(codes))
+            self.setText(self._labels.get(code, code))
+        else:
+            self.setText(f"{len(codes)} موردِ انتخاب‌شده ▾")
+
+    def selected_codes(self) -> set[str]:
+        return {code for code, cb in self._checkboxes.items() if cb.isChecked()}
 
 
 class SiteTaxonomyLoader(QThread):
@@ -63,11 +137,12 @@ class SiteTaxonomyLoader(QThread):
 
 
 class CategoryBrandStudioTab(QWidget):
-    def __init__(self, product_tab_ref=None):
+    def __init__(self, product_tab_ref=None, category_tab_ref=None):
         super().__init__()
         self.setLayoutDirection(Qt.RightToLeft)
         self.config = load_secure_config(None) or {}
         self.product_tab_ref = product_tab_ref
+        self.category_tab_ref = category_tab_ref
         self._categories: list[dict] = []
         self._brands: list[dict] = []
         self._slug_map: dict = {}
@@ -79,13 +154,17 @@ class CategoryBrandStudioTab(QWidget):
 
     # ------------------------------------------------------------------
     def init_ui(self):
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+
+        erp_label = erp_provider_label(self.config)
+
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(8)
 
         hint = QLabel(
             "دسته‌بندی/برندِ واقعیِ سایت رو به چند محصولِ فیلترشده هم‌زمان الصاق کنید — "
-            "این کار جایگزینِ منطقِ خودکارِ «دژاوو (ERP) → دسته‌بندی» می‌شه، مگر با دکمه‌ی "
+            f"این کار جایگزینِ منطقِ خودکارِ «{erp_label} → دسته‌بندی» می‌شه، مگر با دکمه‌ی "
             "«بازگردانی» دوباره پاک بشه."
         )
         hint.setWordWrap(True)
@@ -99,10 +178,9 @@ class CategoryBrandStudioTab(QWidget):
         self.search_input.textChanged.connect(self._apply_filters)
         filter_row.addWidget(self.search_input, 2)
 
-        self.erp_category_combo = QComboBox()
-        self.erp_category_combo.addItem("— همه‌ی دسته‌بندی‌هایِ دژاوو —", "")
-        self.erp_category_combo.currentIndexChanged.connect(self._apply_filters)
-        filter_row.addWidget(self.erp_category_combo, 1)
+        self.erp_category_filter = MultiCheckFilterButton(f"— همه‌ی دسته‌بندی‌هایِ {erp_label} —")
+        self.erp_category_filter.selectionChanged.connect(self._apply_filters)
+        filter_row.addWidget(self.erp_category_filter, 1)
 
         self.link_filter_combo = QComboBox()
         self.link_filter_combo.addItem("— همه —", "all")
@@ -114,7 +192,7 @@ class CategoryBrandStudioTab(QWidget):
         self.override_filter_combo = QComboBox()
         self.override_filter_combo.addItem("— همه —", "all")
         self.override_filter_combo.addItem("🏷️ با دسته‌بندیِ دستی", "manual")
-        self.override_filter_combo.addItem("⚙️ فقط خودکار (ERP)", "auto")
+        self.override_filter_combo.addItem(f"⚙️ فقط خودکار ({erp_label})", "auto")
         self.override_filter_combo.addItem("🚫 بدونِ دسته‌بندیِ سایت", "no_category")
         self.override_filter_combo.currentIndexChanged.connect(self._apply_filters)
         filter_row.addWidget(self.override_filter_combo, 1)
@@ -130,6 +208,14 @@ class CategoryBrandStudioTab(QWidget):
         self.refresh_products_btn.setToolTip("خواندنِ دوباره‌ی لیستِ محصولات از تبِ «محصولات»")
         self.refresh_products_btn.clicked.connect(self._reload_products)
         filter_row.addWidget(self.refresh_products_btn)
+
+        self.refresh_taxonomy_btn = QPushButton("🔄 دریافتِ دوباره‌یِ دسته‌بندی/برندِ سایت")
+        self.refresh_taxonomy_btn.setToolTip(
+            "اگه اسمِ دسته‌بندی/برند به‌جایِ نمایش دادن فقط کد نشون می‌ده (مثلاً چون دریافتِ اولیه "
+            "ناموفق بوده یا هنوز کامل نشده)، این دکمه رو بزنید تا دوباره از سایت دریافت بشه."
+        )
+        self.refresh_taxonomy_btn.clicked.connect(self._load_site_taxonomy)
+        filter_row.addWidget(self.refresh_taxonomy_btn)
         root.addLayout(filter_row)
 
         select_row = QHBoxLayout()
@@ -177,8 +263,13 @@ class CategoryBrandStudioTab(QWidget):
         apply_cat_btn.clicked.connect(self._apply_category_to_selected)
         cat_row.addWidget(apply_cat_btn)
 
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+
         revert_btn = QPushButton("↩️ بازگردانی به حالتِ خودکار")
-        revert_btn.setToolTip("حذفِ کاملِ override — دوباره از منطقِ خودکارِ ERP→دسته‌بندی استفاده می‌شه")
+        revert_btn.setToolTip(
+            f"حذفِ کاملِ override — دوباره از منطقِ خودکارِ {erp_provider_label(self.config)}→"
+            "دسته‌بندی استفاده می‌شه"
+        )
         revert_btn.clicked.connect(self._revert_selected_to_auto)
         cat_row.addWidget(revert_btn)
         v.addLayout(cat_row)
@@ -208,6 +299,32 @@ class CategoryBrandStudioTab(QWidget):
         return panel
 
     # ------------------------------------------------------------------
+    # نامِ دسته‌بندیِ ERP — مستقیم از درختِ خودِ تبِ دسته‌بندی‌ها
+    # ------------------------------------------------------------------
+    def _erp_code_name_map(self) -> dict[str, str]:
+        """کد → نامِ دسته‌بندیِ ERP، مستقیم از درختِ SQL‌محورِ خودِ تبِ
+        دسته‌بندی‌ها (نه با حدس‌زدن از رویِ اسلاگِ دسته‌بندیِ سایت — که از وقتی
+        دسته‌بندیِ سایت مستقل از ERP شده، دیگه لزوماً کدِ ERP رو تویِ خودش
+        نداره و همیشه فقط کد رو نشون می‌داد، نه اسم)."""
+        out: dict[str, str] = {}
+        tree = getattr(self.category_tab_ref, "tree", None)
+        if tree is None:
+            return out
+        for i in range(tree.topLevelItemCount()):
+            parent = tree.topLevelItem(i)
+            m_code = str(parent.data(0, Qt.UserRole + 1) or "").strip()
+            m_name = str(parent.data(0, Qt.UserRole) or "").strip()
+            if m_code and m_name:
+                out[m_code] = m_name
+            for j in range(parent.childCount()):
+                child = parent.child(j)
+                s_code = str(child.data(0, Qt.UserRole + 1) or "").strip()
+                s_name = str(child.data(0, Qt.UserRole) or "").strip()
+                if s_code and s_name:
+                    out[m_code + s_code] = s_name
+        return out
+
+    # ------------------------------------------------------------------
     # بارگذاریِ محصولات (از خودِ تبِ محصولات — بدونِ کوئریِ دوباره‌ی SQL)
     # ------------------------------------------------------------------
     def _reload_products(self):
@@ -224,6 +341,7 @@ class CategoryBrandStudioTab(QWidget):
         overrides = load_category_overrides()
         brand_overrides = load_brand_overrides()
         cat_map = load_category_map()
+        self._erp_code_index = self._erp_code_name_map()
 
         erp_codes_seen: set[str] = set()
         source_list = getattr(self.product_tab_ref, "product_list", None)
@@ -231,6 +349,10 @@ class CategoryBrandStudioTab(QWidget):
             self.status_label.setText("⚠️ ابتدا یک‌بار تبِ «محصولات» را باز/بروزرسانی کنید.")
             self.product_list.blockSignals(False)
             return
+
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+
+        erp_label_prefix = erp_provider_label(self.config)
 
         for i in range(source_list.count()):
             src_item = source_list.item(i)
@@ -245,9 +367,13 @@ class CategoryBrandStudioTab(QWidget):
             codes = sku_to_category_codes(sku)
             erp_codes_seen.update(codes)
             leaf_code = codes[0] if codes else ""
-            erp_label = self._erp_code_index.get(leaf_code, {}).get("name") or (
-                f"کدِ {leaf_code}" if leaf_code else "—"
-            )
+            erp_name = self._erp_code_index.get(leaf_code)
+            if leaf_code and erp_name:
+                erp_label = f"{erp_name} (کدِ {leaf_code})"
+            elif leaf_code:
+                erp_label = f"کدِ {leaf_code}"
+            else:
+                erp_label = "—"
 
             if manual_ids:
                 effective_ids = list(manual_ids)
@@ -262,14 +388,19 @@ class CategoryBrandStudioTab(QWidget):
                 site_cat_label = "بدونِ دسته‌بندیِ سایت"
 
             brand_id = brand_overrides.get(sku)
-            brand_label = self._brand_id_to_name.get(brand_id, f"#{brand_id}") if brand_id else "بدونِ برند"
+            if brand_id:
+                brand_name = self._brand_id_to_name.get(brand_id)
+                brand_label = f"{brand_name} (#{brand_id})" if brand_name else f"#{brand_id}"
+            else:
+                brand_label = "بدونِ برند"
 
             label_bits = []
             label_bits.append("✅" if is_linked else "⭕")
             if has_override:
                 label_bits.append("🏷️")
             label_bits.append(
-                f"{name} — کد: {sku} | دژاوو: {erp_label} | سایت: {site_cat_label} | برند: {brand_label}"
+                f"{name} — کد: {sku} | {erp_label_prefix}: {erp_label} | سایت: {site_cat_label} | "
+                f"برند: {brand_label}"
             )
             item = QListWidgetItem(" ".join(label_bits))
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
@@ -284,24 +415,19 @@ class CategoryBrandStudioTab(QWidget):
             item.setData(Qt.UserRole + 7, bool(brand_id))  # دارایِ برند
             self.product_list.addItem(item)
 
-        current_erp = self.erp_category_combo.currentData()
-        self.erp_category_combo.blockSignals(True)
-        self.erp_category_combo.clear()
-        self.erp_category_combo.addItem("— همه‌ی دسته‌بندی‌هایِ دژاوو —", "")
+        erp_options = []
         for code in sorted(erp_codes_seen):
-            entry_name = self._erp_code_index.get(code, {}).get("name")
+            entry_name = self._erp_code_index.get(code)
             label = f"{entry_name} (کدِ {code})" if entry_name else f"کدِ {code}"
-            self.erp_category_combo.addItem(label, code)
-        idx = self.erp_category_combo.findData(current_erp)
-        self.erp_category_combo.setCurrentIndex(idx if idx >= 0 else 0)
-        self.erp_category_combo.blockSignals(False)
+            erp_options.append((code, label))
+        self.erp_category_filter.set_options(erp_options)
 
         self.product_list.blockSignals(False)
         self._apply_filters()
 
     def _apply_filters(self, *_args):
         needle = (self.search_input.text() or "").strip().lower()
-        erp_code = self.erp_category_combo.currentData() or ""
+        erp_codes_selected = self.erp_category_filter.selected_codes()
         link_mode = self.link_filter_combo.currentData() or "all"
         override_mode = self.override_filter_combo.currentData() or "all"
         brand_mode = self.brand_filter_combo.currentData() or "all"
@@ -311,7 +437,7 @@ class CategoryBrandStudioTab(QWidget):
             visible = True
             if needle and needle not in (item.data(Qt.UserRole + 5) or ""):
                 visible = False
-            if visible and erp_code and erp_code not in (item.data(Qt.UserRole + 4) or []):
+            if visible and erp_codes_selected and not (erp_codes_selected & set(item.data(Qt.UserRole + 4) or [])):
                 visible = False
             if visible and link_mode == "linked" and not item.data(Qt.UserRole + 2):
                 visible = False
@@ -377,8 +503,6 @@ class CategoryBrandStudioTab(QWidget):
         if error:
             self.status_label.setText(f"⚠️ دریافتِ دسته‌بندی/برند ناموفق بود: {error}")
             return
-        from sync_app.core.category_resolver import build_code_index_from_slug_map
-
         self._categories = categories or []
         self._brands = brands or []
         self._slug_map = {c.get("slug"): c for c in self._categories if c.get("slug")}
@@ -392,7 +516,9 @@ class CategoryBrandStudioTab(QWidget):
             for b in self._brands
             if b.get("id")
         }
-        self._erp_code_index = build_code_index_from_slug_map(self._slug_map)
+        # نکته: self._erp_code_index دیگه اینجا ساخته نمی‌شه — از درختِ خودِ
+        # تبِ دسته‌بندی‌ها (SQL) میاد، تویِ _reload_products (که چند خط
+        # پایین‌تر صدا زده می‌شه)، نه از حدس‌زدن رویِ اسلاگِ دسته‌بندیِ سایت.
 
         self.category_combo.clear()
         for cat in sorted(self._categories, key=lambda c: str(c.get("name") or "")):
@@ -508,6 +634,8 @@ class CategoryBrandStudioTab(QWidget):
         )
 
     def _revert_selected_to_auto(self):
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+
         skus = self._checked_skus()
         if not skus:
             QMessageBox.warning(self, "توجه", "حداقل یک محصول را تیک بزنید.")
@@ -515,7 +643,8 @@ class CategoryBrandStudioTab(QWidget):
         answer = QMessageBox.question(
             self, "بازگردانی",
             f"دسته‌بندیِ دستیِ {len(skus)} محصول حذف بشه و دوباره از منطقِ خودکارِ "
-            "ERP→دسته‌بندی استفاده بشه؟ (اعمالِ واقعی رویِ سایت با سینکِ بعدی انجام می‌شه)",
+            f"{erp_provider_label(self.config)}→دسته‌بندی استفاده بشه؟ (اعمالِ واقعی رویِ سایت با "
+            "سینکِ بعدی انجام می‌شه)",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
         )
         if answer != QMessageBox.Yes:
