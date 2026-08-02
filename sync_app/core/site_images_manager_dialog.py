@@ -10,7 +10,9 @@ import requests
 from PyQt5.QtCore import QObject, Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import (
+    QCheckBox,
     QDialog,
+    QDialogButtonBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -169,7 +171,8 @@ class SiteImagesManagerDialog(QDialog):
         root = QVBoxLayout(self)
         hint = QLabel(
             "برایِ هر محصول، عکس‌هایِ فعلیِ روی سایت نشون داده می‌شه — با زدنِ ✕ "
-            "همون عکس فوراً از سایت حذف می‌شه (نیازی به ارسالِ دوباره‌ی بقیه‌ی عکس‌ها نیست)."
+            "همون عکس فوراً از سایت حذف می‌شه (نیازی به ارسالِ دوباره‌ی بقیه‌ی عکس‌ها نیست). "
+            "برایِ ووکامرس، موقعِ حذف می‌پرسه که آیا از کتابخانه‌ی رسانه‌ی سایت هم کاملاً پاک بشه یا فقط از گالریِ محصول جدا بشه."
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color:#475569; font-size:12px;")
@@ -247,12 +250,44 @@ class SiteImagesManagerDialog(QDialog):
         holder.setLayout(cell)
         grid_holder.addWidget(holder)
 
+    def _confirm_delete(self, sku: str) -> tuple[bool, bool]:
+        """(تأیید شد؟, هم از رسانه‌ی سایت حذف بشه؟). برایِ پرستاشاپ سؤالِ
+        دومی معنا نداره — اونجا اصلاً کتابخانه‌ی رسانه‌ی جدا نیست، حذفِ
+        عکس از گالریِ محصول یعنی حذفِ کاملِ فایل."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("حذفِ عکس")
+        dialog.setLayoutDirection(Qt.RightToLeft)
+        layout = QVBoxLayout(dialog)
+        text = QLabel(f"این عکس از گالریِ محصولِ «{sku}» برایِ همیشه حذف بشه؟")
+        text.setWordWrap(True)
+        layout.addWidget(text)
+
+        media_checkbox = None
+        if not self.is_ps:
+            media_checkbox = QCheckBox("از رسانه‌ی سایت (Media Library) هم کاملاً حذف بشه")
+            media_checkbox.setLayoutDirection(Qt.RightToLeft)
+            media_checkbox.setChecked(True)
+            media_checkbox.setToolTip(
+                "فعال (پیش‌فرض): فایلِ عکس از کتابخانه‌ی رسانه‌ی وردپرس هم کاملاً پاک می‌شه.\n"
+                "غیرفعال: فقط از گالریِ این محصول جدا می‌شه؛ خودِ فایل رویِ رسانه‌ی سایت باقی می‌مونه "
+                "(مثلاً اگه جایِ دیگه‌ای هم ازش استفاده شده)."
+            )
+            layout.addWidget(media_checkbox)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Yes | QDialogButtonBox.No)
+        buttons.button(QDialogButtonBox.Yes).setText("حذف")
+        buttons.button(QDialogButtonBox.No).setText("انصراف")
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        confirmed = dialog.exec_() == QDialog.Accepted
+        also_media = bool(media_checkbox and media_checkbox.isChecked())
+        return confirmed, also_media
+
     def _delete_image(self, sku, pid, image_id, cell_layout):
-        answer = QMessageBox.question(
-            self, "حذفِ عکس", f"این عکس از سایت برایِ محصولِ «{sku}» برایِ همیشه حذف بشه؟",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
-        )
-        if answer != QMessageBox.Yes:
+        confirmed, also_delete_media = self._confirm_delete(sku)
+        if not confirmed:
             return
         try:
             if self.is_ps:
@@ -260,13 +295,26 @@ class SiteImagesManagerDialog(QDialog):
 
                 ps_delete_product_image(self.cfg, pid, image_id)
             else:
-                from sync_app.core.wc_sync_helper import update_wc_product_images
+                from sync_app.core.wc_sync_helper import delete_wp_media, update_wc_product_images
 
                 _, remaining, _err = _fetch_wc_images(self.cfg, sku)
                 new_images = [{"id": im["id"]} for im in remaining if im.get("id") != image_id]
                 ok, _resp, err_msg = update_wc_product_images(self.cfg, pid, new_images, allow_empty=True)
                 if not ok:
                     raise RuntimeError(err_msg or "حذف ناموفق بود")
+                if also_delete_media:
+                    media_ok, media_err = delete_wp_media(self.cfg, image_id)
+                    if media_ok:
+                        log.info(f"🗑️ رسانه #{image_id} از کتابخانه‌ی رسانه‌ی سایت هم پاک شد.")
+                    else:
+                        # از گالریِ محصول که با موفقیت جدا شد — این فقط مرحله‌ی
+                        # اضافیه، پس هشدار می‌دیم نه خطایِ قطعی (بلوکِ except پایین).
+                        log.warning(f"⚠️ عکس از محصول حذف شد ولی از رسانه‌ی سایت حذف نشد: {media_err}")
+                        QMessageBox.warning(
+                            self, "حذفِ ناقص",
+                            f"عکس از گالریِ محصولِ «{sku}» حذف شد، ولی حذفِ کاملش از رسانه‌ی سایت "
+                            f"ناموفق بود:\n{media_err}",
+                        )
             log.info(f"🗑️ عکس #{image_id} محصولِ {sku} از سایت حذف شد.")
         except Exception as exc:
             QMessageBox.critical(self, "خطا در حذف", f"حذفِ عکس ناموفق بود:\n{exc}")

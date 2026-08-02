@@ -313,3 +313,60 @@ def run_pipeline(
     except Exception as exc:
         result.error = str(exc)
     return result
+
+
+def apply_default_pipeline(
+    abs_path: str,
+    config: dict,
+    *,
+    code: str,
+    name: str = "",
+    product_url: str = "",
+) -> str:
+    """اگه یه «روشِ پردازشِ تصویر» به‌عنوانِ پیش‌فرضِ اجرایِ خودکار (تبِ
+    تنظیماتِ Smart Publish → AUTO_RUN_KEY/AUTO_PIPELINE_KEY) انتخاب شده
+    باشه، تصویر رو از همون پایپ‌لاین رد می‌کنه و مسیرِ فایلِ نهایی
+    (پردازش‌شده) رو برمی‌گردونه؛ وگرنه — یا اگه پردازش با خطا مواجه بشه —
+    همون مسیرِ اصلی/خام رو بدونِ تغییر برمی‌گردونه.
+
+    این تنها نقطه‌ی مشترکیه که همه‌ی روش‌هایِ انتقالِ تصویر (سینکِ کاملِ
+    محصولات از دیتابیس، ارسالِ دستی/گروهیِ تصویرِ محصول از تبِ محصولات،
+    ارسالِ تصویرِ دسته‌بندی، Media Center) باید صداش بزنن — تا فرقی نکنه
+    تصویر از کجا/کدوم مسیر داره می‌ره، همیشه از یه پایپ‌لاینِ یکسان رد بشه."""
+    if not os.path.isfile(abs_path):
+        return abs_path
+    cfg = config or {}
+    if not bool(cfg.get(AUTO_RUN_KEY, False)):
+        return abs_path
+    pipeline_name = cfg.get(AUTO_PIPELINE_KEY)
+    if not pipeline_name:
+        return abs_path
+    pipeline = load_pipelines(cfg).get(pipeline_name)
+    if not pipeline:
+        return abs_path
+    steps = pipeline.get("steps") or []
+    if not steps:
+        return abs_path
+    try:
+        from sync_app.core.media_center import load_image_profiles
+
+        profiles = load_image_profiles(cfg)
+        profile_name = pipeline.get("profile")
+        out_dir = os.path.join(os.path.dirname(abs_path), "_pipeline_out")
+        os.makedirs(out_dir, exist_ok=True)
+        result = run_pipeline(
+            abs_path, steps, out_dir=out_dir,
+            profile=profiles.get(profile_name) if profile_name else None,
+            watermark=load_watermark_settings(cfg),
+            ai_studio=load_ai_studio_settings(cfg),
+            text_engrave=load_text_engrave_settings(cfg),
+            qr_code=load_qr_code_settings(cfg),
+            product_info={"a_code": code, "a_code_c": code, "name": name or code, "product_url": product_url},
+        )
+        if result.ok and result.dst_path and os.path.isfile(result.dst_path):
+            return result.dst_path
+    except Exception as exc:
+        from sync_app.core.sync_utils import log
+
+        log.warning(f"⚠️ روشِ پردازشِ تصویر رویِ {code} اجرا نشد، تصویرِ خام آپلود می‌شه: {exc}")
+    return abs_path

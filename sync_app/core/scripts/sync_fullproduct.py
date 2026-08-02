@@ -233,11 +233,7 @@ def _sync_product_images_if_needed(wcapi, sku, saved_pid, upsert_data, erp_image
 
     try:
         from sync_app.core.erp_image_helper import stage_erp_images
-        from sync_app.core.smart_publish import (
-            AUTO_RUN_KEY, AUTO_PIPELINE_KEY, load_pipelines, load_watermark_settings,
-            load_ai_studio_settings, run_pipeline, load_text_engrave_settings, load_qr_code_settings,
-        )
-        from sync_app.core.media_center import load_image_profiles
+        from sync_app.core.smart_publish import apply_default_pipeline
         from sync_app.core.wc_sync_helper import wp_upload_media_ex
 
         # هر تصویرِ جدید رو با اسم مبتنی بر hlo_id ذخیره می‌کنیم — تا اگه
@@ -251,10 +247,8 @@ def _sync_product_images_if_needed(wcapi, sku, saved_pid, upsert_data, erp_image
         if not rel_by_hlo_id:
             return
 
-        auto_run = bool(raw_config.get(AUTO_RUN_KEY, False))
-        auto_pipeline_name = raw_config.get(AUTO_PIPELINE_KEY)
-        pipelines = load_pipelines(raw_config) if auto_run else {}
-        auto_pipeline = pipelines.get(auto_pipeline_name) if auto_pipeline_name else None
+        site_url = str(raw_config.get("WC_URL") or "").strip().rstrip("/")
+        product_url = f"{site_url}/?p={int(saved_pid)}" if site_url else ""
 
         uploaded_ids = []
         transferred_hlo_ids = []
@@ -262,27 +256,11 @@ def _sync_product_images_if_needed(wcapi, sku, saved_pid, upsert_data, erp_image
             abs_path = app_path_from_rel(rel)
             if not os.path.isfile(abs_path):
                 continue
-            final_path = abs_path
-            if auto_run and auto_pipeline:
-                try:
-                    profiles = load_image_profiles(raw_config)
-                    out_dir = os.path.join(os.path.dirname(abs_path), "_pipeline_out")
-                    os.makedirs(out_dir, exist_ok=True)
-                    site_url = str(raw_config.get("WC_URL") or "").strip().rstrip("/")
-                    product_url = f"{site_url}/?p={int(saved_pid)}" if site_url else ""
-                    result = run_pipeline(
-                        abs_path, auto_pipeline.get("steps") or [], out_dir=out_dir,
-                        profile=profiles.get(auto_pipeline.get("profile")) if auto_pipeline.get("profile") else None,
-                        watermark=load_watermark_settings(raw_config),
-                        ai_studio=load_ai_studio_settings(raw_config),
-                        text_engrave=load_text_engrave_settings(raw_config),
-                        qr_code=load_qr_code_settings(raw_config),
-                        product_info={"a_code": sku, "a_code_c": sku, "name": sku, "product_url": product_url},
-                    )
-                    if result.ok and result.dst_path and os.path.isfile(result.dst_path):
-                        final_path = result.dst_path
-                except Exception as exc:
-                    log.warning(f"⚠️ روش پردازش تصویر روی {sku} اجرا نشد، تصویر خام آپلود می‌شه: {exc}")
+            # روشِ پردازشِ تصویرِ پیش‌فرض (اگه در تنظیمات ست شده باشه) — همون
+            # نقطه‌ی مشترکی که همه‌ی روش‌هایِ انتقالِ تصویر (دیتابیس/دستی/
+            # گروهی/دسته‌بندی) ازش استفاده می‌کنن؛ اگه پیش‌فرضی نباشه، همون
+            # تصویرِ خام/اصلی برمی‌گرده.
+            final_path = apply_default_pipeline(abs_path, raw_config, code=sku, product_url=product_url)
 
             with open(final_path, "rb") as f:
                 img_data = f.read()
@@ -340,11 +318,7 @@ def _sync_product_images_if_needed_ps(config, sku, product_id, erp_images):
     log.info(f"🖼️ [{sku}] {len(new_erp_images)} تصویر جدید از ERP برای انتقال به پرستاشاپ پیدا شد...")
 
     try:
-        from sync_app.core.smart_publish import (
-            AUTO_RUN_KEY, AUTO_PIPELINE_KEY, load_pipelines, load_watermark_settings,
-            load_ai_studio_settings, run_pipeline, load_text_engrave_settings, load_qr_code_settings,
-        )
-        from sync_app.core.media_center import load_image_profiles
+        from sync_app.core.smart_publish import apply_default_pipeline
 
         rel_by_hlo_id: dict[int, str] = {}
         for hlo_id, blob, path in new_erp_images:
@@ -358,10 +332,8 @@ def _sync_product_images_if_needed_ps(config, sku, product_id, erp_images):
             )
             return
 
-        auto_run = bool(config.get(AUTO_RUN_KEY, False))
-        auto_pipeline_name = config.get(AUTO_PIPELINE_KEY)
-        pipelines = load_pipelines(config) if auto_run else {}
-        auto_pipeline = pipelines.get(auto_pipeline_name) if auto_pipeline_name else None
+        site_url = str(config.get("PS_URL") or "").strip().rstrip("/")
+        product_url = f"{site_url}/index.php?id_product={int(product_id)}&controller=product" if site_url else ""
 
         uploaded_count = 0
         transferred_hlo_ids = []
@@ -369,27 +341,7 @@ def _sync_product_images_if_needed_ps(config, sku, product_id, erp_images):
             abs_path = app_path_from_rel(rel)
             if not os.path.isfile(abs_path):
                 continue
-            final_path = abs_path
-            if auto_run and auto_pipeline:
-                try:
-                    profiles = load_image_profiles(config)
-                    out_dir = os.path.join(os.path.dirname(abs_path), "_pipeline_out")
-                    os.makedirs(out_dir, exist_ok=True)
-                    site_url = str(config.get("PS_URL") or "").strip().rstrip("/")
-                    product_url = f"{site_url}/index.php?id_product={int(product_id)}&controller=product" if site_url else ""
-                    result = run_pipeline(
-                        abs_path, auto_pipeline.get("steps") or [], out_dir=out_dir,
-                        profile=profiles.get(auto_pipeline.get("profile")) if auto_pipeline.get("profile") else None,
-                        watermark=load_watermark_settings(config),
-                        ai_studio=load_ai_studio_settings(config),
-                        text_engrave=load_text_engrave_settings(config),
-                        qr_code=load_qr_code_settings(config),
-                        product_info={"a_code": sku, "a_code_c": sku, "name": sku, "product_url": product_url},
-                    )
-                    if result.ok and result.dst_path and os.path.isfile(result.dst_path):
-                        final_path = result.dst_path
-                except Exception as exc:
-                    log.warning(f"⚠️ روش پردازش تصویر روی {sku} اجرا نشد، تصویر خام آپلود می‌شه: {exc}")
+            final_path = apply_default_pipeline(abs_path, config, code=sku, product_url=product_url)
 
             try:
                 with open(final_path, "rb") as f:

@@ -2572,6 +2572,13 @@ class CategoryTab(QWidget):
                     fail_count += 1
                     continue
 
+                # روشِ پردازشِ تصویرِ پیش‌فرض (اگه در تنظیمات ست شده باشه) — همون
+                # نقطه‌ی مشترکی که همه‌ی روش‌هایِ انتقالِ تصویر (دیتابیس/دستی/
+                # گروهی/دسته‌بندی) ازش استفاده می‌کنن؛ اگه پیش‌فرضی نباشه، همون
+                # تصویرِ خام/اصلی آپلود می‌شه.
+                from sync_app.core.smart_publish import apply_default_pipeline
+
+                abs_path = apply_default_pipeline(abs_path, cfg, code=full_code, name=s_name)
                 filename = os.path.basename(abs_path)
                 with open(abs_path, "rb") as f:
                     img_data = f.read()
@@ -2750,6 +2757,11 @@ class CategoryTab(QWidget):
                     fail_count += 1
                     continue
 
+                # روشِ پردازشِ تصویرِ پیش‌فرض (اگه در تنظیمات ست شده باشه) — همون
+                # نقطه‌ی مشترکی که همه‌ی روش‌هایِ انتقالِ تصویر ازش استفاده می‌کنن.
+                from sync_app.core.smart_publish import apply_default_pipeline
+
+                abs_path = apply_default_pipeline(abs_path, cfg, code=full_code, name=s_name)
                 filename = os.path.basename(abs_path)
                 with open(abs_path, "rb") as f:
                     img_data = f.read()
