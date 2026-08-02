@@ -1536,6 +1536,46 @@ def _wp_delete_media(config, user, pwd, media_id):
         pass
 
 
+def delete_wp_media(config, media_id) -> tuple[bool, str]:
+    """حذفِ واقعیِ رسانه از کتابخانه‌یِ رسانه‌یِ وردپرس (نه فقط حذفِ لینک از
+    گالریِ محصول) — برخلافِ _wp_delete_media (که best-effort و بی‌صداست و
+    برایِ پاک‌سازیِ خودکارِ آپلودِ ناموفق استفاده می‌شه)، این تابع نتیجه/خطا رو
+    برمی‌گردونه چون این‌جا کاربر صریحاً درخواستِ حذف داده و باید از نتیجه
+    مطلع بشه."""
+    if not media_id:
+        return False, "شناسه‌ی رسانه نامعتبر است."
+
+    user, pwd_raw = get_wp_media_credentials(config)
+    if not user or not pwd_raw:
+        return False, "WP Username یا Application Password خالی است (تنظیمات > ووکامرس)."
+
+    base = wp_media_base_url(config)
+    if not base:
+        return False, "WC URL در تنظیمات خالی است."
+
+    url = f"{base}/wp-json/wp/v2/media/{int(media_id)}?force=true"
+    last_err = ""
+    for pwd in wp_password_variants(pwd_raw):
+        try:
+            resp = requests.delete(
+                url,
+                headers=wp_media_common_headers(wp_basic_auth_header(user, pwd)),
+                timeout=wc_timeout_pair(config),
+                verify=wp_requests_verify(config),
+            )
+            if resp.status_code in (200, 201):
+                return True, ""
+            if resp.status_code == 404:
+                # رسانه از قبل وجود نداشته — از نظرِ کاربر یعنی «حذف شده».
+                return True, ""
+            last_err = f"کد {resp.status_code}: {resp.text[:200]}"
+            if resp.status_code == 401:
+                continue
+        except Exception as exc:
+            last_err = str(exc)
+    return False, last_err or "حذفِ رسانه ناموفق بود."
+
+
 def update_wp_media_alt_text(config, media_id, alt_text) -> tuple[bool, str]:
     """
     آپدیت alt_text یک رسانه — با همون مکانیزم احراز هویت آپلود (WP Application

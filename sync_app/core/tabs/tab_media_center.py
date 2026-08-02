@@ -727,6 +727,8 @@ class MediaCenterTab(QWidget):
         ps_mode = is_prestashop(config)
 
         def _worker():
+            from sync_app.core.smart_publish import apply_default_pipeline
+
             if ps_mode:
                 from sync_app.core.ps_sync_helper import (
                     ps_delete_product_image, ps_get_product_image_ids, ps_upload_product_image,
@@ -751,9 +753,12 @@ class MediaCenterTab(QWidget):
                             for existing_id in ps_get_product_image_ids(config, pid):
                                 ps_delete_product_image(config, pid, existing_id)
                         for _idx, path in items:
-                            with open(path, "rb") as f:
+                            # روشِ پردازشِ تصویرِ پیش‌فرض — همون نقطه‌ی مشترکی که
+                            # همه‌ی روش‌هایِ انتقالِ تصویر ازش استفاده می‌کنن.
+                            final_path = apply_default_pipeline(path, config, code=a_code)
+                            with open(final_path, "rb") as f:
                                 data = f.read()
-                            ps_upload_product_image(config, pid, data, os.path.basename(path))
+                            ps_upload_product_image(config, pid, data, os.path.basename(final_path))
                         mark_bulk_import_uploaded([p for _idx, p in items], a_code)
                         ok_count += 1
                         continue
@@ -766,10 +771,11 @@ class MediaCenterTab(QWidget):
                         image_ids = [{"id": im.get("id")} for im in existing if isinstance(im, dict) and im.get("id")]
 
                     for _idx, path in items:
-                        with open(path, "rb") as f:
+                        final_path = apply_default_pipeline(path, config, code=a_code)
+                        with open(final_path, "rb") as f:
                             data = f.read()
                         ok, media_id, _url, err = wp_upload_media_ex(
-                            config, data, os.path.basename(path), fallback_stem=a_code
+                            config, data, os.path.basename(final_path), fallback_stem=a_code
                         )
                         if not ok:
                             raise RuntimeError(err)

@@ -3151,31 +3151,12 @@ class ProductTab(QWidget):
         from sync_app.core.ps_sync_helper import (
             ps_delete_product_image, ps_get_product_image_ids, ps_upload_product_image,
         )
-        from sync_app.core.smart_publish import (
-            AUTO_RUN_KEY, AUTO_PIPELINE_KEY, load_pipelines, load_watermark_settings,
-            load_ai_studio_settings, run_pipeline, load_text_engrave_settings, load_qr_code_settings,
-        )
-        from sync_app.core.media_center import load_image_profiles
+        from sync_app.core.smart_publish import apply_default_pipeline
 
         product_map = load_product_woo_map()
         success_count = 0
         fail_count = 0
         log.info(f"📷 شروع ارسال تصاویر {len(to_process)} محصول به پرستاشاپ — فقط فایل‌های موجود روی دیسک")
-
-        auto_run = bool(cfg.get(AUTO_RUN_KEY, False))
-        auto_pipeline_name = cfg.get(AUTO_PIPELINE_KEY)
-        pipelines = load_pipelines(cfg) if auto_run else {}
-        auto_pipeline = pipelines.get(auto_pipeline_name) if auto_pipeline_name else None
-        if auto_run and auto_pipeline:
-            profiles = load_image_profiles(cfg)
-            pipeline_watermark = load_watermark_settings(cfg)
-            pipeline_ai_studio = load_ai_studio_settings(cfg)
-            pipeline_text_engrave = load_text_engrave_settings(cfg)
-            pipeline_qr_code = load_qr_code_settings(cfg)
-            pipeline_steps = auto_pipeline.get("steps") or []
-            pipeline_profile = profiles.get(auto_pipeline.get("profile")) if auto_pipeline.get("profile") else None
-        else:
-            pipeline_steps = []
 
         def _apply_pipeline_if_needed(sku: str, abs_path: str, pid: int, already_processed: bool) -> str:
             if already_processed:
@@ -3183,24 +3164,11 @@ class ProductTab(QWidget):
                 # از پایپ‌لاین رد شده — دوباره اجرا نکنیم، وگرنه واترمارک/حکِ
                 # متن دوبار روی هم می‌افته.
                 return abs_path
-            if not (auto_run and auto_pipeline and pipeline_steps):
-                return abs_path
-            try:
-                site_url = str(cfg.get("PS_URL") or "").strip().rstrip("/")
-                product_url = f"{site_url}/index.php?id_product={int(pid)}&controller=product" if site_url else ""
-                out_dir = os.path.join(os.path.dirname(abs_path), "_pipeline_out")
-                os.makedirs(out_dir, exist_ok=True)
-                result = run_pipeline(
-                    abs_path, pipeline_steps, out_dir=out_dir, profile=pipeline_profile,
-                    watermark=pipeline_watermark, ai_studio=pipeline_ai_studio,
-                    text_engrave=pipeline_text_engrave, qr_code=pipeline_qr_code,
-                    product_info={"a_code": sku, "a_code_c": sku, "name": sku, "product_url": product_url},
-                )
-                if result.ok and result.dst_path and os.path.isfile(result.dst_path):
-                    return result.dst_path
-            except Exception as exc:
-                log.warning(f"⚠️ روش پردازش تصویر رو {sku} اجرا نشد، فایل اصلی ارسال می‌شه: {exc}")
-            return abs_path
+            # روشِ پردازشِ تصویرِ پیش‌فرض (اگه در تنظیمات ست شده باشه) — همون
+            # نقطه‌ی مشترکی که همه‌ی روش‌هایِ انتقالِ تصویر ازش استفاده می‌کنن.
+            site_url = str(cfg.get("PS_URL") or "").strip().rstrip("/")
+            product_url = f"{site_url}/index.php?id_product={int(pid)}&controller=product" if site_url else ""
+            return apply_default_pipeline(abs_path, cfg, code=sku, product_url=product_url)
 
         for sku, paths in to_process:
             try:
@@ -3290,26 +3258,7 @@ class ProductTab(QWidget):
         # اجرای خودکار انتخاب کرده، همون‌جوری که موقع آپلود دستی اعمال
         # می‌شه، اینجا هم (برای تصاویرِ ERP که مستقیم کپی شدن) اعمالش کنیم
         # — تا فرقی نکنه تصویر از کجا اومده، همه از یه مسیر پردازش رد بشن.
-        from sync_app.core.smart_publish import (
-            AUTO_RUN_KEY, AUTO_PIPELINE_KEY, load_pipelines, load_watermark_settings,
-            load_ai_studio_settings, run_pipeline, load_text_engrave_settings, load_qr_code_settings,
-        )
-        from sync_app.core.media_center import load_image_profiles
-
-        auto_run = bool(cfg.get(AUTO_RUN_KEY, False))
-        auto_pipeline_name = cfg.get(AUTO_PIPELINE_KEY)
-        pipelines = load_pipelines(cfg) if auto_run else {}
-        auto_pipeline = pipelines.get(auto_pipeline_name) if auto_pipeline_name else None
-        if auto_run and auto_pipeline:
-            profiles = load_image_profiles(cfg)
-            pipeline_watermark = load_watermark_settings(cfg)
-            pipeline_ai_studio = load_ai_studio_settings(cfg)
-            pipeline_text_engrave = load_text_engrave_settings(cfg)
-            pipeline_qr_code = load_qr_code_settings(cfg)
-            pipeline_steps = auto_pipeline.get("steps") or []
-            pipeline_profile = profiles.get(auto_pipeline.get("profile")) if auto_pipeline.get("profile") else None
-        else:
-            pipeline_steps = []
+        from sync_app.core.smart_publish import apply_default_pipeline
 
         def _apply_pipeline_if_needed(sku: str, abs_path: str, already_processed: bool) -> str:
             """اگه پایپ‌لاین خودکار فعاله، تصویر رو پردازش می‌کنه و مسیر
@@ -3319,27 +3268,12 @@ class ProductTab(QWidget):
             نمی‌کنیم — وگرنه واترمارک/حکِ متن دوبار روی هم می‌افته."""
             if already_processed:
                 return abs_path
-            if not (auto_run and auto_pipeline and pipeline_steps):
-                return abs_path
-            try:
-                site_url = str(cfg.get("WC_URL") or "").strip().rstrip("/")
-                product_url = ""
-                wc_id = load_product_woo_map().get(sku)
-                if wc_id and site_url:
-                    product_url = f"{site_url}/?p={int(wc_id)}"
-                out_dir = os.path.join(os.path.dirname(abs_path), "_pipeline_out")
-                os.makedirs(out_dir, exist_ok=True)
-                result = run_pipeline(
-                    abs_path, pipeline_steps, out_dir=out_dir, profile=pipeline_profile,
-                    watermark=pipeline_watermark, ai_studio=pipeline_ai_studio,
-                    text_engrave=pipeline_text_engrave, qr_code=pipeline_qr_code,
-                    product_info={"a_code": sku, "a_code_c": sku, "name": sku, "product_url": product_url},
-                )
-                if result.ok and result.dst_path and os.path.isfile(result.dst_path):
-                    return result.dst_path
-            except Exception as exc:
-                log.warning(f"⚠️ روش پردازش تصویر رو {sku} اجرا نشد، فایل اصلی ارسال می‌شه: {exc}")
-            return abs_path
+            site_url = str(cfg.get("WC_URL") or "").strip().rstrip("/")
+            product_url = ""
+            wc_id = load_product_woo_map().get(sku)
+            if wc_id and site_url:
+                product_url = f"{site_url}/?p={int(wc_id)}"
+            return apply_default_pipeline(abs_path, cfg, code=sku, product_url=product_url)
 
         for sku, paths in to_process:
             try:
