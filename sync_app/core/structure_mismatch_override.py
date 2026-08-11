@@ -111,6 +111,33 @@ def get_site_variation_target(sku: str) -> dict | None:
     return {"parent_product_id": parent_id, "variation_id": variation_id}
 
 
+def find_erp_sku_for_site_variation(parent_product_id, variation_id) -> str | None:
+    """برعکسِ get_site_variation_target — از رویِ شناسه‌ی محصول/واریانتِ سایت
+    (که رویِ یک خطِ سفارش می‌شینه)، SKUِ سادهٔ ERPِ متناظرش رو پیدا می‌کنه.
+    برایِ اینه که سفارش‌هایِ ثبت‌شده رویِ این واریانتِ سایت، به کدِ درستِ ERP
+    نسبت داده بشن — وگرنه ordersync فقط SKUِ خودِ واریانتِ سایت (که با
+    کدِ ERP فرقی می‌کنه) رو می‌بینه و نمی‌تونه کالا رو در ERP پیدا کنه."""
+    try:
+        parent_product_id = int(parent_product_id or 0)
+        variation_id = int(variation_id or 0)
+    except (TypeError, ValueError):
+        return None
+    if not parent_product_id or not variation_id:
+        return None
+    for sku, entry in _site_variation_table.load().items():
+        if not isinstance(entry, dict):
+            continue
+        try:
+            entry_parent = int(entry.get("parent_product_id") or 0)
+            entry_variation = int(entry.get("variation_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if entry_parent == parent_product_id and entry_variation == variation_id:
+            sku = str(sku or "").strip()
+            return sku or None
+    return None
+
+
 def set_site_variation_target(
     sku: str, parent_product_id: int, variation_id: int, *, label: str = "", erp_label: str = "",
 ) -> None:
