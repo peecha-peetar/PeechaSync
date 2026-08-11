@@ -3175,6 +3175,7 @@ class ProductTab(QWidget):
                 pid = product_map.get(sku)
                 if not pid:
                     log.warning(f"⚠️ محصول {sku} در پرستاشاپ لینک نشده — رد شد.")
+                    self._last_img_upload_detail = f"محصولِ {sku} به هیچ محصولی در پرستاشاپ لینک نشده."
                     fail_count += 1
                     continue
                 pid = int(pid)
@@ -3207,6 +3208,8 @@ class ProductTab(QWidget):
 
                 if not uploaded:
                     log.warning(f"⚠️ هیچ تصویری برای {sku} با موفقیت آپلود نشد.")
+                    if not self._last_img_upload_detail:
+                        self._last_img_upload_detail = f"هیچ فایلِ تصویرِ معتبری برایِ {sku} روی دیسک پیدا نشد."
                     fail_count += 1
                     continue
 
@@ -3218,6 +3221,8 @@ class ProductTab(QWidget):
                 if isinstance(exc, SyncCancelled):
                     raise
                 log.error(f"❌ خطای کلی در پردازش {sku}: {exc}")
+                if not self._last_img_upload_detail:
+                    self._last_img_upload_detail = str(exc)
                 fail_count += 1
 
         if fail_count == 0:
@@ -3293,6 +3298,7 @@ class ProductTab(QWidget):
 
                 if not isinstance(res, list) or not res:
                     log.warning(f"⚠️ محصول {sku} در فروشگاه پیدا نشد — رد شد.")
+                    self._last_img_upload_detail = f"محصولِ {sku} در فروشگاه (بر اساسِ SKU) پیدا نشد."
                     fail_count += 1
                     continue
 
@@ -3336,8 +3342,11 @@ class ProductTab(QWidget):
 
                     if not src_url:
                         log.error(f"❌ خطا در آپلود {filename} برای {sku}: {upload_err}")
-                        if is_wp_upload_fatal_error(upload_err):
-                            self._last_img_upload_detail = upload_err
+                        # قبلاً فقط خطاهایِ «fatal» (401/403/...) این‌جا ثبت می‌شدن —
+                        # یعنی هر شکستِ دیگه (فرمتِ نامعتبر، خطایِ موقتِ هاست بعد از
+                        # اتمامِ تلاش‌های دوباره، و...) با detail خالی می‌موند و
+                        # دیالوگِ پایانی به‌غلط گمان می‌کرد مشکلِ Application Password‌ه.
+                        self._last_img_upload_detail = upload_err
                         continue
 
                     if media_id:
@@ -3347,6 +3356,8 @@ class ProductTab(QWidget):
 
                 if not new_images:
                     log.warning(f"⚠️ هیچ تصویری برای {sku} با موفقیت آپلود نشد.")
+                    if not self._last_img_upload_detail:
+                        self._last_img_upload_detail = f"هیچ فایلِ تصویرِ معتبری برایِ {sku} روی دیسک پیدا نشد."
                     fail_count += 1
                     continue
 
@@ -3393,6 +3404,8 @@ class ProductTab(QWidget):
                 if isinstance(exc, SyncCancelled):
                     raise
                 log.error(f"❌ خطای کلی در پردازش {sku}: {exc}")
+                if not self._last_img_upload_detail:
+                    self._last_img_upload_detail = str(exc)
                 fail_count += 1
 
         if fail_count == 0:
@@ -3434,9 +3447,15 @@ class ProductTab(QWidget):
                 return
             extra = f"\n\n{detail}" if detail else ""
             wp_hint = ""
-            if not detail or "application password" in detail.lower() or "wp/v2/media" in detail.lower():
+            detail_lower = detail.lower()
+            # قبلاً وقتی detail خالی بود (یعنی خطایِ واقعی هیچ‌جا ثبت نشده بود)
+            # هم به‌غلط گمان می‌کردیم مشکلِ Application Password‌ه — با
+            # پرشدنِ detail تویِ همه‌ی شاخه‌های ممکنِ شکست، این حدس‌زدنِ
+            # نادرست حذف شد؛ فقط وقتی متنِ خطا واقعاً به این مسائل اشاره کنه
+            # این راهنماها نشون داده می‌شن.
+            if detail and ("application password" in detail_lower or "wp/v2/media" in detail_lower):
                 wp_hint = "\n\nتنظیمات: WP Username + Application Password"
-            if "products" in detail.lower() and "wc/v3" not in detail.lower():
+            elif detail and "products" in detail_lower and "wc/v3" not in detail_lower:
                 wp_hint = "\n\nتنظیم تصویر محصول از API فروشگاه (Consumer Key با Write) انجام می‌شود."
             QMessageBox.critical(
                 self,
