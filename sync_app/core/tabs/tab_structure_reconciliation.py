@@ -467,8 +467,20 @@ class StructureReconciliationTab(QWidget):
         erp_label = erp_item.text()
 
         from sync_app.core.structure_mismatch_override import set_site_variation_target
+        from sync_app.core.product_woo_map_helper import load_product_woo_map, save_product_woo_map
+        from sync_app.core.product_woo_map_meta import register_product_link
 
         set_site_variation_target(sku, parent_id, variation_id, label=label, erp_label=erp_label)
+        # همین SKU رو در product_woo_map هم به محصولِ والدِ سایت وصل می‌کنیم —
+        # نه برایِ اینکه سینکِ عادی ازش استفاده کنه (سینک برایِ این SKU زودتر
+        # از این طریق رد می‌شه: get_site_variation_target)، بلکه فقط برایِ
+        # اینکه تبِ «محصولات» این SKU رو «لینک‌شده» نشون بده، نه «لینک‌نشده» —
+        # وگرنه کاربر گمون می‌کنه هنوز تطبیق نشده.
+        product_map = load_product_woo_map()
+        product_map[sku] = int(parent_id)
+        save_product_woo_map(product_map)
+        register_product_link(sku, int(parent_id), wc_label=label, manual=True)
+
         self._refresh_sv_table()
         QMessageBox.information(self, "انجام شد", f"SKUِ «{sku}» به واریانتِ سایت وصل شد.")
 
@@ -490,8 +502,15 @@ class StructureReconciliationTab(QWidget):
 
     def _sv_delete(self, sku: str):
         from sync_app.core.structure_mismatch_override import clear_site_variation_target
+        from sync_app.core.product_woo_map_helper import load_product_woo_map, save_product_woo_map
+        from sync_app.core.product_woo_map_meta import clear_product_link_meta
 
         clear_site_variation_target(sku)
+        product_map = load_product_woo_map()
+        if sku in product_map:
+            product_map.pop(sku, None)
+            save_product_woo_map(product_map)
+        clear_product_link_meta(sku)
         self._refresh_sv_table()
 
     # ------------------------------------------------------------------
@@ -668,8 +687,15 @@ class StructureReconciliationTab(QWidget):
 
     def _fs_delete(self, sku: str):
         from sync_app.core.structure_mismatch_override import clear_force_simple_source
+        from sync_app.core.product_woo_map_helper import load_product_woo_map, save_product_woo_map
+        from sync_app.core.product_woo_map_meta import clear_product_link_meta
 
         clear_force_simple_source(sku)
+        product_map = load_product_woo_map()
+        if sku in product_map:
+            product_map.pop(sku, None)
+            save_product_woo_map(product_map)
+        clear_product_link_meta(sku)
         self._refresh_fs_table()
 
     # ------------------------------------------------------------------

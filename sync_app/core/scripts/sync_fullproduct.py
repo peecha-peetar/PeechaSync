@@ -159,6 +159,51 @@ def _apply_field_sync_config(payload, config, *, is_create):
     return payload
 
 
+def _guard_manual_link_structure_match(config, sku, existing_id, has_variants, target):
+    """جلوگیری از ارسالِ اشتباهِ داده به یک محصولِ سایت با ساختارِ متفاوت —
+    وقتی تطبیقِ دستیِ معمولیِ تبِ «تطبیق» (نه تبِ «تطبیقِ ساختاری») یک
+    SKUِ سادهٔ ERP رو به یک محصولِ متغیرِ سایت (یا برعکس) وصل کرده. تبِ
+    «تطبیق» موقعِ ثبتِ لینک هیچ چکِ ساختاری نداره، پس اگه کاربر برایِ این
+    حالتِ خاص از اون تب به‌جایِ «تطبیقِ ساختاری» استفاده کرده باشه، سینکِ
+    عادی هر بار داده‌یِ اشتباه (مثلاً قیمت/موجودیِ یک SKUِ ساده) رو رویِ
+    والدِ متغیرِ سایت می‌نویسه و ممکنه محصول رو خراب کنه.
+
+    اگه برایِ این SKU از قبل overrideِ آگاهانه‌یِ «تطبیقِ ساختاری» ثبت شده،
+    این ناهمخوانی عمدی و مدیریت‌شده‌ست — این تابع کاری نمی‌کنه (چون آن
+    مسیرها اصلاً به این تابع/به _upsert_wc_product هم نمی‌رسن، ولی این چک
+    این‌جا هم به‌عنوانِ لایه‌یِ دفاعیِ دوم نگه داشته می‌شه)."""
+    from sync_app.core.structure_mismatch_override import get_site_variation_target, get_force_simple_source
+
+    if get_site_variation_target(sku) or get_force_simple_source(sku):
+        return
+
+    if is_prestashop(config):
+        from sync_app.core.ps_variation_helper import ps_list_combinations
+
+        try:
+            target_is_variable = bool(ps_list_combinations(config, existing_id))
+        except Exception:
+            return  # نمی‌تونیم مطمئن بشیم — جلویِ سینکِ عادی رو نمی‌گیریم
+    else:
+        if not target:
+            return
+        target_is_variable = str(target.get("type") or "").strip() == "variable"
+
+    if target_is_variable == bool(has_variants):
+        return
+
+    from sync_app.core.integrations.erp_provider import erp_provider_label
+
+    erp_label = erp_provider_label(config)
+    this_side = "متغیر" if has_variants else "ساده"
+    site_side = "متغیر" if target_is_variable else "ساده"
+    raise RuntimeError(
+        f"عدمِ‌تطابقِ ساختار [{sku}]: این کد در {erp_label} {this_side}ه، ولی تطبیقِ دستی به محصولِ "
+        f"#{existing_id} رویِ سایت وصله که {site_side}ست. برایِ این حالت باید از تبِ «تطبیقِ ساختاری» "
+        "استفاده کنید (نه تطبیقِ معمولی) — ارسالِ این کد لغو شد تا محصولِ سایت خراب نشه."
+    )
+
+
 def _upsert_wc_product(wcapi, sku, p_data, has_variants, product_map, *, stock_quantity=None, persist_map=True, config=None):
     """محصول هست update، trash/نیست post جدید."""
     existing_id, product_map = resolve_existing_product_id(wcapi, sku, product_map)
@@ -182,6 +227,7 @@ def _upsert_wc_product(wcapi, sku, p_data, has_variants, product_map, *, stock_q
         target = fetch_product_by_id(wcapi, int(existing_id))
         if target and str(target.get("sku") or "").strip() != sku:
             payload.pop("sku", None)
+        _guard_manual_link_structure_match(config, sku, int(existing_id), has_variants, target)
 
     payload = _apply_field_sync_config(payload, config, is_create=not existing_id)
 
