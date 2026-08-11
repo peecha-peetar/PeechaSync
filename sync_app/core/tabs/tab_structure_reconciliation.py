@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
+from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
@@ -37,6 +38,7 @@ from sync_app.core.secure_config_loader import load_secure_config
 log = logging.getLogger("SyncApp")
 
 _SEARCH_PAGE_SIZE = 20
+_COLOR_MATCHED = QColor("#dcfce7")  # هم‌رنگِ «قبلاً تطبیق داده شده» در تبِ تطبیقِ معمولی
 
 
 # ----------------------------------------------------------------------
@@ -429,12 +431,23 @@ class StructureReconciliationTab(QWidget):
         if error:
             self.sv_status_label.setText(f"⚠️ جستجویِ سایت ناموفق بود: {error}")
             return
+        from sync_app.core.structure_mismatch_override import find_erp_sku_for_site_variation
+
         self.sv_site_list.clear()
+        matched_count = 0
         for parent_id, variation_id, label in options:
-            item = QListWidgetItem(label)
+            matched_sku = find_erp_sku_for_site_variation(parent_id, variation_id)
+            if matched_sku:
+                matched_count += 1
+            item = QListWidgetItem(f"✅ {label}" if matched_sku else label)
             item.setData(Qt.UserRole, (parent_id, variation_id, label))
+            if matched_sku:
+                item.setBackground(_COLOR_MATCHED)
+                item.setToolTip(f"قبلاً به SKUِ «{matched_sku}» تطبیق داده شده")
             self.sv_site_list.addItem(item)
-        self.sv_status_label.setText(f"✅ {len(options)} واریانتِ سایت پیدا شد.")
+        self.sv_status_label.setText(
+            f"✅ {len(options)} واریانتِ سایت پیدا شد — {matched_count} تا قبلاً تطبیق داده شده."
+        )
 
     def _sv_search_erp(self):
         self.sv_status_label.setText(f"⏳ در حالِ جستجویِ کالاهایِ {self.erp_label}...")
@@ -447,12 +460,23 @@ class StructureReconciliationTab(QWidget):
         if error:
             self.sv_status_label.setText(f"⚠️ جستجویِ {self.erp_label} ناموفق بود: {error}")
             return
+        from sync_app.core.structure_mismatch_override import get_site_variation_target
+
         self.sv_erp_list.clear()
+        matched_count = 0
         for sku, label in options:
-            item = QListWidgetItem(label)
+            matched = get_site_variation_target(sku) is not None
+            if matched:
+                matched_count += 1
+            item = QListWidgetItem(f"✅ {label}" if matched else label)
             item.setData(Qt.UserRole, sku)
+            if matched:
+                item.setBackground(_COLOR_MATCHED)
+                item.setToolTip("قبلاً تطبیق داده شده")
             self.sv_erp_list.addItem(item)
-        self.sv_status_label.setText(f"✅ {len(options)} کالایِ {self.erp_label} پیدا شد.")
+        self.sv_status_label.setText(
+            f"✅ {len(options)} کالایِ {self.erp_label} پیدا شد — {matched_count} تا قبلاً تطبیق داده شده."
+        )
 
     def _sv_save(self):
         site_selected = self.sv_site_list.selectedItems()
@@ -607,12 +631,34 @@ class StructureReconciliationTab(QWidget):
         if error:
             self.fs_status_label.setText(f"⚠️ جستجویِ سایت ناموفق بود: {error}")
             return
+        from sync_app.core.structure_mismatch_override import list_force_simple_sources
+        from sync_app.core.product_woo_map_helper import load_product_woo_map
+
+        product_map = load_product_woo_map()
+        matched_ids = set()
+        for parent_sku in list_force_simple_sources():
+            mapped_id = product_map.get(parent_sku)
+            if mapped_id:
+                try:
+                    matched_ids.add(int(mapped_id))
+                except (TypeError, ValueError):
+                    continue
+
         self.fs_site_list.clear()
+        matched_count = 0
         for pid, label, sku in options:
-            item = QListWidgetItem(label)
+            matched = int(pid) in matched_ids
+            if matched:
+                matched_count += 1
+            item = QListWidgetItem(f"✅ {label}" if matched else label)
             item.setData(Qt.UserRole, (pid, label, sku))
+            if matched:
+                item.setBackground(_COLOR_MATCHED)
+                item.setToolTip("این محصول الان منبعِ قیمت/موجودیش از یک کدِ ERP تعیین شده")
             self.fs_site_list.addItem(item)
-        self.fs_status_label.setText(f"✅ {len(options)} محصولِ سایت پیدا شد.")
+        self.fs_status_label.setText(
+            f"✅ {len(options)} محصولِ سایت پیدا شد — {matched_count} تا قبلاً تطبیق داده شده."
+        )
 
     def _fs_search_erp(self):
         self.fs_status_label.setText(f"⏳ در حالِ جستجویِ زیرواریانت‌هایِ {self.erp_label}...")
@@ -625,12 +671,23 @@ class StructureReconciliationTab(QWidget):
         if error:
             self.fs_status_label.setText(f"⚠️ جستجویِ {self.erp_label} ناموفق بود: {error}")
             return
+        from sync_app.core.structure_mismatch_override import get_force_simple_source
+
         self.fs_erp_list.clear()
+        matched_count = 0
         for parent_sku, variant_sku, label in options:
-            item = QListWidgetItem(label)
+            matched = get_force_simple_source(parent_sku) == variant_sku
+            if matched:
+                matched_count += 1
+            item = QListWidgetItem(f"✅ {label}" if matched else label)
             item.setData(Qt.UserRole, (parent_sku, variant_sku))
+            if matched:
+                item.setBackground(_COLOR_MATCHED)
+                item.setToolTip("این زیرواریانت الان منبعِ فعاله")
             self.fs_erp_list.addItem(item)
-        self.fs_status_label.setText(f"✅ {len(options)} زیرواریانت پیدا شد.")
+        self.fs_status_label.setText(
+            f"✅ {len(options)} زیرواریانت پیدا شد — {matched_count} تا قبلاً تطبیق داده شده."
+        )
 
     def _fs_save(self):
         site_selected = self.fs_site_list.selectedItems()
