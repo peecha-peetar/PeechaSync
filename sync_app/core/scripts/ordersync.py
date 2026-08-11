@@ -333,10 +333,26 @@ def insert_order(order):
                 continue
 
             a_code, poshak_id_f, r_arcode_c, sku = resolve_line_item_variant(cursor, item)
-            if not a_code or r_arcode_c is None or poshak_id_f is None:
+            if not a_code:
                 skipped.append(sku or item.get("name") or "?")
-                log.warning(f"⚠️ تطبیق واریانت یافت نشد: order={order_id}, sku='{sku}'")
+                log.warning(f"⚠️ کدِ کالا شناسایی نشد: order={order_id}, sku='{sku}'")
                 continue
+
+            if poshak_id_f is None or r_arcode_c is None:
+                from sync_app.core.variation_rules import product_is_variable
+
+                if product_is_variable(cursor, a_code):
+                    # کالا در ERP واقعاً متغیره (رنگ/سایز داره) ولی واریانتِ
+                    # درست از رویِ این خطِ سفارش پیدا نشد — برایِ جلوگیری از
+                    # نسبت‌دادنِ اشتباهِ فروش/موجودی به یک رنگ/سایزِ غلط، این
+                    # خط رد می‌شه.
+                    skipped.append(sku or item.get("name") or "?")
+                    log.warning(f"⚠️ تطبیق واریانت یافت نشد: order={order_id}, sku='{sku}'")
+                    continue
+                # کالایِ کاملاً ساده‌ست (هیچ ردیفی در ItemArticle نداره —
+                # دقیقاً همون منطقی که همه‌جایِ برنامه ساده/متغیر بودن رو
+                # تشخیص می‌ده) — نداشتنِ واریانت این‌جا طبیعیه، نه خطا.
+                poshak_id_f = None
 
             unit_price = _line_unit_price(item, config)
             r_commen_part = build_r_commen(cursor, poshak_id_f, qty)
