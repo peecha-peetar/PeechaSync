@@ -43,6 +43,7 @@ try:
         resolve_wc_product_id,
         clear_trashed_sku_blockers,
         fetch_product_by_id,
+        fetch_live_wc_ids,
     )
     from sync_app.core.product_woo_map_meta import is_manual_product_link
     from sync_app.core.field_sync_config import is_field_enabled
@@ -699,6 +700,16 @@ def main():
         log.warning("⚠️ category_map.json یافت نشد — محصولات بدون دسته ارسال می‌شوند.")
 
     product_map = _load_product_woo_map()
+    # لیستِ idِ زندهٔ محصولاتِ سایت — یک واکشیِ سبکِ یک‌جا، تا تشخیصِ‌تغییرِ
+    # پایین‌تر (should_skip_unchanged) کورکورانه به نگاشتِ محلی اعتماد نکنه؛
+    # وگرنه محصولی که کاربر مستقیم رویِ سایت پاک کرده، هیچ‌وقت دوباره
+    # ساخته نمی‌شه (چون دادهٔ ERP عوض نشده و سینک بی‌صدا رد می‌کنه).
+    live_wc_ids = fetch_live_wc_ids(wcapi, raw_config)
+    if live_wc_ids is None:
+        log.warning(
+            "⚠️ نتونستیم لیستِ زندهٔ محصولاتِ سایت رو بگیریم — این‌بار تشخیصِ "
+            "«محصولِ حذف‌شده‌یِ بیرون از برنامه» غیرفعاله (نگاشتِ محلی همچنان معتبر فرض می‌شه)."
+        )
     attr_labels = None
     global_ids = None
     term_lookup = None
@@ -1052,8 +1063,17 @@ def main():
         if has_variants:
             hash_payload["variants"] = erp_variations
             hash_payload["attr_map"] = attr_map
+        mapped_id = local_map.get(sku)
+        has_existing = bool(mapped_id)
+        if has_existing and live_wc_ids is not None and int(mapped_id) not in live_wc_ids:
+            # نگاشتِ محلی به یک محصولی اشاره می‌کنه که دیگه رویِ سایت زنده
+            # نیست (حذفِ دستی بیرون از برنامه) — طوری رفتار می‌کنیم که انگار
+            # اصلاً از قبل ساخته نشده، تا resolve_existing_product_id/
+            # _upsert_wc_product تصمیمِ درست (ساختِ دوباره) رو بگیرن.
+            has_existing = False
+            log.info(f"ℹ️ [{sku}] Woo #{mapped_id} دیگه رویِ سایت پیدا نشد — دوباره سینک می‌شه.")
         skip, cache_entry, changed_parts = should_skip_unchanged(
-            sku, hash_payload, sync_hash_cache, local_map.get(sku)
+            sku, hash_payload, sync_hash_cache, has_existing
         )
         if force_full_sync:
             skip = False
