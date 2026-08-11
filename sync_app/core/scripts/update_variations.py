@@ -1982,6 +1982,18 @@ def _main_prestashop(config, selected_groups, price_col):
             check_cancelled()
             a_code = str(row[0]).strip()
             name = str(row[1]).strip()
+
+            from sync_app.core.structure_mismatch_override import get_force_simple_source
+
+            if get_force_simple_source(a_code):
+                # طبقِ تطبیقِ دستیِ کاربر (تبِ «تطبیقِ ساختاری»)، این محصول
+                # رویِ سایت محصولِ ساده‌ست، نه متغیر — sync_fullproduct.py
+                # خودش با دادهٔ زیرواریانتِ انتخاب‌شده به‌عنوانِ محصولِ ساده
+                # سینکش می‌کنه؛ این‌جا نباید دوباره به‌عنوانِ محصولِ متغیر
+                # سینک بشه، وگرنه با هم تناقض پیدا می‌کنن.
+                stats["skipped"] += 1
+                continue
+
             _log_step(f"محصول {idx}/{total}: {a_code} ({name})")
             raw_price = _resolve_article_price(row, price_col)
             erp_variations, attr_map = fetch_variations_from_db(
@@ -2129,6 +2141,18 @@ def main():
             check_cancelled()
             a_code = str(row[0]).strip()
             name = str(row[1]).strip()
+
+            from sync_app.core.structure_mismatch_override import get_force_simple_source
+
+            if get_force_simple_source(a_code):
+                # طبقِ تطبیقِ دستیِ کاربر (تبِ «تطبیقِ ساختاری»)، این محصول
+                # رویِ سایت محصولِ ساده‌ست، نه متغیر — sync_fullproduct.py
+                # خودش با دادهٔ زیرواریانتِ انتخاب‌شده به‌عنوانِ محصولِ ساده
+                # سینکش می‌کنه؛ این‌جا نباید دوباره به‌عنوانِ محصولِ متغیر
+                # سینک بشه، وگرنه با هم تناقض پیدا می‌کنن.
+                stats["skipped"] += 1
+                continue
+
             _log_step(f"محصول {idx}/{total}: {a_code} ({name})")
             raw_price = _resolve_article_price(row, price_col)
             erp_variations, attr_map = fetch_variations_from_db(

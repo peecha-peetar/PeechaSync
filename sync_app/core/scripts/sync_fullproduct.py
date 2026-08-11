@@ -215,6 +215,68 @@ def _upsert_wc_product(wcapi, sku, p_data, has_variants, product_map, *, stock_q
     return saved_pid, product_map, data
 
 
+def _apply_site_variation_override(
+    wcapi, config, sku, matched_group, target, raw_price, raw_sale, stock_quantity, price_div,
+):
+    """این SKU در ERP یه کالایِ سادهٔ مستقله، ولی طبقِ override دستیِ کاربر
+    (تبِ «تطبیقِ ساختاری») در واقع یه واریانتِ یه محصولِ متغیرِ سایته — پس
+    به‌جایِ ساختن/به‌روزرسانیِ یه محصولِ جدا، فقط قیمت/موجودیِ همون واریانتِ
+    شناخته‌شده روی سایت آپدیت می‌شه."""
+    parent_id = int(target["parent_product_id"])
+    variation_id = int(target["variation_id"])
+
+    if is_prestashop(config):
+        from sync_app.core.ps_sync_helper import ps_get_product, ps_set_stock_quantity
+        from sync_app.core.ps_variation_helper import ps_update_combination
+
+        parent = ps_get_product(config, parent_id)
+        if not parent:
+            log.error(
+                f"❌ [{sku}] محصولِ والدِ سایت #{parent_id} (طبقِ override) پیدا نشد — "
+                "به‌روزرسانی رد شد."
+            )
+            return
+        try:
+            base_price = float(parent.get("regular_price") or 0)
+        except (TypeError, ValueError):
+            base_price = 0.0
+        variant_price = float(raw_price or 0) / max(float(price_div or 1), 1.0)
+        price_impact = variant_price - base_price
+        ps_update_combination(config, variation_id, price_impact=price_impact)
+        if is_field_enabled(config, "SYNC_FIELD_VARIATION_STOCK"):
+            from sync_app.core.stock_mode import resolve_variation_stock_mode, STOCK_MODE_ALWAYS, STOCK_MODE_DOWNLOAD, STOCK_MODE_OUT_OF_STOCK
+
+            v_mode = resolve_variation_stock_mode(sku, sku, matched_group, config)
+            if v_mode == STOCK_MODE_OUT_OF_STOCK:
+                qty, out_of_stock = 0, 0
+            elif v_mode in (STOCK_MODE_ALWAYS, STOCK_MODE_DOWNLOAD):
+                qty, out_of_stock = 9999, 1
+            else:
+                qty, out_of_stock = max(0, int(stock_quantity or 0)), 0
+            ps_set_stock_quantity(config, parent_id, qty, product_attribute_id=variation_id, out_of_stock=out_of_stock)
+        log.info(
+            f"🔀 [{sku}] بر اساسِ override دستی، به‌عنوانِ ترکیبِ #{variation_id} از محصولِ #{parent_id} "
+            "سایت به‌روزرسانی شد (نه محصولِ مستقل)."
+        )
+        return
+
+    patch = {"regular_price": str(int(raw_price / price_div)) if raw_price > 0 else "0"}
+    sale_str = woo_sale_price_str(raw_price, raw_sale, price_div)
+    if sale_str:
+        patch["sale_price"] = sale_str
+    if is_field_enabled(config, "SYNC_FIELD_VARIATION_STOCK"):
+        from sync_app.core.stock_mode import resolve_variation_stock_mode, apply_stock_mode_to_payload
+
+        v_mode = resolve_variation_stock_mode(sku, sku, matched_group, config)
+        apply_stock_mode_to_payload(patch, v_mode, stock_quantity)
+    resp = wcapi.put(f"products/{parent_id}/variations/{variation_id}", patch)
+    wc_parse_json(resp, f"بروزرسانیِ واریانتِ سایت برایِ {sku}")
+    log.info(
+        f"🔀 [{sku}] بر اساسِ override دستی، به‌عنوانِ واریانتِ #{variation_id} از محصولِ #{parent_id} "
+        "سایت به‌روزرسانی شد (نه محصولِ مستقل)."
+    )
+
+
 def _sync_product_images_if_needed(wcapi, sku, saved_pid, upsert_data, erp_images, raw_config):
     """
     erp_images: لیستی از (hlo_id, blob, path) — hlo_id شناسه‌ی یکتای همون
@@ -757,8 +819,86 @@ def main():
         raw_sale = resolve_sale_article_price(row, raw_config, sku=sku)
         raw_sale = apply_price_markup(raw_sale, raw_config, is_sale=True, sku=sku)
         sale_price = woo_sale_price_str(raw_price, raw_sale, price_div)
+
+        from sync_app.core.structure_mismatch_override import get_site_variation_target
+
+        site_variation_target = get_site_variation_target(sku)
+        if site_variation_target:
+            # این SKU در ERP یه کالایِ سادهٔ مستقله، ولی طبقِ تطبیقِ دستیِ
+            # کاربر، در واقع یه واریانتِ یه محصولِ متغیرِ سایته — نه محصولِ
+            # جدا. کاملاً از مسیرِ عادیِ ساخت/به‌روزرسانیِ محصول رد می‌شیم.
+            try:
+                stock_quantity = combined_stock_for_primary(sku, int(row[7] or 0), raw_config, _stock_lookup)
+                _apply_site_variation_override(
+                    wcapi, raw_config, sku, matched_group, site_variation_target,
+                    raw_price, raw_sale, stock_quantity, price_div,
+                )
+                with stats_lock:
+                    stats["ok"] += 1
+            except Exception as e:
+                with stats_lock:
+                    stats["failed"] += 1
+                    stats["failed_skus"].append(sku)
+                    stats["last_error"] = e
+                log.error(f"❌ خطا در به‌روزرسانیِ واریانتِ سایت برایِ {sku}: {e}")
+            return
+
         has_variants = _has_variations(conn, sku, variable_codes)
         stock_quantity = combined_stock_for_primary(sku, int(row[7] or 0), raw_config, _stock_lookup)
+
+        if has_variants:
+            from sync_app.core.structure_mismatch_override import get_force_simple_source
+
+            forced_source_sku = get_force_simple_source(sku)
+            if forced_source_sku:
+                # طبقِ دیتابیس این محصول متغیره، ولی طبقِ تطبیقِ دستیِ کاربر
+                # رویِ سایت محصولِ ساده‌ست — به‌جایِ سینک به‌عنوانِ محصولِ
+                # متغیر، فقط دادهٔ همین یه زیرواریانتِ انتخاب‌شده رو به‌عنوانِ
+                # قیمت/موجودیِ محصولِ سادهٔ سایت استفاده می‌کنیم.
+                try:
+                    from sync_app.core.scripts.update_variations import fetch_variations_from_db
+
+                    local_conn_fs = _get_thread_local_conn()
+                    dim_labels_fs = _attribute_labels()
+                    erp_vars_fs, _attr_map_fs = fetch_variations_from_db(
+                        local_conn_fs, sku, raw_price,
+                        dim_labels_fs[0] if dim_labels_fs else "سایز",
+                        dim_labels_fs[1] if len(dim_labels_fs) > 1 else "",
+                        dim_labels_fs[2] if len(dim_labels_fs) > 2 else "",
+                        config=raw_config,
+                    )
+                    chosen = next(
+                        (v for v in erp_vars_fs if str(v.get("sku") or "").strip() == forced_source_sku), None,
+                    )
+                    if chosen:
+                        has_variants = False
+                        raw_price = float(chosen.get("regular_price") or 0) or raw_price
+                        price = str(int(raw_price / price_div)) if raw_price > 0 else "0"
+                        chosen_sale = chosen.get("sale_price")
+                        try:
+                            raw_sale = float(chosen_sale or 0)
+                        except (TypeError, ValueError):
+                            raw_sale = 0.0
+                        sale_price = woo_sale_price_str(raw_price, raw_sale, price_div)
+                        stock_quantity = int(chosen.get("stock_quantity") or 0)
+                        log.info(
+                            f"🔀 [{sku}] طبقِ تطبیقِ دستی، به‌جایِ محصولِ متغیر، به‌عنوانِ محصولِ سادهٔ سایت "
+                            f"با دادهٔ زیرواریانتِ «{forced_source_sku}» سینک می‌شه."
+                        )
+                    else:
+                        from sync_app.core.integrations.erp_provider import erp_provider_label
+
+                        log.warning(
+                            f"⚠️ [{sku}] تطبیقِ «سینک به‌عنوانِ محصولِ ساده» ست شده ولی زیرواریانتِ "
+                            f"«{forced_source_sku}» در {erp_provider_label(raw_config)} پیدا نشد — "
+                            "طبقِ حالتِ متغیرِ عادی ادامه می‌ده."
+                        )
+                except Exception as exc:
+                    log.warning(
+                        f"⚠️ [{sku}] بررسیِ تطبیقِ «سینک به‌عنوانِ محصولِ ساده» با خطا مواجه شد: {exc} — "
+                        "طبقِ حالتِ متغیرِ عادی ادامه می‌ده."
+                    )
+
         description = str(row[8] or "").strip()
 
         disable_erp_categories = bool((raw_config or {}).get("DISABLE_ERP_CATEGORY_SYNC", False))
