@@ -96,18 +96,36 @@ def _search_site_products(cfg, query: str) -> list[dict]:
 
 def _list_site_variations_for_product(cfg, product: dict) -> list[dict]:
     """واریانت‌هایِ یک محصولِ سایت — شکلِ خروجی: [{"id", "label"}, ...]
-    (خالی اگه محصول واریانت نداشته باشه — چه ساده باشه چه متغیر)."""
+    (خالی اگه محصول واریانت نداشته باشه — چه ساده باشه چه متغیر). لیبل
+    ترجیحاً نامِ خودِ واریانت (مثلِ «قرمز، L») هست، نه فقط کدش — تا کنارِ
+    نامِ محصول قابلِ‌تشخیص باشه."""
     from sync_app.core.integrations.commerce_provider import is_prestashop
 
     pid = int(product["id"])
     if is_prestashop(cfg):
-        from sync_app.core.ps_variation_helper import ps_list_combinations
+        from sync_app.core.ps_variation_helper import ps_list_combinations, ps_get_attribute_value
 
         combos = ps_list_combinations(cfg, pid)
-        return [
-            {"id": int(c["id"]), "label": str(c.get("reference") or f"ترکیب #{c['id']}")}
-            for c in combos if c.get("id")
-        ]
+        out = []
+        for c in combos:
+            if not c.get("id"):
+                continue
+            names = []
+            for value_id in c.get("option_value_ids") or []:
+                try:
+                    value = ps_get_attribute_value(cfg, int(value_id))
+                except Exception:
+                    value = None
+                if value and value.get("name"):
+                    names.append(str(value["name"]))
+            variant_name = "، ".join(names)
+            reference = str(c.get("reference") or "")
+            if variant_name and reference:
+                label = f"{variant_name} ({reference})"
+            else:
+                label = variant_name or reference or f"ترکیب #{c['id']}"
+            out.append({"id": int(c["id"]), "label": label})
+        return out
 
     from sync_app.core.wc_sync_helper import apply_network_overrides, build_wcapi
 
@@ -122,7 +140,12 @@ def _list_site_variations_for_product(cfg, product: dict) -> list[dict]:
         if not isinstance(v, dict) or not v.get("id"):
             continue
         attrs = "، ".join(str(a.get("option") or "") for a in (v.get("attributes") or []) if a.get("option"))
-        out.append({"id": int(v["id"]), "label": str(v.get("sku") or attrs or f"واریانت #{v['id']}")})
+        sku = str(v.get("sku") or "")
+        if attrs and sku:
+            label = f"{attrs} ({sku})"
+        else:
+            label = attrs or sku or f"واریانت #{v['id']}"
+        out.append({"id": int(v["id"]), "label": label})
     return out
 
 
@@ -288,6 +311,11 @@ class StructureReconciliationTab(QWidget):
         self.setLayoutDirection(Qt.RightToLeft)
         self.config = load_secure_config(None) or {}
         self._loaders: list[QThread] = []
+
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+
+        self.erp_label = erp_provider_label(self.config)
+
         self.init_ui()
         self._refresh_sv_table()
         self._refresh_fs_table()
@@ -316,9 +344,12 @@ class StructureReconciliationTab(QWidget):
         v = QVBoxLayout(panel)
 
         hint = QLabel(
-            "سایت این محصول رو متغیر (با چند واریانت) نشون می‌ده، ولی هر واریانت در ERP یک کالایِ سادهٔ "
-            "جداست. رویِ کمبویِ راست، نامِ محصولِ سایت رو جستجو کنید و واریانتِ درست رو انتخاب کنید؛ رویِ "
-            "لیستِ چپ، SKUِ سادهٔ ERPِ متناظرش رو انتخاب کنید؛ بعد «🔗 تطبیق» رو بزنید."
+            f"سایت این محصول رو متغیر (با چند واریانت) نشون می‌ده، ولی هر واریانت در {self.erp_label} یک "
+            "کالایِ سادهٔ جداست. رویِ لیستِ راست، نامِ محصولِ سایت رو جستجو کنید و واریانتِ درست رو انتخاب "
+            f"کنید؛ رویِ لیستِ چپ، SKUِ سادهٔ {self.erp_label}ِ متناظرش رو انتخاب کنید؛ بعد «🔗 تطبیق» رو بزنید.\n"
+            "⚠️ توجه: بعد از تطبیق فقط قیمت و موجودیِ این SKU به همین واریانتِ سایت منتقل می‌شه — تصویر، "
+            "دسته‌بندی، برند و توضیحاتش سینک نمی‌شن (چون این SKU دیگه محصولِ جدایِ خودش رو رویِ سایت نداره؛ "
+            "این‌ها رو باید مستقیم رویِ محصولِ اصلیِ سایت مدیریت کنید)."
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color:#475569; font-size:12px;")
@@ -356,14 +387,14 @@ class StructureReconciliationTab(QWidget):
         erp_col = QVBoxLayout()
         erp_search_row = QHBoxLayout()
         self.sv_erp_search = QLineEdit()
-        self.sv_erp_search.setPlaceholderText("جستجویِ کد/نامِ کالایِ ERP...")
+        self.sv_erp_search.setPlaceholderText(f"جستجویِ کد/نامِ کالایِ {self.erp_label}...")
         self.sv_erp_search.returnPressed.connect(self._sv_search_erp)
         erp_search_row.addWidget(self.sv_erp_search, 1)
         sv_erp_btn = QPushButton("🔍")
         sv_erp_btn.clicked.connect(self._sv_search_erp)
         erp_search_row.addWidget(sv_erp_btn)
         erp_col.addLayout(erp_search_row)
-        erp_col.addWidget(QLabel("کالاهایِ سادهٔ ERP:"))
+        erp_col.addWidget(QLabel(f"کالاهایِ سادهٔ {self.erp_label}:"))
         self.sv_erp_list = QListWidget()
         self.sv_erp_list.setLayoutDirection(Qt.RightToLeft)
         erp_col.addWidget(self.sv_erp_list, 1)
@@ -376,10 +407,11 @@ class StructureReconciliationTab(QWidget):
         v.addWidget(self.sv_status_label)
 
         v.addWidget(QLabel("تطبیق‌هایِ ثبت‌شده:"))
-        self.sv_table = QTableWidget(0, 4)
+        self.sv_table = QTableWidget(0, 3)
         self.sv_table.setLayoutDirection(Qt.RightToLeft)
-        self.sv_table.setHorizontalHeaderLabels(["SKUِ ERP", "محصولِ والدِ سایت", "واریانتِ سایت", ""])
+        self.sv_table.setHorizontalHeaderLabels(["نام کالا و متغیرِ سایت", f"کالای سادهٔ {self.erp_label}", ""])
         self.sv_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.sv_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.sv_table.verticalHeader().setVisible(False)
         self.sv_table.setMaximumHeight(160)
         v.addWidget(self.sv_table)
@@ -405,7 +437,7 @@ class StructureReconciliationTab(QWidget):
         self.sv_status_label.setText(f"✅ {len(options)} واریانتِ سایت پیدا شد.")
 
     def _sv_search_erp(self):
-        self.sv_status_label.setText("⏳ در حالِ جستجویِ کالاهایِ ERP...")
+        self.sv_status_label.setText(f"⏳ در حالِ جستجویِ کالاهایِ {self.erp_label}...")
         loader = _ErpSimpleSkuLoader(self.config, self.sv_erp_search.text())
         self._keep_loader(loader)
         loader.done.connect(self._on_sv_erp_results)
@@ -413,14 +445,14 @@ class StructureReconciliationTab(QWidget):
 
     def _on_sv_erp_results(self, options, error):
         if error:
-            self.sv_status_label.setText(f"⚠️ جستجویِ ERP ناموفق بود: {error}")
+            self.sv_status_label.setText(f"⚠️ جستجویِ {self.erp_label} ناموفق بود: {error}")
             return
         self.sv_erp_list.clear()
         for sku, label in options:
             item = QListWidgetItem(label)
             item.setData(Qt.UserRole, sku)
             self.sv_erp_list.addItem(item)
-        self.sv_status_label.setText(f"✅ {len(options)} کالایِ ERP پیدا شد.")
+        self.sv_status_label.setText(f"✅ {len(options)} کالایِ {self.erp_label} پیدا شد.")
 
     def _sv_save(self):
         site_selected = self.sv_site_list.selectedItems()
@@ -432,10 +464,11 @@ class StructureReconciliationTab(QWidget):
         erp_item = erp_selected[0]
         parent_id, variation_id, label = site_item.data(Qt.UserRole)
         sku = erp_item.data(Qt.UserRole)
+        erp_label = erp_item.text()
 
         from sync_app.core.structure_mismatch_override import set_site_variation_target
 
-        set_site_variation_target(sku, parent_id, variation_id, label=label)
+        set_site_variation_target(sku, parent_id, variation_id, label=label, erp_label=erp_label)
         self._refresh_sv_table()
         QMessageBox.information(self, "انجام شد", f"SKUِ «{sku}» به واریانتِ سایت وصل شد.")
 
@@ -447,13 +480,13 @@ class StructureReconciliationTab(QWidget):
         for sku, entry in table.items():
             row = self.sv_table.rowCount()
             self.sv_table.insertRow(row)
-            self.sv_table.setItem(row, 0, QTableWidgetItem(sku))
-            self.sv_table.setItem(row, 1, QTableWidgetItem(str(entry.get("parent_product_id") or "")))
-            variation_label = entry.get("label") or f"#{entry.get('variation_id')}"
-            self.sv_table.setItem(row, 2, QTableWidgetItem(str(variation_label)))
+            site_label = entry.get("label") or f"محصول #{entry.get('parent_product_id')} / واریانت #{entry.get('variation_id')}"
+            self.sv_table.setItem(row, 0, QTableWidgetItem(str(site_label)))
+            erp_display = entry.get("erp_label") or sku
+            self.sv_table.setItem(row, 1, QTableWidgetItem(str(erp_display)))
             del_btn = QPushButton("🗑 حذف")
             del_btn.clicked.connect(lambda _checked=False, s=sku: self._sv_delete(s))
-            self.sv_table.setCellWidget(row, 3, del_btn)
+            self.sv_table.setCellWidget(row, 2, del_btn)
 
     def _sv_delete(self, sku: str):
         from sync_app.core.structure_mismatch_override import clear_site_variation_target
@@ -469,10 +502,13 @@ class StructureReconciliationTab(QWidget):
         v = QVBoxLayout(panel)
 
         hint = QLabel(
-            "ERP این کد کالا رو متغیر (با چند زیرواریانت) می‌بینه، ولی رویِ سایت این یک محصولِ ساده‌ست. "
-            "رویِ لیستِ راست، محصولِ سادهٔ سایت رو با جستجویِ نام پیدا و انتخاب کنید؛ رویِ لیستِ چپ، "
-            "زیرواریانتِ ERP‌ای که باید منبعِ قیمت/موجودی باشه رو انتخاب کنید؛ بعد «🔗 تطبیق» رو بزنید — "
-            "بقیهٔ زیرواریانت‌ها نادیده گرفته می‌شن."
+            f"{self.erp_label} این کد کالا رو متغیر (با چند زیرواریانت) می‌بینه، ولی رویِ سایت این یک "
+            "محصولِ ساده‌ست. رویِ لیستِ راست، محصولِ سادهٔ سایت رو با جستجویِ نام پیدا و انتخاب کنید؛ رویِ "
+            f"لیستِ چپ، زیرواریانتِ {self.erp_label}ای که باید منبعِ قیمت/موجودی باشه رو انتخاب کنید؛ بعد "
+            "«🔗 تطبیق» رو بزنید — بقیهٔ زیرواریانت‌ها نادیده گرفته می‌شن.\n"
+            "✅ توجه: بعد از تطبیق، این کد کاملاً مثلِ یک محصولِ سادهٔ معمولی سینک می‌شه — قیمت، موجودی، "
+            "تصویر، دسته‌بندی و برند هم مثلِ همیشه اعمال می‌شن؛ فقط منبعِ قیمت/موجودیش از همین "
+            "زیرواریانتِ انتخاب‌شده خونده می‌شه."
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color:#475569; font-size:12px;")
@@ -510,14 +546,14 @@ class StructureReconciliationTab(QWidget):
         erp_col = QVBoxLayout()
         erp_search_row = QHBoxLayout()
         self.fs_erp_search = QLineEdit()
-        self.fs_erp_search.setPlaceholderText("جستجویِ کد/نامِ کالایِ والدِ ERP...")
+        self.fs_erp_search.setPlaceholderText(f"جستجویِ کد/نامِ کالایِ والدِ {self.erp_label}...")
         self.fs_erp_search.returnPressed.connect(self._fs_search_erp)
         erp_search_row.addWidget(self.fs_erp_search, 1)
         fs_erp_btn = QPushButton("🔍")
         fs_erp_btn.clicked.connect(self._fs_search_erp)
         erp_search_row.addWidget(fs_erp_btn)
         erp_col.addLayout(erp_search_row)
-        erp_col.addWidget(QLabel("زیرواریانت‌هایِ ERP:"))
+        erp_col.addWidget(QLabel(f"زیرواریانت‌هایِ {self.erp_label}:"))
         self.fs_erp_list = QListWidget()
         self.fs_erp_list.setLayoutDirection(Qt.RightToLeft)
         erp_col.addWidget(self.fs_erp_list, 1)
@@ -532,8 +568,9 @@ class StructureReconciliationTab(QWidget):
         v.addWidget(QLabel("تطبیق‌هایِ ثبت‌شده:"))
         self.fs_table = QTableWidget(0, 3)
         self.fs_table.setLayoutDirection(Qt.RightToLeft)
-        self.fs_table.setHorizontalHeaderLabels(["کدِ والدِ ERP", "زیرواریانتِ منبع", ""])
+        self.fs_table.setHorizontalHeaderLabels([f"نام کالا و متغیرِ {self.erp_label}", "کالای سادهٔ سایت", ""])
         self.fs_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.fs_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.fs_table.verticalHeader().setVisible(False)
         self.fs_table.setMaximumHeight(160)
         v.addWidget(self.fs_table)
@@ -559,7 +596,7 @@ class StructureReconciliationTab(QWidget):
         self.fs_status_label.setText(f"✅ {len(options)} محصولِ سایت پیدا شد.")
 
     def _fs_search_erp(self):
-        self.fs_status_label.setText("⏳ در حالِ جستجویِ زیرواریانت‌هایِ ERP...")
+        self.fs_status_label.setText(f"⏳ در حالِ جستجویِ زیرواریانت‌هایِ {self.erp_label}...")
         loader = _ErpVariantSkuLoader(self.config, self.fs_erp_search.text())
         self._keep_loader(loader)
         loader.done.connect(self._on_fs_erp_results)
@@ -567,7 +604,7 @@ class StructureReconciliationTab(QWidget):
 
     def _on_fs_erp_results(self, options, error):
         if error:
-            self.fs_status_label.setText(f"⚠️ جستجویِ ERP ناموفق بود: {error}")
+            self.fs_status_label.setText(f"⚠️ جستجویِ {self.erp_label} ناموفق بود: {error}")
             return
         self.fs_erp_list.clear()
         for parent_sku, variant_sku, label in options:
@@ -586,12 +623,13 @@ class StructureReconciliationTab(QWidget):
         erp_item = erp_selected[0]
         site_id, site_label, _site_sku = site_item.data(Qt.UserRole)
         parent_sku, variant_sku = erp_item.data(Qt.UserRole)
+        erp_label = erp_item.text()
 
         from sync_app.core.structure_mismatch_override import set_force_simple_source
         from sync_app.core.product_woo_map_helper import load_product_woo_map, save_product_woo_map
         from sync_app.core.product_woo_map_meta import register_product_link
 
-        set_force_simple_source(parent_sku, variant_sku)
+        set_force_simple_source(parent_sku, variant_sku, erp_label=erp_label, site_label=site_label)
         # محصولِ سایتِ انتخاب‌شده رو صریح به همین کدِ والدِ ERP وصل می‌کنیم —
         # وگرنه اگه SKUِ رویِ سایت با کدِ ERP یکی نباشه، سینک نمی‌تونه خودش
         # تشخیص بده این همون محصوله (دقیقاً همون مکانیزمِ تبِ «تطبیق» برایِ
@@ -609,14 +647,21 @@ class StructureReconciliationTab(QWidget):
 
     def _refresh_fs_table(self):
         from sync_app.core.structure_mismatch_override import list_force_simple_sources
+        from sync_app.core.product_woo_map_meta import get_product_link_meta
 
         table = list_force_simple_sources()
         self.fs_table.setRowCount(0)
         for sku, entry in table.items():
             row = self.fs_table.rowCount()
             self.fs_table.insertRow(row)
-            self.fs_table.setItem(row, 0, QTableWidgetItem(sku))
-            self.fs_table.setItem(row, 1, QTableWidgetItem(str(entry.get("source_variation_sku") or "")))
+            source_sku = str(entry.get("source_variation_sku") or "")
+            erp_display = entry.get("erp_label") or f"{sku} — {source_sku}"
+            self.fs_table.setItem(row, 0, QTableWidgetItem(str(erp_display)))
+            site_display = entry.get("site_label")
+            if not site_display:
+                link_meta = get_product_link_meta(sku)
+                site_display = (link_meta or {}).get("wc_label") or ""
+            self.fs_table.setItem(row, 1, QTableWidgetItem(str(site_display)))
             del_btn = QPushButton("🗑 حذف")
             del_btn.clicked.connect(lambda _checked=False, s=sku: self._fs_delete(s))
             self.fs_table.setCellWidget(row, 2, del_btn)

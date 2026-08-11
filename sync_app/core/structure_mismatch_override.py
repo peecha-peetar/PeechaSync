@@ -23,8 +23,8 @@ from __future__ import annotations
 import json
 import os
 
-SITE_VARIATION_TARGET_FILE = "sku_as_site_variation.json"  # {erp_sku: {"parent_product_id": int, "variation_id": int}}
-FORCE_SIMPLE_SOURCE_FILE = "force_simple_on_site.json"  # {erp_parent_sku: {"source_variation_sku": str}}
+SITE_VARIATION_TARGET_FILE = "sku_as_site_variation.json"  # {erp_sku: {"parent_product_id": int, "variation_id": int, "label": str, "erp_label": str}}
+FORCE_SIMPLE_SOURCE_FILE = "force_simple_on_site.json"  # {erp_parent_sku: {"source_variation_sku": str, "erp_label": str, "site_label": str}}
 
 
 def _path(filename: str) -> str:
@@ -111,7 +111,9 @@ def get_site_variation_target(sku: str) -> dict | None:
     return {"parent_product_id": parent_id, "variation_id": variation_id}
 
 
-def set_site_variation_target(sku: str, parent_product_id: int, variation_id: int, *, label: str = "") -> None:
+def set_site_variation_target(
+    sku: str, parent_product_id: int, variation_id: int, *, label: str = "", erp_label: str = "",
+) -> None:
     sku = str(sku or "").strip()
     if not sku or not parent_product_id or not variation_id:
         return
@@ -120,6 +122,7 @@ def set_site_variation_target(sku: str, parent_product_id: int, variation_id: in
         "parent_product_id": int(parent_product_id),
         "variation_id": int(variation_id),
         "label": str(label or "").strip(),
+        "erp_label": str(erp_label or "").strip(),
     }
     _site_variation_table.save(table)
 
@@ -152,13 +155,19 @@ def get_force_simple_source(sku: str) -> str | None:
     return source or None
 
 
-def set_force_simple_source(sku: str, source_variation_sku: str) -> None:
+def set_force_simple_source(
+    sku: str, source_variation_sku: str, *, erp_label: str = "", site_label: str = "",
+) -> None:
     sku = str(sku or "").strip()
     source_variation_sku = str(source_variation_sku or "").strip()
     if not sku or not source_variation_sku:
         return
     table = dict(_force_simple_table.load())
-    table[sku] = {"source_variation_sku": source_variation_sku}
+    table[sku] = {
+        "source_variation_sku": source_variation_sku,
+        "erp_label": str(erp_label or "").strip(),
+        "site_label": str(site_label or "").strip(),
+    }
     _force_simple_table.save(table)
 
 
