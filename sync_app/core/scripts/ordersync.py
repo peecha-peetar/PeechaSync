@@ -339,28 +339,29 @@ def insert_order(order):
                 continue
 
             if poshak_id_f is None or r_arcode_c is None:
-                # ⚠️ برگردوندنِ عمدی: نسخه‌ی قبلی این‌جا برایِ کالاهایِ کاملاً
-                # سادهٔ ERP (product_is_variable == False) poshak_id_f رو
-                # None می‌ذاشت تا خط رد نشه — ولی با خطایِ واقعیِ SQL معلوم
-                # شد ستونِ ItemFact.PoshakIDF اصلاً NULL قبول نمی‌کنه («Cannot
-                # insert the value NULL into column 'PoshakIDF'»)، پس اون
-                # INSERT همیشه با خطا کاملِ سفارش رو متوقف می‌کرد. تا وقتی
-                # مقدارِ درستِ جایگزین (سنتینل) برایِ کالایِ بدونِ واریانت
-                # معلوم نشه، امن‌ترین کار رد کردنِ همین یک خطه (نه خطایِ
-                # کامل)، نه حدس‌زدنِ یک عدد رویِ دیتابیسِ سفارشات.
+                # طبقِ ترِیسِ واقعیِ SQL Profiler از خودِ نرم‌افزارِ دژاوو (نه
+                # حدس): وقتی کاربر مستقیم در دژاوو برایِ یک کالایِ کاملاً سادهٔ
+                # ERP سفارش ثبت می‌کنه، فقط RqTitle + RqDetail درج می‌شه —
+                # اصلاً هیچ ردیفی در ItemFact نمی‌سازه (ItemFact ظاهراً فقط
+                # برایِ کالاهایِ دارایِ رنگ/سایز، برایِ کسرِ موجودیِ دقیقِ همون
+                # واریانت لازمه). پس برایِ کالایِ کاملاً ساده، دیگه کلِ خط رو
+                # رد نمی‌کنیم — عینِ خودِ دژاوو، فقط ردیفِ RqDetail رو می‌سازیم
+                # و ردیفِ ItemFact رو براش نمی‌سازیم (پایین‌تر).
                 if a_code:
                     from sync_app.core.variation_rules import product_is_variable
 
                     is_variable = product_is_variable(cursor, a_code)
                 else:
                     is_variable = None
-                reason = (
-                    "واریانتِ درست پیدا نشد" if is_variable
-                    else "کالایِ سادهٔ ERP — PoshakIDF نمی‌تونه NULL باشه، مقدارِ درست هنوز مشخص نیست"
-                )
-                skipped.append(sku or item.get("name") or "?")
-                log.warning(f"⚠️ {reason}: order={order_id}, sku='{sku}'")
-                continue
+                if is_variable:
+                    # کالا واقعاً متغیره (رنگ/سایز داره) ولی واریانتِ درست از
+                    # رویِ این خطِ سفارش پیدا نشد — برایِ جلوگیری از نسبت‌دادنِ
+                    # اشتباهِ فروش/موجودی به یک رنگ/سایزِ غلط، این خط رد می‌شه.
+                    skipped.append(sku or item.get("name") or "?")
+                    log.warning(f"⚠️ تطبیق واریانت یافت نشد: order={order_id}, sku='{sku}'")
+                    continue
+                # کالایِ کاملاً ساده‌ست — poshak_id_f خالی می‌مونه، پایین‌تر
+                # برایِ این خط ItemFact ساخته نمی‌شه (نه خطا، نه رد شدنِ خط).
 
             unit_price = _line_unit_price(item, config)
             r_commen_part = build_r_commen(cursor, poshak_id_f, qty)
@@ -415,6 +416,10 @@ def insert_order(order):
             ))
 
             for variant in variants:
+                if variant["poshak_id_f"] is None:
+                    # کالایِ کاملاً ساده — دقیقاً مثلِ خودِ دژاوو، ItemFact
+                    # براش ساخته نمی‌شه (فقط RqDetailِ بالا کافیه).
+                    continue
                 cursor.execute("""
                     INSERT INTO ItemFact (
                         Fac_Code, Fac_Type, A_Code, A_Index,
@@ -428,7 +433,7 @@ def insert_order(order):
 
         conn.commit()
         inserted_details = len(groups)
-        inserted_facts = sum(len(v) for v in groups.values())
+        inserted_facts = sum(1 for v in groups.values() for variant in v if variant["poshak_id_f"] is not None)
         log.info(
             f"✅ سفارش {order_id} ثبت شد. "
             f"(RqIndex={rqindex_id}, RQDetail={inserted_details}, ItemFact={inserted_facts})"
