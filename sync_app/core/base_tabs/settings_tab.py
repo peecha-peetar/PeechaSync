@@ -1873,6 +1873,58 @@ class SettingsTab(QWidget):
         bale_layout.addRow(self.bale_test_button)
         self.bale_group.setLayout(bale_layout)
 
+        # --- پیامکِ تبلیغاتیِ گروهی (تبِ «مشتریان») ---
+        from sync_app.core.sms_poster import (
+            DEFAULT_SMS_PROVIDER_URL,
+            SMS_PASSWORD_KEY,
+            SMS_PROVIDER_URL_KEY,
+            SMS_SENDER_NUMBER_KEY,
+            SMS_USERNAME_KEY,
+        )
+
+        self.sms_group = QGroupBox("📱 پیامکِ تبلیغاتی (SMS)")
+        self.sms_group.setLayoutDirection(Qt.LeftToRight)
+        sms_layout = QFormLayout()
+        sms_layout.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        sms_layout.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        sms_layout.setFormAlignment(Qt.AlignTop)
+        sms_layout.setHorizontalSpacing(14)
+        sms_layout.setVerticalSpacing(10)
+
+        self.sms_provider_url_input = QLineEdit(
+            str(self.config.get(SMS_PROVIDER_URL_KEY) or DEFAULT_SMS_PROVIDER_URL)
+        )
+        self.sms_username_input = QLineEdit(str(self.config.get(SMS_USERNAME_KEY) or ""))
+        self.sms_password_input = PasswordLineEdit(str(self.config.get(SMS_PASSWORD_KEY) or ""))
+        self.sms_sender_number_input = QLineEdit(str(self.config.get(SMS_SENDER_NUMBER_KEY) or ""))
+        self.sms_sender_number_input.setPlaceholderText("شماره‌ی خطِ اختصاصیِ ارسال (اختیاری)")
+        for field in (
+            self.sms_provider_url_input, self.sms_username_input,
+            self.sms_password_input, self.sms_sender_number_input,
+        ):
+            field.setLayoutDirection(Qt.LeftToRight)
+            field.setAlignment(Qt.AlignLeft)
+            field.setMinimumHeight(32)
+
+        sms_help = QLabel(
+            "برایِ ارسالِ پیامکِ گروهی به مشتریان (از تبِ «مشتریان») — آدرس/یوزرنیم/پسوردِ پنلِ پیامکی را اینجا وارد کنید. "
+            "⚠️ این سرویس‌دهنده متدِ «فقط تستِ اتصال» ندارد — دکمه‌ی زیر یک پیامکِ آزمایشیِ واقعی می‌فرستد."
+        )
+        sms_help.setStyleSheet("color:#64748b; font-size:10px;")
+        sms_help.setWordWrap(True)
+
+        self.sms_test_button = QPushButton("🧪 ارسالِ پیامکِ آزمایشی")
+        self.sms_test_button.setMinimumHeight(32)
+        self.sms_test_button.clicked.connect(self._test_sms_connection)
+
+        sms_layout.addRow(english_caption("Provider URL:"), self.sms_provider_url_input)
+        sms_layout.addRow(english_caption("Username:"), self.sms_username_input)
+        sms_layout.addRow(english_caption("Password:"), self.sms_password_input)
+        sms_layout.addRow(english_caption("Sender Number:"), self.sms_sender_number_input)
+        sms_layout.addRow(sms_help)
+        sms_layout.addRow(self.sms_test_button)
+        self.sms_group.setLayout(sms_layout)
+
         # --- هوشِ مصنوعی (تولیدِ خودکارِ متنِ مقاله در تبِ «مقالاتِ سایت») ---
         self.ai_group = QGroupBox("🤖 هوشِ مصنوعی (تولیدِ خودکارِ متنِ مقاله)")
         self.ai_group.setLayoutDirection(Qt.LeftToRight)
@@ -2145,7 +2197,7 @@ class SettingsTab(QWidget):
         )
         self.settings_sub_tabs.addTab(
             self._build_settings_page(
-                [self.telegram_group, self.bale_group, self.ai_group, self.brand_group]
+                [self.telegram_group, self.bale_group, self.sms_group, self.ai_group, self.brand_group]
             ),
             "🔔 اعلان‌ها و هوش مصنوعی",
         )
@@ -2228,6 +2280,7 @@ class SettingsTab(QWidget):
             self.ps_url_input, self.ps_api_key_input, self.ps_site_combo, self.ps_site_name_input,
             self.telegram_bot_token_input, self.telegram_chat_id_input, self.telegram_proxy_url_input,
             self.bale_bot_token_input, self.bale_chat_id_input,
+            self.sms_provider_url_input, self.sms_username_input, self.sms_password_input, self.sms_sender_number_input,
             self.contact_phone_input, self.site_address_display_input,
             self.social_instagram_input, self.social_telegram_input, self.social_whatsapp_input,
         ] + list(self._field_sync_checkboxes.values()) + list(self._force_full_sync_checkboxes.values())
@@ -2242,6 +2295,7 @@ class SettingsTab(QWidget):
             self.ps_url_input, self.ps_api_key_input, self.ps_site_name_input,
             self.telegram_bot_token_input, self.telegram_chat_id_input, self.telegram_proxy_url_input,
             self.bale_bot_token_input, self.bale_chat_id_input,
+            self.sms_provider_url_input, self.sms_username_input, self.sms_password_input, self.sms_sender_number_input,
             self.contact_phone_input, self.site_address_display_input,
             self.social_instagram_input, self.social_telegram_input, self.social_whatsapp_input,
         ]
@@ -4031,6 +4085,52 @@ class SettingsTab(QWidget):
 
         run_in_thread(bale_test_connection, token, on_complete=on_complete, on_error=on_error)
 
+    def _test_sms_connection(self):
+        from PyQt5.QtWidgets import QInputDialog
+
+        from sync_app.core.threading_helper import run_in_thread
+        from sync_app.core.sms_poster import test_send as sms_test_send
+
+        username = self.sms_username_input.text().strip()
+        password = self.sms_password_input.text().strip()
+        if not username or not password:
+            QMessageBox.warning(self, "پیامک", "ابتدا یوزرنیم و پسوردِ پیامک را وارد کنید.")
+            return
+
+        phone, ok = QInputDialog.getText(
+            self, "پیامکِ آزمایشی",
+            "این دکمه یک پیامکِ آزمایشیِ واقعی می‌فرستد (هزینه دارد).\n"
+            "شماره‌ی موبایلِ گیرنده را وارد کنید:",
+        )
+        phone = (phone or "").strip()
+        if not ok or not phone:
+            return
+
+        cfg = {
+            **(self.config or {}),
+            "SMS_PROVIDER_URL": self.sms_provider_url_input.text().strip(),
+            "SMS_USERNAME": username,
+            "SMS_PASSWORD": password,
+            "SMS_SENDER_NUMBER": self.sms_sender_number_input.text().strip(),
+        }
+
+        self.sms_test_button.setEnabled(False)
+        self.sms_test_button.setText("در حال ارسال...")
+
+        def on_complete(result):
+            ok_, raw = result
+            self.sms_test_button.setEnabled(True)
+            self.sms_test_button.setText("🧪 ارسالِ پیامکِ آزمایشی")
+            title = "ارسال شد" if ok_ else "پاسخِ نامطمئن/ناموفق"
+            QMessageBox.information(self, "پیامک", f"{title}\n\nپاسخِ خامِ سرویس:\n{raw}")
+
+        def on_error(err):
+            self.sms_test_button.setEnabled(True)
+            self.sms_test_button.setText("🧪 ارسالِ پیامکِ آزمایشی")
+            QMessageBox.critical(self, "پیامک", f"خطا: {err}")
+
+        run_in_thread(sms_test_send, cfg, phone, on_complete=on_complete, on_error=on_error)
+
     def _test_telegram_connection(self):
         from sync_app.core.threading_helper import run_in_thread
         from sync_app.core.telegram_poster import test_connection as telegram_test_connection
@@ -5112,6 +5212,10 @@ class SettingsTab(QWidget):
                 "TELEGRAM_PROXY_URL": self.telegram_proxy_url_input.text().strip(),
                 "BALE_BOT_TOKEN": self.bale_bot_token_input.text().strip(),
                 "BALE_CHAT_ID": self.bale_chat_id_input.text().strip(),
+                "SMS_PROVIDER_URL": self.sms_provider_url_input.text().strip(),
+                "SMS_USERNAME": self.sms_username_input.text().strip(),
+                "SMS_PASSWORD": self.sms_password_input.text().strip(),
+                "SMS_SENDER_NUMBER": self.sms_sender_number_input.text().strip(),
                 "AI_API_KEY": self.ai_api_key_input.text().strip(),
                 "AI_PROXY_URL": self.ai_proxy_url_input.text().strip(),
                 "CONTACT_PHONE": self.contact_phone_input.text().strip(),

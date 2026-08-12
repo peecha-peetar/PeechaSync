@@ -1,8 +1,11 @@
 import sys
 import os
 import time
-from PyQt5.QtWidgets import QMessageBox, QLabel, QListWidget, QPushButton, QListWidgetItem
-from sync_app.core.rtl_item_delegate import RightAlignedItemDelegate, make_rtl_item
+from PyQt5.QtWidgets import (
+    QMessageBox, QLabel, QListWidget, QPushButton, QListWidgetItem, QWidget,
+    QLineEdit, QHBoxLayout, QVBoxLayout, QDialog, QComboBox, QTextEdit, QDialogButtonBox,
+)
+from sync_app.core.rtl_item_delegate import RightAlignedCheckableItemDelegate, make_rtl_item
 from PyQt5.QtCore import QTimer, Qt
 
 # tab base
@@ -18,9 +21,28 @@ from sync_app.core.wc_admin_links import make_wc_admin_open_button
 from sync_app.core.connectivity_service import classify_network_error, format_network_error_message
 from sync_app.core.responsive_action_bar import build_responsive_action_row
 from sync_app.core.compact_icon_action_bar import CompactCaptionButton
+from sync_app.core.selection_toggle_bar import attach_selection_toggle
 
 # import customersync
 from sync_app.core.scripts import customersync
+
+# قالب‌هایِ آماده‌ی پیامکِ تبلیغاتی — مستقل از تقویمِ محتوایی (که برایِ
+# پست‌هایِ محصولِ شبکه‌هایِ اجتماعیه، نه پیامک به مشتری).
+SMS_TEMPLATES = [
+    ("متنِ آزاد", ""),
+    (
+        "تخفیفِ ویژه",
+        "🎉 تخفیفِ ویژه برایِ شما فعال شد! همین امروز از فروشگاهِ ما خرید کنید.\nلغوِ عضویت: reply STOP",
+    ),
+    (
+        "محصولِ جدید",
+        "📦 محصولاتِ جدید به فروشگاهِ ما اضافه شد — سری بزنید و ببینید چه چیزهایی منتظرتونه!\nلغوِ عضویت: reply STOP",
+    ),
+    (
+        "یادآوریِ سبدِ خرید",
+        "🛒 سبدِ خریدتون تویِ فروشگاهِ ما منتظرتونه — تکمیلش کنید تا از دستش ندید.\nلغوِ عضویت: reply STOP",
+    ),
+]
 
 
 class CustomerTab(SitePreviewLoaderMixin, SyncTab):
@@ -30,17 +52,40 @@ class CustomerTab(SitePreviewLoaderMixin, SyncTab):
         self._seen_customer_ids = set()
         self._customers_baseline_ready = False
         self._initial_load_started = False
+        self._customer_records: list[dict] = []
+        self._customer_info_lines: list = []
+        self._checked_customer_keys: set = set()
 
         self.customers_preview_label = QLabel("👥 مشتریان اخیر سایت:")
         self.customers_preview_label.setStyleSheet("font-weight: bold;")
+
+        customer_search_row = QHBoxLayout()
+        self.customer_search_input = QLineEdit()
+        self.customer_search_input.setPlaceholderText("🔍 جستجو در نام، ایمیل یا موبایل...")
+        self.customer_search_input.setLayoutDirection(Qt.RightToLeft)
+        self.customer_search_input.setMinimumHeight(36)
+        self.customer_search_input.textChanged.connect(lambda _=None: self._render_customers_list())
+        customer_search_row.addWidget(self.customer_search_input, 1)
+        self._customer_selection_toggle = attach_selection_toggle(
+            customer_search_row,
+            self,
+            on_select_all=lambda: self._set_all_customers_checked(True),
+            on_select_none=lambda: self._set_all_customers_checked(False),
+        )
+        self.customer_search_row_widget = QWidget()
+        self.customer_search_row_widget.setLayout(customer_search_row)
+
         self.customers_list = QListWidget()
         self.customers_list.setLayoutDirection(Qt.RightToLeft)
         self.customers_list.setMinimumHeight(240)
-        self.customers_list.setItemDelegate(RightAlignedItemDelegate(self.customers_list))
+        self.customers_list.setItemDelegate(RightAlignedCheckableItemDelegate(self.customers_list))
+        self.customers_list.itemChanged.connect(self._on_customer_item_changed)
         self.customers_refresh_button = CompactCaptionButton("🔄 بازخوانی مشتریان سایت")
         self.wc_admin_button = make_wc_admin_open_button(
             self, "customers", button_factory=CompactCaptionButton
         )
+        self.customers_sms_button = CompactCaptionButton("📱 پیامکِ گروهی به انتخاب‌شده‌ها")
+        self.customers_sms_button.clicked.connect(self._open_bulk_sms_dialog)
 
         self._init_site_preview_loader(
             entity_label="مشتریان",
@@ -56,12 +101,13 @@ class CustomerTab(SitePreviewLoaderMixin, SyncTab):
         )
 
         self.content_layout.insertWidget(3, self.customers_preview_label)
-        self.content_layout.insertWidget(4, self.customers_list)
+        self.content_layout.insertWidget(4, self.customer_search_row_widget)
+        self.content_layout.insertWidget(5, self.customers_list)
         self.content_layout.setStretchFactor(self.customers_list, 1)
 
         self.content_layout.addWidget(
             build_responsive_action_row(
-                [self.customers_refresh_button, self.run_button, self.wc_admin_button],
+                [self.customers_refresh_button, self.run_button, self.wc_admin_button, self.customers_sms_button],
                 parent=self,
             )
         )
@@ -154,7 +200,7 @@ class CustomerTab(SitePreviewLoaderMixin, SyncTab):
                 code = (cfg.get("DEFAULT_CUSTOMER_CODE") or "00005").strip()
                 return {
                     "items": [f"حالت مشتری ثابت فعال است — کد {erp_provider_label(cfg)}: {code}"],
-                    "ids": [],
+                    "ids": [], "records": [],
                 }
 
             customersync.init_runtime_config()
@@ -187,10 +233,14 @@ class CustomerTab(SitePreviewLoaderMixin, SyncTab):
                         raise
 
             if not customers:
-                return {"items": [f"ℹ️ در حالت «{mode_label}» هیچ مشتری‌ای یافت نشد."], "ids": []}
+                return {
+                    "items": [f"ℹ️ در حالت «{mode_label}» هیچ مشتری‌ای یافت نشد."],
+                    "ids": [], "records": [],
+                }
 
             items = [f"نمایش بر اساس: {mode_label}"]
             ids = []
+            records = []
             for customer in customers[:40]:
                 cid = customer.get("id", "-")
                 email = customer.get("email", "-")
@@ -198,23 +248,28 @@ class CustomerTab(SitePreviewLoaderMixin, SyncTab):
                 last = customer.get("last_name", "")
                 name = (f"{first} {last}").strip() or customer.get("username", "مشتری")
                 guest_tag = " (مهمان)" if customer.get("_guest") else ""
+                phone = str((customer.get("billing") or {}).get("phone") or "").strip()
                 try:
                     ids.append(int(cid))
                 except Exception:
                     pass
-                items.append(f"{name}{guest_tag} | کد: #{cid} | ایمیل: {email}")
+                display = f"{name}{guest_tag} | کد: #{cid} | ایمیل: {email}"
+                items.append(display)
+                records.append({
+                    "id": cid, "name": name, "email": email, "phone": phone,
+                    "guest": bool(customer.get("_guest")), "display": display,
+                })
 
             if len(customers) > 40:
                 items.append(f"... و {len(customers) - 40} مورد دیگر")
 
-            return {"items": items, "ids": ids}
+            return {"items": items, "ids": ids, "records": records}
 
         except Exception as e:
             cfg = load_secure_config(None) or {}
             raise Exception(format_network_error_message(e, cfg))
 
     def _apply_site_customers(self, payload, silent=False):
-        self.customers_list.clear()
         payload = payload or {}
         ids = set(payload.get("ids", []))
 
@@ -229,25 +284,209 @@ class CustomerTab(SitePreviewLoaderMixin, SyncTab):
         self._seen_customer_ids = ids
         self._customers_baseline_ready = True
 
-        for item in payload.get("items", []):
-            self.customers_list.addItem(make_rtl_item(item))
+        records = payload.get("records") or []
+        items = payload.get("items") or []
+        self._customer_records = records
+        # وقتی رکورد داریم، فقط خطِ اولِ items (توضیحِ حالت) به‌عنوانِ خطِ
+        # اطلاعاتی بالایِ لیست می‌مونه — بقیه‌ی خط‌ها تکرارِ همون رکوردهاست
+        # که حالا با آیتمِ قابلِ‌تیک‌زدن از self._customer_records ساخته می‌شن.
+        self._customer_info_lines = items if not records else (items[:1] if items else [])
+        self._render_customers_list()
 
         ids = payload.get("ids", [])
         if ids:
             self.set_status("success", f"✅ {len(ids)} مشتری از سایت دریافت شد")
             if not silent:
                 log.info(f"📋 بازخوانی مشتریان سایت: {len(ids)} مورد")
-        elif payload.get("items"):
-            self.set_status("info", str(payload["items"][0])[:120])
+        elif items:
+            self.set_status("info", str(items[0])[:120])
             if not silent:
-                log.info(f"📋 بازخوانی مشتریان سایت: {payload['items'][0][:120]}")
+                log.info(f"📋 بازخوانی مشتریان سایت: {items[0][:120]}")
 
         self.refresh_logs()
 
     def _handle_site_customers_error(self, error, silent=False, show_error_dialog=True):
-        self.customers_list.clear()
+        self._customer_records = []
         message = f"❌ خطا در دریافت مشتریان سایت: {error}"
-        self.customers_list.addItem(make_rtl_item(message))
+        self._customer_info_lines = [message]
+        self._render_customers_list()
         self.set_status("error", message[:120])
         if show_error_dialog:
             QMessageBox.critical(self, "خطا", f"دریافت مشتریان سایت ناموفق بود:\n{error}")
+
+    def _customer_key(self, record: dict) -> str:
+        cid = record.get("id")
+        if cid:
+            return f"id:{cid}"
+        return f"g:{record.get('email') or record.get('phone') or record.get('name') or ''}"
+
+    def _render_customers_list(self):
+        self.customers_list.blockSignals(True)
+        try:
+            self.customers_list.clear()
+            for text in getattr(self, "_customer_info_lines", []):
+                self.customers_list.addItem(make_rtl_item(text))
+
+            search = (self.customer_search_input.text() or "").strip().lower()
+            shown = 0
+            for record in self._customer_records:
+                haystack = f"{record.get('name', '')} {record.get('email', '')} {record.get('phone', '')}".lower()
+                if search and search not in haystack:
+                    continue
+                item = make_rtl_item(record.get("display") or record.get("name") or "")
+                item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+                key = self._customer_key(record)
+                item.setCheckState(Qt.Checked if key in self._checked_customer_keys else Qt.Unchecked)
+                item.setData(Qt.UserRole, record)
+                self.customers_list.addItem(item)
+                shown += 1
+
+            if search and self._customer_records and shown == 0:
+                self.customers_list.addItem(make_rtl_item("چیزی با این جستجو پیدا نشد."))
+        finally:
+            self.customers_list.blockSignals(False)
+
+    def _on_customer_item_changed(self, item):
+        record = item.data(Qt.UserRole)
+        if not isinstance(record, dict):
+            return
+        key = self._customer_key(record)
+        if item.checkState() == Qt.Checked:
+            self._checked_customer_keys.add(key)
+        else:
+            self._checked_customer_keys.discard(key)
+
+    def _set_all_customers_checked(self, checked: bool):
+        self.customers_list.blockSignals(True)
+        try:
+            for i in range(self.customers_list.count()):
+                item = self.customers_list.item(i)
+                record = item.data(Qt.UserRole)
+                if not isinstance(record, dict):
+                    continue
+                item.setCheckState(Qt.Checked if checked else Qt.Unchecked)
+                key = self._customer_key(record)
+                if checked:
+                    self._checked_customer_keys.add(key)
+                else:
+                    self._checked_customer_keys.discard(key)
+        finally:
+            self.customers_list.blockSignals(False)
+
+    def _selected_customer_records(self) -> list:
+        keys = self._checked_customer_keys
+        return [r for r in self._customer_records if self._customer_key(r) in keys]
+
+    def _open_bulk_sms_dialog(self):
+        from sync_app.core.sms_poster import is_configured as sms_is_configured
+
+        cfg = load_secure_config(None) or {}
+        if not sms_is_configured(cfg):
+            QMessageBox.warning(
+                self, "پیامک",
+                "اول باید یوزرنیم/پسوردِ پیامک را در تنظیمات → «اعلان‌ها و هوش مصنوعی» وارد کنید.",
+            )
+            return
+
+        selected = self._selected_customer_records()
+        if not selected:
+            QMessageBox.warning(
+                self, "پیامک", "هیچ مشتری‌ای از لیست انتخاب نشده — تیک بزنید و دوباره امتحان کنید."
+            )
+            return
+
+        with_phone = [r for r in selected if (r.get("phone") or "").strip()]
+        without_phone = len(selected) - len(with_phone)
+        if not with_phone:
+            QMessageBox.warning(
+                self, "پیامک", "هیچ‌کدام از مشتریانِ انتخاب‌شده شماره‌ی موبایلِ ثبت‌شده ندارند."
+            )
+            return
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("ارسالِ پیامکِ گروهی")
+        dlg.setLayoutDirection(Qt.RightToLeft)
+        dlg.resize(460, 420)
+        layout = QVBoxLayout(dlg)
+
+        info_text = f"📨 گیرنده: {len(with_phone)} نفر"
+        if without_phone:
+            info_text += f" — {without_phone} نفرِ دیگر بدونِ شماره‌ی موبایل نادیده گرفته می‌شن"
+        info = QLabel(info_text)
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        template_row = QHBoxLayout()
+        template_row.addWidget(QLabel("قالبِ آماده:"))
+        template_combo = QComboBox()
+        for label, _text in SMS_TEMPLATES:
+            template_combo.addItem(label)
+        template_row.addWidget(template_combo, 1)
+        layout.addLayout(template_row)
+
+        text_edit = QTextEdit()
+        text_edit.setPlaceholderText("متنِ پیامک را اینجا بنویسید یا از قالبِ بالا انتخاب کنید...")
+        layout.addWidget(text_edit, 1)
+
+        char_count_label = QLabel("۰ کاراکتر")
+        char_count_label.setStyleSheet("color:#64748b; font-size:10px;")
+        layout.addWidget(char_count_label)
+
+        def _update_char_count():
+            n = len(text_edit.toPlainText())
+            parts = max(1, -(-n // 70)) if n else 0
+            char_count_label.setText(f"{n} کاراکتر (~{parts} پیامک)")
+
+        text_edit.textChanged.connect(_update_char_count)
+
+        def _apply_template(idx):
+            text = SMS_TEMPLATES[idx][1] if 0 <= idx < len(SMS_TEMPLATES) else ""
+            if text:
+                text_edit.setPlainText(text)
+
+        template_combo.currentIndexChanged.connect(_apply_template)
+        _update_char_count()
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
+        send_btn = buttons.addButton("📤 ارسال", QDialogButtonBox.AcceptRole)
+        layout.addWidget(buttons)
+        buttons.rejected.connect(dlg.reject)
+
+        def _do_send():
+            text = text_edit.toPlainText().strip()
+            if not text:
+                QMessageBox.warning(dlg, "پیامک", "متنِ پیامک خالی است.")
+                return
+            answer = QMessageBox.question(
+                dlg, "تأییدِ ارسال",
+                f"این پیامک به {len(with_phone)} شماره ارسال می‌شود و هزینه دارد. مطمئنید؟",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
+
+            phones = [r["phone"] for r in with_phone]
+            send_btn.setEnabled(False)
+            send_btn.setText("در حال ارسال...")
+
+            from sync_app.core.threading_helper import run_in_thread
+            from sync_app.core.sms_poster import send_sms as sms_send
+
+            def on_complete(result):
+                ok, raw = result
+                send_btn.setEnabled(True)
+                send_btn.setText("📤 ارسال")
+                title = "ارسال شد" if ok else "پاسخِ نامطمئن/ناموفق"
+                QMessageBox.information(dlg, "پیامک", f"{title}\n\nپاسخِ خامِ سرویس:\n{raw}")
+                if ok:
+                    dlg.accept()
+
+            def on_error(err):
+                send_btn.setEnabled(True)
+                send_btn.setText("📤 ارسال")
+                QMessageBox.critical(dlg, "پیامک", f"خطا: {err}")
+
+            run_in_thread(sms_send, cfg, phones, text, on_complete=on_complete, on_error=on_error)
+
+        send_btn.clicked.connect(_do_send)
+        dlg.exec_()
