@@ -473,13 +473,14 @@ class CustomerTab(SitePreviewLoaderMixin, SyncTab):
             from sync_app.core.sms_poster import send_sms as sms_send
 
             def on_complete(result):
-                ok, raw = result
+                ok, msg = result
                 send_btn.setEnabled(True)
                 send_btn.setText("📤 ارسال")
-                title = "ارسال شد" if ok else "پاسخِ نامطمئن/ناموفق"
-                QMessageBox.information(dlg, "پیامک", f"{title}\n\nپاسخِ خامِ سرویس:\n{raw}")
                 if ok:
+                    QMessageBox.information(dlg, "پیامک", f"ارسال شد.\n\n{msg}")
                     dlg.accept()
+                else:
+                    QMessageBox.critical(dlg, "پیامک", f"ارسال ناموفق بود:\n\n{msg}")
 
             def on_error(err):
                 send_btn.setEnabled(True)

@@ -1907,13 +1907,12 @@ class SettingsTab(QWidget):
             field.setMinimumHeight(32)
 
         sms_help = QLabel(
-            "برایِ ارسالِ پیامکِ گروهی به مشتریان (از تبِ «مشتریان») — آدرس/یوزرنیم/پسوردِ پنلِ پیامکی را اینجا وارد کنید. "
-            "⚠️ این سرویس‌دهنده متدِ «فقط تستِ اتصال» ندارد — دکمه‌ی زیر یک پیامکِ آزمایشیِ واقعی می‌فرستد."
+            "برایِ ارسالِ پیامکِ گروهی به مشتریان (از تبِ «مشتریان») — آدرس/یوزرنیم/پسوردِ پنلِ پیامکی را اینجا وارد کنید."
         )
         sms_help.setStyleSheet("color:#64748b; font-size:10px;")
         sms_help.setWordWrap(True)
 
-        self.sms_test_button = QPushButton("🧪 ارسالِ پیامکِ آزمایشی")
+        self.sms_test_button = QPushButton("تست اتصال (اعتبارِ باقی‌مانده)")
         self.sms_test_button.setMinimumHeight(32)
         self.sms_test_button.clicked.connect(self._test_sms_connection)
 
@@ -4086,24 +4085,13 @@ class SettingsTab(QWidget):
         run_in_thread(bale_test_connection, token, on_complete=on_complete, on_error=on_error)
 
     def _test_sms_connection(self):
-        from PyQt5.QtWidgets import QInputDialog
-
         from sync_app.core.threading_helper import run_in_thread
-        from sync_app.core.sms_poster import test_send as sms_test_send
+        from sync_app.core.sms_poster import get_credit as sms_get_credit
 
         username = self.sms_username_input.text().strip()
         password = self.sms_password_input.text().strip()
         if not username or not password:
             QMessageBox.warning(self, "پیامک", "ابتدا یوزرنیم و پسوردِ پیامک را وارد کنید.")
-            return
-
-        phone, ok = QInputDialog.getText(
-            self, "پیامکِ آزمایشی",
-            "این دکمه یک پیامکِ آزمایشیِ واقعی می‌فرستد (هزینه دارد).\n"
-            "شماره‌ی موبایلِ گیرنده را وارد کنید:",
-        )
-        phone = (phone or "").strip()
-        if not ok or not phone:
             return
 
         cfg = {
@@ -4115,21 +4103,23 @@ class SettingsTab(QWidget):
         }
 
         self.sms_test_button.setEnabled(False)
-        self.sms_test_button.setText("در حال ارسال...")
+        self.sms_test_button.setText("در حال بررسی...")
 
         def on_complete(result):
-            ok_, raw = result
+            ok_, msg = result
             self.sms_test_button.setEnabled(True)
-            self.sms_test_button.setText("🧪 ارسالِ پیامکِ آزمایشی")
-            title = "ارسال شد" if ok_ else "پاسخِ نامطمئن/ناموفق"
-            QMessageBox.information(self, "پیامک", f"{title}\n\nپاسخِ خامِ سرویس:\n{raw}")
+            self.sms_test_button.setText("تست اتصال (اعتبارِ باقی‌مانده)")
+            if ok_:
+                QMessageBox.information(self, "پیامک", msg)
+            else:
+                QMessageBox.critical(self, "پیامک", f"اتصال ناموفق بود:\n{msg}")
 
         def on_error(err):
             self.sms_test_button.setEnabled(True)
-            self.sms_test_button.setText("🧪 ارسالِ پیامکِ آزمایشی")
+            self.sms_test_button.setText("تست اتصال (اعتبارِ باقی‌مانده)")
             QMessageBox.critical(self, "پیامک", f"خطا: {err}")
 
-        run_in_thread(sms_test_send, cfg, phone, on_complete=on_complete, on_error=on_error)
+        run_in_thread(sms_get_credit, cfg, on_complete=on_complete, on_error=on_error)
 
     def _test_telegram_connection(self):
         from sync_app.core.threading_helper import run_in_thread
