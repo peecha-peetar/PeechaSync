@@ -27,6 +27,7 @@ from PyQt5.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -40,10 +41,15 @@ log = logging.getLogger("SyncApp")
 
 _SEARCH_PAGE_SIZE = 20
 _COLOR_MATCHED = QColor("#dcfce7")  # هم‌رنگِ «قبلاً تطبیق داده شده» در تبِ تطبیقِ معمولی
+_COLOR_RECONCILED = QColor("#dbeafe")  # لینک‌شده از «تطبیق» معمولی (نه تطبیقِ ساختاری)
 
 _LINK_FILTER_ALL = "all"
 _LINK_FILTER_LINKED = "linked"
 _LINK_FILTER_UNLINKED = "unlinked"
+
+_MATCH_NONE = "none"
+_MATCH_STRUCTURAL = "structural"
+_MATCH_RECONCILED = "reconciled"
 
 
 # ----------------------------------------------------------------------
@@ -318,6 +324,7 @@ class StructureReconciliationTab(QWidget):
         self.setLayoutDirection(Qt.RightToLeft)
         self.config = load_secure_config(None) or {}
         self._loaders: list[QThread] = []
+        self._syncing_selection = False
 
         from sync_app.core.integrations.erp_provider import erp_provider_label
 
@@ -357,30 +364,57 @@ class StructureReconciliationTab(QWidget):
         return combo
 
     def _populate_list_with_matches(self, list_widget: QListWidget, entries: list, filter_state: str) -> int:
-        """entries: [(text, data, matched: bool, tooltip: str), ...] — رندرِ
-        لیست با توجه به فیلترِ لینک‌شده/لینک‌نشده. خروجی: تعدادِ نمایش‌داده‌شده."""
+        """entries: [(text, data, state, tooltip: str), ...] — state یکی از
+        _MATCH_NONE/_MATCH_STRUCTURAL/_MATCH_RECONCILED. رندرِ لیست با توجه
+        به فیلترِ لینک‌شده/لینک‌نشده (STRUCTURAL و RECONCILED هر دو «لینک‌شده»
+        حساب می‌شن). خروجی: تعدادِ نمایش‌داده‌شده."""
         list_widget.clear()
         shown = 0
-        for text, data, matched, tooltip in entries:
-            if filter_state == _LINK_FILTER_LINKED and not matched:
+        for text, data, state, tooltip in entries:
+            linked = state != _MATCH_NONE
+            if filter_state == _LINK_FILTER_LINKED and not linked:
                 continue
-            if filter_state == _LINK_FILTER_UNLINKED and matched:
+            if filter_state == _LINK_FILTER_UNLINKED and linked:
                 continue
-            item = QListWidgetItem(f"✅ {text}" if matched else text)
-            item.setData(Qt.UserRole, data)
-            if matched:
+            if state == _MATCH_STRUCTURAL:
+                item = QListWidgetItem(f"✅ {text}")
                 item.setBackground(_COLOR_MATCHED)
-                if tooltip:
-                    item.setToolTip(tooltip)
+            elif state == _MATCH_RECONCILED:
+                item = QListWidgetItem(f"🔗 {text}")
+                item.setBackground(_COLOR_RECONCILED)
+            else:
+                item = QListWidgetItem(text)
+            item.setData(Qt.UserRole, data)
+            if tooltip:
+                item.setToolTip(tooltip)
             list_widget.addItem(item)
             shown += 1
         return shown
+
+    def _select_item_by_data(self, list_widget: QListWidget, matches_fn) -> bool:
+        """اولین آیتمِ لیست که matches_fn رویِ دیتاش True برگردونه رو
+        انتخاب/اسکرول می‌کنه — برایِ نشون‌دادنِ نظیرِ لینک‌شده در طرفِ دیگه."""
+        for i in range(list_widget.count()):
+            item = list_widget.item(i)
+            try:
+                if matches_fn(item.data(Qt.UserRole)):
+                    list_widget.setCurrentItem(item)
+                    list_widget.scrollToItem(item)
+                    return True
+            except Exception:
+                continue
+        return False
 
     # ------------------------------------------------------------------
     # حالتِ ۱: سایت متغیر داره، ERP ساده می‌بینه
     # ------------------------------------------------------------------
     def _build_site_variation_section(self) -> QWidget:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         panel = QWidget()
+        scroll.setWidget(panel)
         v = QVBoxLayout(panel)
         v.setSpacing(6)
 
@@ -447,7 +481,7 @@ class StructureReconciliationTab(QWidget):
         erp_col.addWidget(self.sv_erp_list, 1)
         columns.addLayout(erp_col, 1)
 
-        v.addLayout(columns, 3)
+        v.addLayout(columns)
 
         self.sv_status_label = QLabel("")
         self.sv_status_label.setStyleSheet("color:#64748b; font-size:12px;")
@@ -460,10 +494,14 @@ class StructureReconciliationTab(QWidget):
         self.sv_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.sv_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.sv_table.verticalHeader().setVisible(False)
-        self.sv_table.setMaximumHeight(120)
+        self.sv_table.setMinimumHeight(140)
+        self.sv_table.setMaximumHeight(220)
         v.addWidget(self.sv_table)
 
-        return panel
+        self.sv_site_list.itemSelectionChanged.connect(self._on_sv_site_selection_changed)
+        self.sv_erp_list.itemSelectionChanged.connect(self._on_sv_erp_selection_changed)
+
+        return scroll
 
     def _sv_search_site(self):
         self.sv_status_label.setText("⏳ در حالِ جستجویِ محصولاتِ سایت...")
@@ -482,10 +520,11 @@ class StructureReconciliationTab(QWidget):
         entries = []
         for parent_id, variation_id, label in options:
             matched_sku = find_erp_sku_for_site_variation(parent_id, variation_id)
+            state = _MATCH_STRUCTURAL if matched_sku else _MATCH_NONE
             if matched_sku:
                 matched_count += 1
             tooltip = f"قبلاً به SKUِ «{matched_sku}» تطبیق داده شده" if matched_sku else ""
-            entries.append((label, (parent_id, variation_id, label), bool(matched_sku), tooltip))
+            entries.append((label, (parent_id, variation_id, label), state, tooltip))
         self._sv_site_entries = entries
         self._render_sv_site_list()
         self.sv_status_label.setText(
@@ -508,18 +547,35 @@ class StructureReconciliationTab(QWidget):
             self.sv_status_label.setText(f"⚠️ جستجویِ {self.erp_label} ناموفق بود: {error}")
             return
         from sync_app.core.structure_mismatch_override import get_site_variation_target
+        from sync_app.core.product_woo_map_helper import load_product_woo_map
 
-        matched_count = 0
+        # کالاهایِ سادهٔ ERP که از قبل با «تطبیق» معمولی (نه این ابزار) به یک
+        # محصولِ سایت لینک شدن — اینا مشکلی ندارن، محصولِ ساده‌ی معمولی‌اند و
+        # نیازی به تطبیقِ ساختاری ندارن؛ نباید کنارِ کالاهایِ واقعاً بی‌لینک
+        # تویِ «فقط لینک‌نشده» بیفتن.
+        product_map = load_product_woo_map()
+
+        structural_count = 0
+        reconciled_count = 0
         entries = []
         for sku, label in options:
-            matched = get_site_variation_target(sku) is not None
-            if matched:
-                matched_count += 1
-            entries.append((label, sku, matched, "قبلاً تطبیق داده شده" if matched else ""))
+            if get_site_variation_target(sku) is not None:
+                state = _MATCH_STRUCTURAL
+                tooltip = "قبلاً تطبیق داده شده"
+                structural_count += 1
+            elif product_map.get(sku):
+                state = _MATCH_RECONCILED
+                tooltip = "قبلاً از «تطبیق» معمولی به یک محصولِ سایت لینک شده — نیازی به تطبیقِ ساختاری نداره"
+                reconciled_count += 1
+            else:
+                state = _MATCH_NONE
+                tooltip = ""
+            entries.append((label, sku, state, tooltip))
         self._sv_erp_entries = entries
         self._render_sv_erp_list()
         self.sv_status_label.setText(
-            f"✅ {len(options)} کالایِ {self.erp_label} پیدا شد — {matched_count} تا قبلاً تطبیق داده شده."
+            f"✅ {len(options)} کالایِ {self.erp_label} پیدا شد — {structural_count} تطبیقِ ساختاری، "
+            f"{reconciled_count} قبلاً لینکِ عادی."
         )
 
     def _render_sv_erp_list(self):
@@ -529,6 +585,47 @@ class StructureReconciliationTab(QWidget):
     def _on_sv_link_filter_changed(self):
         self._render_sv_site_list()
         self._render_sv_erp_list()
+
+    def _on_sv_site_selection_changed(self):
+        """اگه واریانتِ انتخاب‌شده قبلاً تطبیق داده شده، SKUِ نظیرش رو هم در
+        لیستِ چپ فعال/انتخاب می‌کنه — تا معلوم بشه به کدوم کالا لینکه."""
+        if self._syncing_selection:
+            return
+        items = self.sv_site_list.selectedItems()
+        if not items:
+            return
+        parent_id, variation_id, _label = items[0].data(Qt.UserRole)
+        from sync_app.core.structure_mismatch_override import find_erp_sku_for_site_variation
+
+        matched_sku = find_erp_sku_for_site_variation(parent_id, variation_id)
+        if not matched_sku:
+            return
+        self._syncing_selection = True
+        try:
+            self._select_item_by_data(self.sv_erp_list, lambda data: data == matched_sku)
+        finally:
+            self._syncing_selection = False
+
+    def _on_sv_erp_selection_changed(self):
+        if self._syncing_selection:
+            return
+        items = self.sv_erp_list.selectedItems()
+        if not items:
+            return
+        sku = items[0].data(Qt.UserRole)
+        from sync_app.core.structure_mismatch_override import get_site_variation_target
+
+        target = get_site_variation_target(sku)
+        if not target:
+            return
+        self._syncing_selection = True
+        try:
+            self._select_item_by_data(
+                self.sv_site_list,
+                lambda data: data[0] == target["parent_product_id"] and data[1] == target["variation_id"],
+            )
+        finally:
+            self._syncing_selection = False
 
     def _sv_save(self):
         site_selected = self.sv_site_list.selectedItems()
@@ -593,7 +690,12 @@ class StructureReconciliationTab(QWidget):
     # حالتِ ۲: ERP متغیر می‌بینه، سایت ساده داره
     # ------------------------------------------------------------------
     def _build_force_simple_section(self) -> QWidget:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         panel = QWidget()
+        scroll.setWidget(panel)
         v = QVBoxLayout(panel)
         v.setSpacing(6)
 
@@ -660,7 +762,7 @@ class StructureReconciliationTab(QWidget):
         erp_col.addWidget(self.fs_erp_list, 1)
         columns.addLayout(erp_col, 1)
 
-        v.addLayout(columns, 3)
+        v.addLayout(columns)
 
         self.fs_status_label = QLabel("")
         self.fs_status_label.setStyleSheet("color:#64748b; font-size:12px;")
@@ -673,10 +775,14 @@ class StructureReconciliationTab(QWidget):
         self.fs_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.fs_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.fs_table.verticalHeader().setVisible(False)
-        self.fs_table.setMaximumHeight(120)
+        self.fs_table.setMinimumHeight(140)
+        self.fs_table.setMaximumHeight(220)
         v.addWidget(self.fs_table)
 
-        return panel
+        self.fs_site_list.itemSelectionChanged.connect(self._on_fs_site_selection_changed)
+        self.fs_erp_list.itemSelectionChanged.connect(self._on_fs_erp_selection_changed)
+
+        return scroll
 
     def _fs_search_site(self):
         self.fs_status_label.setText("⏳ در حالِ جستجویِ محصولاتِ سایت...")
@@ -707,9 +813,10 @@ class StructureReconciliationTab(QWidget):
         tooltip = f"این محصول الان منبعِ قیمت/موجودیش از یک کدِ {self.erp_label} تعیین شده"
         for pid, label, sku in options:
             matched = int(pid) in matched_ids
+            state = _MATCH_STRUCTURAL if matched else _MATCH_NONE
             if matched:
                 matched_count += 1
-            entries.append((label, (pid, label, sku), matched, tooltip if matched else ""))
+            entries.append((label, (pid, label, sku), state, tooltip if matched else ""))
         self._fs_site_entries = entries
         self._render_fs_site_list()
         self.fs_status_label.setText(
@@ -737,9 +844,10 @@ class StructureReconciliationTab(QWidget):
         entries = []
         for parent_sku, variant_sku, label in options:
             matched = get_force_simple_source(parent_sku) == variant_sku
+            state = _MATCH_STRUCTURAL if matched else _MATCH_NONE
             if matched:
                 matched_count += 1
-            entries.append((label, (parent_sku, variant_sku), matched, "این زیرواریانت الان منبعِ فعاله" if matched else ""))
+            entries.append((label, (parent_sku, variant_sku), state, "این زیرواریانت الان منبعِ فعاله" if matched else ""))
         self._fs_erp_entries = entries
         self._render_fs_erp_list()
         self.fs_status_label.setText(
@@ -753,6 +861,62 @@ class StructureReconciliationTab(QWidget):
     def _on_fs_link_filter_changed(self):
         self._render_fs_site_list()
         self._render_fs_erp_list()
+
+    def _on_fs_site_selection_changed(self):
+        """اگه محصولِ سایتِ انتخاب‌شده قبلاً منبعِ زیرواریانتی داشته، همون
+        زیرواریانت رو در لیستِ چپ فعال/انتخاب می‌کنه."""
+        if self._syncing_selection:
+            return
+        items = self.fs_site_list.selectedItems()
+        if not items:
+            return
+        pid, _label, _sku = items[0].data(Qt.UserRole)
+        from sync_app.core.structure_mismatch_override import list_force_simple_sources
+        from sync_app.core.product_woo_map_helper import load_product_woo_map
+
+        product_map = load_product_woo_map()
+        match = None
+        for parent_sku, entry in list_force_simple_sources().items():
+            mapped_id = product_map.get(parent_sku)
+            try:
+                if mapped_id is not None and int(mapped_id) == int(pid):
+                    match = (parent_sku, str(entry.get("source_variation_sku") or ""))
+                    break
+            except (TypeError, ValueError):
+                continue
+        if not match:
+            return
+        self._syncing_selection = True
+        try:
+            self._select_item_by_data(self.fs_erp_list, lambda data: data == match)
+        finally:
+            self._syncing_selection = False
+
+    def _on_fs_erp_selection_changed(self):
+        if self._syncing_selection:
+            return
+        items = self.fs_erp_list.selectedItems()
+        if not items:
+            return
+        parent_sku, variant_sku = items[0].data(Qt.UserRole)
+        from sync_app.core.structure_mismatch_override import get_force_simple_source
+
+        if get_force_simple_source(parent_sku) != variant_sku:
+            return
+        from sync_app.core.product_woo_map_helper import load_product_woo_map
+
+        mapped_id = load_product_woo_map().get(parent_sku)
+        if mapped_id is None:
+            return
+        try:
+            mapped_id = int(mapped_id)
+        except (TypeError, ValueError):
+            return
+        self._syncing_selection = True
+        try:
+            self._select_item_by_data(self.fs_site_list, lambda data: int(data[0]) == mapped_id)
+        finally:
+            self._syncing_selection = False
 
     def _fs_save(self):
         site_selected = self.fs_site_list.selectedItems()

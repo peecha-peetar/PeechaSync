@@ -719,7 +719,13 @@ class SettingsTab(QWidget):
     def _apply_dev_lock_ui(self):
         from sync_app.core.dev_lock import apply_lock_state
 
-        apply_lock_state(self, self._dev_locked, exclude_names={"devUnlockBtn"})
+        # تم و سایزِ فونت صرفاً ظاهریَن و هیچ تأثیری رویِ دیتابیس/فروشگاه/سفارش
+        # ندارن — قفلِ رمزِ دوم رویِ این دوتا فقط باعثِ سردرگمیِ کاربرِ عادی
+        # می‌شه، بدونِ فایده‌ی امنیتی.
+        apply_lock_state(
+            self, self._dev_locked,
+            exclude_names={"devUnlockBtn", "themeComboUnlocked", "fontSizeComboUnlocked"},
+        )
         if self._dev_locked:
             self._unlock_btn.setText("🔓 ویرایش (نیاز به رمز دوم)")
         else:
@@ -1073,7 +1079,7 @@ class SettingsTab(QWidget):
 
         # انتخاب دیتابیس از لیست
         self.db_picker_combo = QComboBox()
-        self.db_picker_combo.setMinimumHeight(38)
+        self.db_picker_combo.setMinimumHeight(32)
         self.db_picker_combo.setLayoutDirection(Qt.LeftToRight)
         saved_db = str((self.config or {}).get("SQL_DATABASE") or "").strip()
         if saved_db:
@@ -1087,14 +1093,14 @@ class SettingsTab(QWidget):
         self._db_picker_apply_enabled = False
 
         self.db_refresh_btn = QPushButton("↻ بارگذاری")
-        self.db_refresh_btn.setMinimumHeight(38)
+        self.db_refresh_btn.setMinimumHeight(32)
         self.db_refresh_btn.setToolTip(
             "لیست دیتابیس‌ها از SQL Server — اگر کند بود، همان نام بالا کافی است"
         )
         self.db_refresh_btn.clicked.connect(self._load_databases_to_picker)
 
         self.db_log_btn = QPushButton("لاگ SQL")
-        self.db_log_btn.setMinimumHeight(38)
+        self.db_log_btn.setMinimumHeight(32)
         self.db_log_btn.setToolTip("پنجره گزارش زنده — هنگام بارگذاری/Attach خودکار باز می‌شود")
         self.db_log_btn.clicked.connect(self._show_sql_operation_log)
 
@@ -1111,10 +1117,10 @@ class SettingsTab(QWidget):
         self.sql_mdf_path_input.setPlaceholderText("مسیر فایل .mdf — با دکمه انتخاب فایل")
         self.sql_mdf_path_input.setLayoutDirection(Qt.LeftToRight)
         self.sql_mdf_path_input.setAlignment(Qt.AlignLeft)
-        self.sql_mdf_path_input.setMinimumHeight(38)
+        self.sql_mdf_path_input.setMinimumHeight(32)
 
         self.db_browse_btn = QPushButton("📁 انتخاب فایل")
-        self.db_browse_btn.setMinimumHeight(38)
+        self.db_browse_btn.setMinimumHeight(32)
         self.db_browse_btn.setToolTip("انتخاب فایل MDF/LDF و Attach به SQL Server")
         self.db_browse_btn.clicked.connect(self._browse_and_attach_database)
 
@@ -1133,15 +1139,15 @@ class SettingsTab(QWidget):
         for field in [self.server_input, self.database_input, self.username_input, self.password_input]:
             field.setLayoutDirection(Qt.LeftToRight)
             field.setAlignment(Qt.AlignLeft)
-            field.setMinimumHeight(38)
+            field.setMinimumHeight(32)
 
         self.driver_input.setLayoutDirection(Qt.LeftToRight)
-        self.driver_input.setMinimumHeight(38)
+        self.driver_input.setMinimumHeight(32)
 
         self.sql_test_button = QPushButton("تست اتصال SQL")
         self.sql_test_button.clicked.connect(self.test_sql_connection)
         self.sql_start_service_btn = QPushButton("▶ روشن کردن SQL Express")
-        self.sql_start_service_btn.setMinimumHeight(38)
+        self.sql_start_service_btn.setMinimumHeight(32)
         self.sql_start_service_btn.setToolTip(
             "سرویس SQL Server Express را روشن می‌کند (در صورت نیاز UAC می‌پرسد)"
         )
@@ -1163,7 +1169,7 @@ class SettingsTab(QWidget):
         sql_layout.addRow(english_caption("انتخاب DB:"), db_picker_widget)
         sql_layout.addRow(english_caption("Username:"), self.username_input)
         sql_layout.addRow(english_caption("Password:"), self.password_input)
-        sql_layout.addRow(QLabel(""), sql_test_widget)
+        sql_layout.addRow(sql_test_widget)
 
         self.price_combo = QComboBox()
         self.price_combo.addItems([f"لیست قیمت {i}" for i in range(1, 11)])
@@ -1206,6 +1212,7 @@ class SettingsTab(QWidget):
         self.erp_picture_root_input.setLayoutDirection(Qt.LeftToRight)
 
         self.theme_combo = QComboBox()
+        self.theme_combo.setObjectName("themeComboUnlocked")
         from sync_app.core.app_site_config import THEME_UI_LABELS
 
         for theme_key, theme_label in THEME_UI_LABELS.items():
@@ -1219,6 +1226,7 @@ class SettingsTab(QWidget):
 
         # کمبوباکس انتخاب سایز فونت (درخواست کارفرما)
         self.font_size_combo = QComboBox()
+        self.font_size_combo.setObjectName("fontSizeComboUnlocked")
         self.font_size_combo.addItem("کوچک (12px)", 12)
         self.font_size_combo.addItem("متوسط (14px)", 14)
         self.font_size_combo.addItem("بزرگ (16px)", 16)
@@ -1316,12 +1324,12 @@ class SettingsTab(QWidget):
         ]:
             field.setLayoutDirection(Qt.LeftToRight)
             field.setAlignment(Qt.AlignLeft)
-            field.setMinimumHeight(38)
+            field.setMinimumHeight(32)
 
         for field in [self.license_server_url_input, self.license_api_key_input]:
             field.setLayoutDirection(Qt.LeftToRight)
             field.setAlignment(Qt.AlignLeft)
-            field.setMinimumHeight(38)
+            field.setMinimumHeight(32)
 
         for field in [
             self.price_combo,
@@ -1332,8 +1340,8 @@ class SettingsTab(QWidget):
             self.font_size_combo,
             self.erp_provider_combo,
         ]:
-            field.setMinimumHeight(38)
-        self.erp_picture_root_input.setMinimumHeight(38)
+            field.setMinimumHeight(32)
+        self.erp_picture_root_input.setMinimumHeight(32)
 
         app_layout.addRow(QLabel("لیست قیمت عادی:"), self.price_combo)
         app_layout.addRow(QLabel("درصد افزایش قیمت عادی:"), self.price_markup_spin)
@@ -1446,7 +1454,7 @@ class SettingsTab(QWidget):
                       self.wp_username_input, self.wp_app_password_input, self.timeout_input]:
             field.setLayoutDirection(Qt.LeftToRight)
             field.setAlignment(Qt.AlignLeft)
-            field.setMinimumHeight(38)
+            field.setMinimumHeight(32)
 
         from sync_app.core.integrations.erp_provider import erp_provider_label
 
@@ -1455,7 +1463,7 @@ class SettingsTab(QWidget):
         self.currency_combo.addItem("ریال (بدون تبدیل)", False)
         is_toman_saved = self.config.get("WC_CURRENCY_IS_TOMAN", True)
         self.currency_combo.setCurrentIndex(0 if is_toman_saved else 1)
-        self.currency_combo.setMinimumHeight(38)
+        self.currency_combo.setMinimumHeight(32)
 
         # نمایش فقط‌خواندنیِ واحد پول واقعیِ سایت (خونده‌شده از خودِ ووکامرس) —
         # این با تنظیم بالا (نحوه‌ی تبدیل قیمت بین ERP و ووکامرس) فرق داره؛
@@ -1482,18 +1490,18 @@ class SettingsTab(QWidget):
             self._active_wc_site_id = str(self._wc_sites[0].get("id") or "")
 
         self.wc_site_combo = QComboBox()
-        self.wc_site_combo.setMinimumHeight(38)
+        self.wc_site_combo.setMinimumHeight(32)
         self.wc_site_combo.setLayoutDirection(Qt.LeftToRight)
         self.wc_add_site_btn = QPushButton("➕ سایت جدید")
-        self.wc_add_site_btn.setMinimumHeight(38)
+        self.wc_add_site_btn.setMinimumHeight(32)
         self.wc_delete_site_btn = QPushButton("🗑 حذف")
-        self.wc_delete_site_btn.setMinimumHeight(38)
+        self.wc_delete_site_btn.setMinimumHeight(32)
         self.wc_add_site_btn.clicked.connect(self._on_add_wc_site)
         self.wc_delete_site_btn.clicked.connect(self._on_delete_wc_site)
         self.wc_site_combo.currentIndexChanged.connect(self._on_wc_site_combo_changed)
 
         self.wc_site_name_input = QLineEdit()
-        self.wc_site_name_input.setMinimumHeight(38)
+        self.wc_site_name_input.setMinimumHeight(32)
         self.wc_site_name_input.setPlaceholderText("نام دلخواه فروشگاه (مثلاً فروشگاه اصلی)")
         self.wc_site_name_input.editingFinished.connect(self._on_wc_site_name_changed)
 
@@ -1571,12 +1579,12 @@ class SettingsTab(QWidget):
         self.wp_app_password_button.clicked.connect(self._open_wp_app_password_page)
 
         self.wp_users_page_button = QPushButton("👥 Users در وردپرس")
-        self.wp_users_page_button.setMinimumHeight(38)
+        self.wp_users_page_button.setMinimumHeight(32)
         self.wp_users_page_button.setToolTip("باز کردن Users → All Users برای دیدن Username واقعی")
         self.wp_users_page_button.clicked.connect(self._open_wp_users_page)
 
         self.wp_username_picker_button = QPushButton("📋 انتخاب از سایت")
-        self.wp_username_picker_button.setMinimumHeight(38)
+        self.wp_username_picker_button.setMinimumHeight(32)
         self.wp_username_picker_button.setToolTip(
             "دریافت خودکار نام‌های کاربری از وردپرس — مدیران در بالای لیست"
         )
@@ -1591,14 +1599,14 @@ class SettingsTab(QWidget):
         wp_username_row_layout.addWidget(self.wp_username_picker_button)
 
         self.wp_test_button = QPushButton("تست Application Password")
-        self.wp_test_button.setMinimumHeight(38)
+        self.wp_test_button.setMinimumHeight(32)
         self.wp_test_button.clicked.connect(self.test_wp_app_password)
 
         # --- پلتفرم فروشگاه: ووکامرس یا پرستاشاپ ---
         self.store_platform_combo = QComboBox()
         self.store_platform_combo.addItem("ووکامرس (WooCommerce)", "woocommerce")
         self.store_platform_combo.addItem("پرستاشاپ (PrestaShop)", "prestashop")
-        self.store_platform_combo.setMinimumHeight(38)
+        self.store_platform_combo.setMinimumHeight(32)
         _current_platform = str(self.config.get("STORE_PLATFORM") or "woocommerce")
         _platform_idx = self.store_platform_combo.findData(_current_platform)
         self.store_platform_combo.setCurrentIndex(_platform_idx if _platform_idx >= 0 else 0)
@@ -1610,25 +1618,25 @@ class SettingsTab(QWidget):
         platform_help.setWordWrap(True)
 
         wc_form_layout.addRow(QLabel("پلتفرم فروشگاه:"), self.store_platform_combo)
-        wc_form_layout.addRow(QLabel(""), platform_help)
+        wc_form_layout.addRow(platform_help)
 
         wc_section_label = QLabel("ووکامرس (WooCommerce)")
         wc_section_label.setStyleSheet("font-weight:700; margin-top:10px;")
-        wc_form_layout.addRow(QLabel(""), wc_section_label)
+        wc_form_layout.addRow(wc_section_label)
 
         wc_form_layout.addRow(QLabel("سایت فعال:"), wc_site_row)
         wc_form_layout.addRow(QLabel("نام پروفایل:"), self.wc_site_name_input)
-        wc_form_layout.addRow(QLabel(""), wc_sites_help)
+        wc_form_layout.addRow(wc_sites_help)
         wc_form_layout.addRow(english_caption("WC URL:"), self.url_input)
         wc_form_layout.addRow(english_caption("Consumer Key:"), self.ck_input)
         wc_form_layout.addRow(english_caption("Consumer Secret:"), self.cs_input)
-        wc_form_layout.addRow(QLabel(""), wc_api_help)
-        wc_form_layout.addRow(QLabel(""), self.wc_api_keys_button)
+        wc_form_layout.addRow(wc_api_help)
+        wc_form_layout.addRow(self.wc_api_keys_button)
         wc_form_layout.addRow(english_caption("WP Username:"), wp_username_row)
         wc_form_layout.addRow(english_caption("WP App Password:"), self.wp_app_password_input)
-        wc_form_layout.addRow(QLabel(""), wp_help)
-        wc_form_layout.addRow(QLabel(""), self.wp_app_password_button)
-        wc_form_layout.addRow(QLabel(""), self.wp_test_button)
+        wc_form_layout.addRow(wp_help)
+        wc_form_layout.addRow(self.wp_app_password_button)
+        wc_form_layout.addRow(self.wp_test_button)
         wc_form_layout.addRow(english_caption("Timeout:"), self.timeout_input)
         wc_form_layout.addRow(QLabel(f"تبدیل قیمت {erp_provider_label(self.config)}:"), self.currency_combo)
 
@@ -1660,13 +1668,13 @@ class SettingsTab(QWidget):
         site_currency_row.addWidget(self.site_currency_refresh_btn)
         site_currency_row.addStretch()
         wc_form_layout.addRow(QLabel("واحد پول سایت (فقط نمایش):"), site_currency_row)
-        wc_form_layout.addRow(QLabel(""), wc_test_widget)
-        wc_form_layout.addRow(QLabel(""), wc_setup_help)
+        wc_form_layout.addRow(wc_test_widget)
+        wc_form_layout.addRow(wc_setup_help)
 
         # --- پرستاشاپ (Webservice API) ---
         ps_section_label = QLabel("پرستاشاپ (PrestaShop)")
         ps_section_label.setStyleSheet("font-weight:700; margin-top:10px;")
-        wc_form_layout.addRow(QLabel(""), ps_section_label)
+        wc_form_layout.addRow(ps_section_label)
 
         from sync_app.core.ps_site_profiles import (
             copy_sites as ps_copy_sites,
@@ -1684,18 +1692,18 @@ class SettingsTab(QWidget):
             self._active_ps_site_id = str(self._ps_sites[0].get("id") or "")
 
         self.ps_site_combo = QComboBox()
-        self.ps_site_combo.setMinimumHeight(38)
+        self.ps_site_combo.setMinimumHeight(32)
         self.ps_site_combo.setLayoutDirection(Qt.LeftToRight)
         self.ps_add_site_btn = QPushButton("➕ سایت جدید")
-        self.ps_add_site_btn.setMinimumHeight(38)
+        self.ps_add_site_btn.setMinimumHeight(32)
         self.ps_delete_site_btn = QPushButton("🗑 حذف")
-        self.ps_delete_site_btn.setMinimumHeight(38)
+        self.ps_delete_site_btn.setMinimumHeight(32)
         self.ps_add_site_btn.clicked.connect(self._on_add_ps_site)
         self.ps_delete_site_btn.clicked.connect(self._on_delete_ps_site)
         self.ps_site_combo.currentIndexChanged.connect(self._on_ps_site_combo_changed)
 
         self.ps_site_name_input = QLineEdit()
-        self.ps_site_name_input.setMinimumHeight(38)
+        self.ps_site_name_input.setMinimumHeight(32)
         self.ps_site_name_input.setPlaceholderText("نام دلخواه فروشگاه (مثلاً فروشگاه اصلی)")
         self.ps_site_name_input.editingFinished.connect(self._on_ps_site_name_changed)
 
@@ -1717,7 +1725,7 @@ class SettingsTab(QWidget):
 
         wc_form_layout.addRow(QLabel("فروشگاه پرستاشاپ:"), ps_site_row)
         wc_form_layout.addRow(QLabel("نام سایت:"), self.ps_site_name_input)
-        wc_form_layout.addRow(QLabel(""), ps_sites_help)
+        wc_form_layout.addRow(ps_sites_help)
 
         self.ps_url_input = QLineEdit(self.config.get("PS_URL", ""))
         self.ps_url_input.setPlaceholderText("https://your-prestashop-store.com")
@@ -1728,7 +1736,7 @@ class SettingsTab(QWidget):
         for field in [self.ps_url_input, self.ps_api_key_input]:
             field.setLayoutDirection(Qt.LeftToRight)
             field.setAlignment(Qt.AlignLeft)
-            field.setMinimumHeight(38)
+            field.setMinimumHeight(32)
 
         ps_api_help = QLabel(
             "کلید Webservice: پیشخوان پرستاشاپ → Advanced Parameters → Webservice → Add new webservice key.\n"
@@ -1739,13 +1747,13 @@ class SettingsTab(QWidget):
         ps_api_help.setWordWrap(True)
 
         self.ps_test_button = QPushButton("تست اتصال پرستاشاپ")
-        self.ps_test_button.setMinimumHeight(38)
+        self.ps_test_button.setMinimumHeight(32)
         self.ps_test_button.clicked.connect(self.test_ps_connection)
 
         wc_form_layout.addRow(english_caption("PrestaShop URL:"), self.ps_url_input)
         wc_form_layout.addRow(english_caption("Webservice API Key:"), self.ps_api_key_input)
-        wc_form_layout.addRow(QLabel(""), ps_api_help)
-        wc_form_layout.addRow(QLabel(""), self.ps_test_button)
+        wc_form_layout.addRow(ps_api_help)
+        wc_form_layout.addRow(self.ps_test_button)
 
         self._refresh_ps_site_combo(select_id=self._active_ps_site_id)
         active_ps_site = find_ps_site(self._ps_sites, self._active_ps_site_id)
@@ -1805,7 +1813,7 @@ class SettingsTab(QWidget):
         for field in (self.telegram_bot_token_input, self.telegram_chat_id_input, self.telegram_proxy_url_input):
             field.setLayoutDirection(Qt.LeftToRight)
             field.setAlignment(Qt.AlignLeft)
-            field.setMinimumHeight(38)
+            field.setMinimumHeight(32)
 
         telegram_help = QLabel(
             "توکنِ بات: با @BotFather بسازید. شناسه‌ی چت: نامِ کاربریِ کانال (با @) یا آیدیِ عددیِ آن — "
@@ -1817,14 +1825,14 @@ class SettingsTab(QWidget):
         telegram_help.setWordWrap(True)
 
         self.telegram_test_button = QPushButton("تست اتصال تلگرام")
-        self.telegram_test_button.setMinimumHeight(38)
+        self.telegram_test_button.setMinimumHeight(32)
         self.telegram_test_button.clicked.connect(self._test_telegram_connection)
 
         telegram_layout.addRow(english_caption("Bot Token:"), self.telegram_bot_token_input)
         telegram_layout.addRow(english_caption("Chat ID:"), self.telegram_chat_id_input)
         telegram_layout.addRow(english_caption("Proxy URL:"), self.telegram_proxy_url_input)
-        telegram_layout.addRow(QLabel(""), telegram_help)
-        telegram_layout.addRow(QLabel(""), self.telegram_test_button)
+        telegram_layout.addRow(telegram_help)
+        telegram_layout.addRow(self.telegram_test_button)
         self.telegram_group.setLayout(telegram_layout)
 
         # --- بله (Bale) — برای تقویمِ محتوا، فیلتر نیست، نیازی به پراکسی نداره ---
@@ -1846,7 +1854,7 @@ class SettingsTab(QWidget):
         for field in (self.bale_bot_token_input, self.bale_chat_id_input):
             field.setLayoutDirection(Qt.LeftToRight)
             field.setAlignment(Qt.AlignLeft)
-            field.setMinimumHeight(38)
+            field.setMinimumHeight(32)
 
         bale_help = QLabel(
             "ساختِ بات: در برنامه‌ی بله سرچ کنید «BotFather» و مراحلِ مشابهِ تلگرام را طی کنید. "
@@ -1856,13 +1864,13 @@ class SettingsTab(QWidget):
         bale_help.setWordWrap(True)
 
         self.bale_test_button = QPushButton("تست اتصال بله")
-        self.bale_test_button.setMinimumHeight(38)
+        self.bale_test_button.setMinimumHeight(32)
         self.bale_test_button.clicked.connect(self._test_bale_connection)
 
         bale_layout.addRow(english_caption("Bot Token:"), self.bale_bot_token_input)
         bale_layout.addRow(english_caption("Chat ID:"), self.bale_chat_id_input)
-        bale_layout.addRow(QLabel(""), bale_help)
-        bale_layout.addRow(QLabel(""), self.bale_test_button)
+        bale_layout.addRow(bale_help)
+        bale_layout.addRow(self.bale_test_button)
         self.bale_group.setLayout(bale_layout)
 
         # --- هوشِ مصنوعی (تولیدِ خودکارِ متنِ مقاله در تبِ «مقالاتِ سایت») ---
@@ -1882,7 +1890,7 @@ class SettingsTab(QWidget):
         for field in (self.ai_api_key_input, self.ai_proxy_url_input):
             field.setLayoutDirection(Qt.LeftToRight)
             field.setAlignment(Qt.AlignLeft)
-            field.setMinimumHeight(38)
+            field.setMinimumHeight(32)
 
         ai_help = QLabel(
             "برایِ نوشتنِ خودکارِ مقاله در تبِ «مقالاتِ سایت» لازمه. یه کلیدِ رایگان (بدونِ نیاز به کارتِ بانکی) "
@@ -1895,7 +1903,7 @@ class SettingsTab(QWidget):
 
         ai_layout.addRow(english_caption("Gemini API Key:"), self.ai_api_key_input)
         ai_layout.addRow(english_caption("Proxy URL:"), self.ai_proxy_url_input)
-        ai_layout.addRow(QLabel(""), ai_help)
+        ai_layout.addRow(ai_help)
         self.ai_group.setLayout(ai_layout)
 
         # --- اطلاعاتِ تماس/برندینگ — برای فیلدهای «تلفن»/«آدرسِ سایت»/
@@ -1925,7 +1933,7 @@ class SettingsTab(QWidget):
         ):
             field.setLayoutDirection(Qt.LeftToRight)
             field.setAlignment(Qt.AlignLeft)
-            field.setMinimumHeight(38)
+            field.setMinimumHeight(32)
 
         brand_help = QLabel(
             "این اطلاعات فقط برای فیلدهای «تلفن»/«آدرسِ سایت»/شبکه‌های اجتماعی در «طراحِ قالبِ پست» استفاده می‌شه — "
@@ -1939,7 +1947,7 @@ class SettingsTab(QWidget):
         brand_layout.addRow(english_caption("اینستاگرام:"), self.social_instagram_input)
         brand_layout.addRow(english_caption("تلگرام:"), self.social_telegram_input)
         brand_layout.addRow(english_caption("واتساپ:"), self.social_whatsapp_input)
-        brand_layout.addRow(QLabel(""), brand_help)
+        brand_layout.addRow(brand_help)
         self.brand_group.setLayout(brand_layout)
 
         self.monitor_group = QGroupBox("مانیتورینگ عملیات اتصال")
@@ -2091,8 +2099,8 @@ class SettingsTab(QWidget):
 
         license_form.addRow(QLabel("آدرس سرور لایسنس:"), self.license_server_url_input)
         license_form.addRow(QLabel("کلید API لایسنس:"), self.license_api_key_input)
-        license_form.addRow(QLabel(""), license_api_help)
-        license_form.addRow(QLabel(""), self.license_api_key_button)
+        license_form.addRow(license_api_help)
+        license_form.addRow(self.license_api_key_button)
         license_group.setLayout(license_form)
         self.license_group = license_group
 
