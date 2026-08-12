@@ -1,7 +1,7 @@
 from PyQt5.QtWidgets import (
     QWidget, QFormLayout, QLineEdit, QLabel, QPushButton,
-    QHBoxLayout, QMessageBox, QComboBox, QVBoxLayout, QGroupBox, QScrollArea, QPlainTextEdit, QGridLayout, QCheckBox,
-    QApplication, QFileDialog, QSpinBox, QDoubleSpinBox, QListWidget, QListWidgetItem, QLayout, QDialog,
+    QHBoxLayout, QMessageBox, QComboBox, QVBoxLayout, QGroupBox, QScrollArea, QPlainTextEdit, QCheckBox,
+    QApplication, QFileDialog, QSpinBox, QDoubleSpinBox, QListWidget, QListWidgetItem, QLayout, QDialog, QTabWidget,
 )
 from PyQt5.QtCore import Qt, QObject, QThread, pyqtSignal, QPropertyAnimation, QEasingCurve, QTimer, QUrl
 from PyQt5.QtGui import QDesktopServices, QPixmap
@@ -16,6 +16,7 @@ from sync_app.core.password_line_edit import PasswordLineEdit
 from sync_app.core.event_notifier import append_system_log
 from sync_app.core.integrations.erp_provider import get_provider
 from sync_app.core.field_sync_config import ALL_FIELD_GROUPS, FORCE_FULL_SYNC_FIELDS
+from sync_app.core.adaptive_tab_bar import AdaptiveTabBar
 
 HAS_WCAPI = None
 _pyodbc = None
@@ -573,7 +574,6 @@ class SettingsTab(QWidget):
         self._pending_db_apply_name = None
         self._monitor_open = True
         self._monitor_anim = None
-        self._settings_compact = None
         self._ui_built = False
         self._last_success_sql_auth_mode = "auto"
         try:
@@ -1015,17 +1015,14 @@ class SettingsTab(QWidget):
         self._refresh_preset_combo()
         self.preset_combo.currentIndexChanged.connect(self._on_preset_combo_changed)
 
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        # در حالت ریسپانسیو اسکرول افقی نباید ظاهر شود
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.scroll_area = scroll_area
-
-        container = QWidget()
-        root_layout = QVBoxLayout(container)
-        root_layout.setContentsMargins(8, 8, 8, 8)
-        root_layout.setSpacing(12)
+        # ── دسته‌بندیِ تنظیمات به زیرتب — به‌جایِ یک اسکرولِ ۲متری شاملِ همه‌ی
+        # ۱۲ گروه با هم، هر دسته زیرتبِ خودش را دارد (فضایِ خالیِ چیدمانِ
+        # گریدِ قبلی هم از بین می‌رود چون هر صفحه فقط گروه‌هایِ خودش را دارد).
+        self.settings_sub_tabs = QTabWidget()
+        self.settings_sub_tabs.setLayoutDirection(Qt.RightToLeft)
+        self.settings_sub_tabs.setTabBar(AdaptiveTabBar(self.settings_sub_tabs))
+        self.settings_sub_tabs.tabBar().setObjectName("settingsSubTabBar")
+        outer_layout.addWidget(self.settings_sub_tabs, 1)
 
         sql_group = QGroupBox("تنظیمات SQL Server")
         sql_group.setLayoutDirection(Qt.LeftToRight)
@@ -2128,13 +2125,26 @@ class SettingsTab(QWidget):
         self.backup_group = backup_group
         self._refresh_backup_list()
 
-        self.main_grid = QGridLayout()
-        self.main_grid.setHorizontalSpacing(12)
-        self.main_grid.setVerticalSpacing(12)
-        root_layout.addLayout(self.main_grid)
+        wc_page_scroll = self._build_settings_page([self.wc_group])
+        self.scroll_area = wc_page_scroll
 
-        scroll_area.setWidget(container)
-        outer_layout.addWidget(scroll_area)
+        self.settings_sub_tabs.addTab(self._build_settings_page([self.sql_group]), "🔌 دیتابیس")
+        self.settings_sub_tabs.addTab(wc_page_scroll, "🛒 فروشگاه")
+        self.settings_sub_tabs.addTab(self._build_settings_page([self.app_group]), "⚙️ عمومی")
+        self.settings_sub_tabs.addTab(
+            self._build_settings_page([self.fields_group, self.customer_group]),
+            "🔄 همگام‌سازی و مشتری",
+        )
+        self.settings_sub_tabs.addTab(
+            self._build_settings_page(
+                [self.telegram_group, self.bale_group, self.ai_group, self.brand_group]
+            ),
+            "🔔 اعلان‌ها و هوش مصنوعی",
+        )
+        self.settings_sub_tabs.addTab(
+            self._build_settings_page([self.monitor_group, self.license_group, self.backup_group]),
+            "🛡️ سیستم",
+        )
 
         # ── نوار ذخیره چسبیده به پایین (خارج از اسکرول) ────────────────
         self._save_bar = QWidget()
@@ -2251,70 +2261,27 @@ class SettingsTab(QWidget):
             QTimer.singleShot(200, lambda: self._sync_mdf_from_selected_database(silent=True, background=True))
         self._db_picker_apply_enabled = True
         self._snapshot_field_baselines()
-        self._update_responsive_layout()
 
         self._dev_locked = True
         self._apply_dev_lock_ui()
 
-    def _clear_grid(self, grid):
-        while grid.count():
-            item = grid.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.setParent(None)
+    def _build_settings_page(self, groups: list) -> QScrollArea:
+        """یک زیرتبِ تنظیمات: اسکرولِ مستقل فقط برایِ گروه‌هایِ همون دسته —
+        به‌جایِ یک اسکرولِ ۲متری برایِ کلِ ۱۲ گروه با هم."""
+        page = QWidget()
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(4, 4, 4, 4)
+        page_layout.setSpacing(12)
+        for group in groups:
+            page_layout.addWidget(group)
+        page_layout.addStretch()
 
-    def _update_responsive_layout(self):
-        # در عرض زیاد: 2x2 ، در عرض کم: تک ستونه
-        grid = getattr(self, "main_grid", None)
-        if grid is None or not getattr(self, "sql_group", None):
-            return
-
-        compact = self.width() <= 1200
-        if self._settings_compact is not None and compact == self._settings_compact:
-            return
-
-        self._clear_grid(grid)
-
-        if compact:
-            grid.addWidget(self.sql_group, 0, 0)
-            grid.addWidget(self.app_group, 1, 0)
-            grid.addWidget(self.wc_group, 2, 0)
-            grid.addWidget(self.telegram_group, 3, 0)
-            grid.addWidget(self.bale_group, 4, 0)
-            grid.addWidget(self.brand_group, 5, 0)
-            grid.addWidget(self.ai_group, 6, 0)
-            grid.addWidget(self.customer_group, 7, 0)
-            grid.addWidget(self.fields_group, 8, 0)
-            grid.addWidget(self.license_group, 9, 0)
-            grid.addWidget(self.monitor_group, 10, 0)
-            grid.addWidget(self.backup_group, 11, 0)
-        else:
-            grid.addWidget(self.sql_group, 0, 0)
-            grid.addWidget(self.app_group, 0, 1)
-            grid.addWidget(self.wc_group, 1, 0)
-            grid.addWidget(self.monitor_group, 1, 1)
-            grid.addWidget(self.telegram_group, 2, 0)
-            grid.addWidget(self.bale_group, 2, 1)
-            grid.addWidget(self.brand_group, 3, 0, 1, 2)
-            grid.addWidget(self.ai_group, 4, 0, 1, 2)
-            grid.addWidget(self.customer_group, 5, 0)
-            grid.addWidget(self.license_group, 5, 1)
-            grid.addWidget(self.fields_group, 6, 0, 1, 2)
-            grid.addWidget(self.backup_group, 7, 0, 1, 2)
-            grid.setColumnStretch(0, 1)
-            grid.setColumnStretch(1, 1)
-
-        self._settings_compact = compact
-
-    def showEvent(self, event):
-        super().showEvent(event)
-        if getattr(self, "main_grid", None) is not None and self.main_grid.count() == 0:
-            self._settings_compact = None
-            self._update_responsive_layout()
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self._update_responsive_layout()
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setWidget(page)
+        return scroll
 
     def _ensure_sql_op_log(self):
         from sync_app.core.sql_operation_log_dialog import SqlOperationLogDialog
@@ -2836,7 +2803,11 @@ class SettingsTab(QWidget):
         self._open_external_url(self._wp_admin_url("wp-admin/users.php"))
 
     def _focus_wp_username_field(self):
-        """اسکرول به فیلد WP Username و هایلایت کوتاه."""
+        """رفتن به زیرتبِ «فروشگاه»، اسکرول به فیلد WP Username و هایلایت کوتاه."""
+        try:
+            self.settings_sub_tabs.setCurrentWidget(self.scroll_area)
+        except Exception:
+            pass
         self.wp_username_input.setFocus(Qt.OtherFocusReason)
         try:
             self.scroll_area.ensureWidgetVisible(self.wp_username_input, 40, 40)
@@ -3883,12 +3854,6 @@ class SettingsTab(QWidget):
         save_secure_config(new_cfg)
         self.config = dict(new_cfg)
         self._ui_built = False
-        # _update_responsive_layout (که init_ui صداش می‌زنه) اگه compact/wide با
-        # دفعه‌ی قبل فرق نکنه، زودتر برمی‌گرده و main_grid رو پر نمی‌کنه — چون
-        # این تب همین الان هم دیده می‌شه (نه در حالِ نمایشِ اولیه)، showEvent هم
-        # دوباره شلیک نمی‌شه تا این حالتِ خالی رو خودش تشخیص بده. با ریست‌کردنِ
-        # این پرچم قبل از بازسازی، مطمئن می‌شیم گرید همیشه واقعاً پر بشه.
-        self._settings_compact = None
         self._deferred_build_ui()
 
         from sync_app.core.connectivity_guard import find_peecha_launcher
