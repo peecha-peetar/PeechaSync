@@ -18,6 +18,7 @@ import logging
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
+    QComboBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -39,6 +40,10 @@ log = logging.getLogger("SyncApp")
 
 _SEARCH_PAGE_SIZE = 20
 _COLOR_MATCHED = QColor("#dcfce7")  # هم‌رنگِ «قبلاً تطبیق داده شده» در تبِ تطبیقِ معمولی
+
+_LINK_FILTER_ALL = "all"
+_LINK_FILTER_LINKED = "linked"
+_LINK_FILTER_UNLINKED = "unlinked"
 
 
 # ----------------------------------------------------------------------
@@ -330,13 +335,46 @@ class StructureReconciliationTab(QWidget):
 
         sub_tabs = QTabWidget()
         sub_tabs.setLayoutDirection(Qt.RightToLeft)
-        sub_tabs.addTab(self._build_site_variation_section(), "🧩 سایت متغیر / ERP ساده")
-        sub_tabs.addTab(self._build_force_simple_section(), "📦 ERP متغیر / سایت ساده")
+        sub_tabs.addTab(self._build_site_variation_section(), f"🧩 سایت متغیر / {self.erp_label} ساده")
+        sub_tabs.addTab(self._build_force_simple_section(), f"📦 {self.erp_label} متغیر / سایت ساده")
         root.addWidget(sub_tabs)
 
     def _keep_loader(self, loader: QThread):
         self._loaders.append(loader)
         loader.finished.connect(lambda l=loader: self._loaders.remove(l) if l in self._loaders else None)
+
+    def _build_link_filter_combo(self, on_change) -> QComboBox:
+        """کمبویِ «همه/فقط لینک‌شده/فقط لینک‌نشده» — بالایِ هر دو لیستِ
+        یک بخش، تا نتیجه‌هایِ قبلاً‌تطبیق‌داده‌شده از تطبیق‌نشده‌ها جدا
+        دیده بشن (وگرنه با زیاد شدنِ کالاها همه قاطی به نظر می‌رسن)."""
+        combo = QComboBox()
+        combo.setLayoutDirection(Qt.RightToLeft)
+        combo.addItem("همه", _LINK_FILTER_ALL)
+        combo.addItem("✅ فقط لینک‌شده", _LINK_FILTER_LINKED)
+        combo.addItem("⭕ فقط لینک‌نشده", _LINK_FILTER_UNLINKED)
+        combo.setMinimumWidth(140)
+        combo.currentIndexChanged.connect(on_change)
+        return combo
+
+    def _populate_list_with_matches(self, list_widget: QListWidget, entries: list, filter_state: str) -> int:
+        """entries: [(text, data, matched: bool, tooltip: str), ...] — رندرِ
+        لیست با توجه به فیلترِ لینک‌شده/لینک‌نشده. خروجی: تعدادِ نمایش‌داده‌شده."""
+        list_widget.clear()
+        shown = 0
+        for text, data, matched, tooltip in entries:
+            if filter_state == _LINK_FILTER_LINKED and not matched:
+                continue
+            if filter_state == _LINK_FILTER_UNLINKED and matched:
+                continue
+            item = QListWidgetItem(f"✅ {text}" if matched else text)
+            item.setData(Qt.UserRole, data)
+            if matched:
+                item.setBackground(_COLOR_MATCHED)
+                if tooltip:
+                    item.setToolTip(tooltip)
+            list_widget.addItem(item)
+            shown += 1
+        return shown
 
     # ------------------------------------------------------------------
     # حالتِ ۱: سایت متغیر داره، ERP ساده می‌بینه
@@ -344,18 +382,23 @@ class StructureReconciliationTab(QWidget):
     def _build_site_variation_section(self) -> QWidget:
         panel = QWidget()
         v = QVBoxLayout(panel)
+        v.setSpacing(6)
 
         hint = QLabel(
-            f"سایت این محصول رو متغیر (با چند واریانت) نشون می‌ده، ولی هر واریانت در {self.erp_label} یک "
-            "کالایِ سادهٔ جداست. رویِ لیستِ راست، نامِ محصولِ سایت رو جستجو کنید و واریانتِ درست رو انتخاب "
-            f"کنید؛ رویِ لیستِ چپ، SKUِ سادهٔ {self.erp_label}ِ متناظرش رو انتخاب کنید؛ بعد «🔗 تطبیق» رو بزنید.\n"
-            "⚠️ توجه: بعد از تطبیق فقط قیمت و موجودیِ این SKU به همین واریانتِ سایت منتقل می‌شه — تصویر، "
-            "دسته‌بندی، برند و توضیحاتش سینک نمی‌شن (چون این SKU دیگه محصولِ جدایِ خودش رو رویِ سایت نداره؛ "
-            "این‌ها رو باید مستقیم رویِ محصولِ اصلیِ سایت مدیریت کنید)."
+            f"سایت این محصول رو متغیر نشون می‌ده، ولی هر واریانت در {self.erp_label} یک کالایِ سادهٔ جداست — "
+            f"از راست واریانتِ سایت، از چپ SKUِ سادهٔ {self.erp_label} رو انتخاب و «🔗 تطبیق» را بزنید.\n"
+            "⚠️ فقط قیمت/موجودی منتقل می‌شه؛ تصویر/دسته‌بندی/برند را رویِ محصولِ اصلیِ سایت مدیریت کنید."
         )
         hint.setWordWrap(True)
-        hint.setStyleSheet("color:#475569; font-size:12px;")
+        hint.setStyleSheet("color:#475569; font-size:11px;")
         v.addWidget(hint)
+
+        filter_row = QHBoxLayout()
+        filter_row.addWidget(QLabel("نمایش:"))
+        self.sv_link_filter = self._build_link_filter_combo(self._on_sv_link_filter_changed)
+        filter_row.addWidget(self.sv_link_filter)
+        filter_row.addStretch(1)
+        v.addLayout(filter_row)
 
         columns = QHBoxLayout()
 
@@ -373,6 +416,7 @@ class StructureReconciliationTab(QWidget):
         site_col.addWidget(QLabel("واریانت‌هایِ سایت:"))
         self.sv_site_list = QListWidget()
         self.sv_site_list.setLayoutDirection(Qt.RightToLeft)
+        self.sv_site_list.setMinimumHeight(240)
         site_col.addWidget(self.sv_site_list, 1)
         columns.addLayout(site_col, 1)
 
@@ -399,10 +443,11 @@ class StructureReconciliationTab(QWidget):
         erp_col.addWidget(QLabel(f"کالاهایِ سادهٔ {self.erp_label}:"))
         self.sv_erp_list = QListWidget()
         self.sv_erp_list.setLayoutDirection(Qt.RightToLeft)
+        self.sv_erp_list.setMinimumHeight(240)
         erp_col.addWidget(self.sv_erp_list, 1)
         columns.addLayout(erp_col, 1)
 
-        v.addLayout(columns, 1)
+        v.addLayout(columns, 3)
 
         self.sv_status_label = QLabel("")
         self.sv_status_label.setStyleSheet("color:#64748b; font-size:12px;")
@@ -415,7 +460,7 @@ class StructureReconciliationTab(QWidget):
         self.sv_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.sv_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.sv_table.verticalHeader().setVisible(False)
-        self.sv_table.setMaximumHeight(160)
+        self.sv_table.setMaximumHeight(120)
         v.addWidget(self.sv_table)
 
         return panel
@@ -433,21 +478,23 @@ class StructureReconciliationTab(QWidget):
             return
         from sync_app.core.structure_mismatch_override import find_erp_sku_for_site_variation
 
-        self.sv_site_list.clear()
         matched_count = 0
+        entries = []
         for parent_id, variation_id, label in options:
             matched_sku = find_erp_sku_for_site_variation(parent_id, variation_id)
             if matched_sku:
                 matched_count += 1
-            item = QListWidgetItem(f"✅ {label}" if matched_sku else label)
-            item.setData(Qt.UserRole, (parent_id, variation_id, label))
-            if matched_sku:
-                item.setBackground(_COLOR_MATCHED)
-                item.setToolTip(f"قبلاً به SKUِ «{matched_sku}» تطبیق داده شده")
-            self.sv_site_list.addItem(item)
+            tooltip = f"قبلاً به SKUِ «{matched_sku}» تطبیق داده شده" if matched_sku else ""
+            entries.append((label, (parent_id, variation_id, label), bool(matched_sku), tooltip))
+        self._sv_site_entries = entries
+        self._render_sv_site_list()
         self.sv_status_label.setText(
             f"✅ {len(options)} واریانتِ سایت پیدا شد — {matched_count} تا قبلاً تطبیق داده شده."
         )
+
+    def _render_sv_site_list(self):
+        filter_state = self.sv_link_filter.currentData()
+        self._populate_list_with_matches(self.sv_site_list, getattr(self, "_sv_site_entries", []), filter_state)
 
     def _sv_search_erp(self):
         self.sv_status_label.setText(f"⏳ در حالِ جستجویِ کالاهایِ {self.erp_label}...")
@@ -462,27 +509,32 @@ class StructureReconciliationTab(QWidget):
             return
         from sync_app.core.structure_mismatch_override import get_site_variation_target
 
-        self.sv_erp_list.clear()
         matched_count = 0
+        entries = []
         for sku, label in options:
             matched = get_site_variation_target(sku) is not None
             if matched:
                 matched_count += 1
-            item = QListWidgetItem(f"✅ {label}" if matched else label)
-            item.setData(Qt.UserRole, sku)
-            if matched:
-                item.setBackground(_COLOR_MATCHED)
-                item.setToolTip("قبلاً تطبیق داده شده")
-            self.sv_erp_list.addItem(item)
+            entries.append((label, sku, matched, "قبلاً تطبیق داده شده" if matched else ""))
+        self._sv_erp_entries = entries
+        self._render_sv_erp_list()
         self.sv_status_label.setText(
             f"✅ {len(options)} کالایِ {self.erp_label} پیدا شد — {matched_count} تا قبلاً تطبیق داده شده."
         )
+
+    def _render_sv_erp_list(self):
+        filter_state = self.sv_link_filter.currentData()
+        self._populate_list_with_matches(self.sv_erp_list, getattr(self, "_sv_erp_entries", []), filter_state)
+
+    def _on_sv_link_filter_changed(self):
+        self._render_sv_site_list()
+        self._render_sv_erp_list()
 
     def _sv_save(self):
         site_selected = self.sv_site_list.selectedItems()
         erp_selected = self.sv_erp_list.selectedItems()
         if not site_selected or not erp_selected:
-            QMessageBox.warning(self, "توجه", "یک واریانتِ سایت و یک SKUِ ERP را از لیست‌ها انتخاب کنید.")
+            QMessageBox.warning(self, "توجه", f"یک واریانتِ سایت و یک SKUِ {self.erp_label} را از لیست‌ها انتخاب کنید.")
             return
         site_item = site_selected[0]
         erp_item = erp_selected[0]
@@ -543,19 +595,23 @@ class StructureReconciliationTab(QWidget):
     def _build_force_simple_section(self) -> QWidget:
         panel = QWidget()
         v = QVBoxLayout(panel)
+        v.setSpacing(6)
 
         hint = QLabel(
-            f"{self.erp_label} این کد کالا رو متغیر (با چند زیرواریانت) می‌بینه، ولی رویِ سایت این یک "
-            "محصولِ ساده‌ست. رویِ لیستِ راست، محصولِ سادهٔ سایت رو با جستجویِ نام پیدا و انتخاب کنید؛ رویِ "
-            f"لیستِ چپ، زیرواریانتِ {self.erp_label}ای که باید منبعِ قیمت/موجودی باشه رو انتخاب کنید؛ بعد "
-            "«🔗 تطبیق» رو بزنید — بقیهٔ زیرواریانت‌ها نادیده گرفته می‌شن.\n"
-            "✅ توجه: بعد از تطبیق، این کد کاملاً مثلِ یک محصولِ سادهٔ معمولی سینک می‌شه — قیمت، موجودی، "
-            "تصویر، دسته‌بندی و برند هم مثلِ همیشه اعمال می‌شن؛ فقط منبعِ قیمت/موجودیش از همین "
-            "زیرواریانتِ انتخاب‌شده خونده می‌شه."
+            f"{self.erp_label} این کد رو متغیر می‌بینه، ولی رویِ سایت یک محصولِ ساده‌ست — از راست محصولِ "
+            f"سایت، از چپ زیرواریانتِ {self.erp_label}ای که منبعِ قیمت/موجودی باشه رو انتخاب و «🔗 تطبیق» را بزنید.\n"
+            "✅ بعد از تطبیق، این کد کاملاً مثلِ یک محصولِ سادهٔ معمولی سینک می‌شه (قیمت/موجودی/تصویر/دسته‌بندی)."
         )
         hint.setWordWrap(True)
-        hint.setStyleSheet("color:#475569; font-size:12px;")
+        hint.setStyleSheet("color:#475569; font-size:11px;")
         v.addWidget(hint)
+
+        filter_row = QHBoxLayout()
+        filter_row.addWidget(QLabel("نمایش:"))
+        self.fs_link_filter = self._build_link_filter_combo(self._on_fs_link_filter_changed)
+        filter_row.addWidget(self.fs_link_filter)
+        filter_row.addStretch(1)
+        v.addLayout(filter_row)
 
         columns = QHBoxLayout()
 
@@ -573,6 +629,7 @@ class StructureReconciliationTab(QWidget):
         site_col.addWidget(QLabel("محصولاتِ سایت:"))
         self.fs_site_list = QListWidget()
         self.fs_site_list.setLayoutDirection(Qt.RightToLeft)
+        self.fs_site_list.setMinimumHeight(240)
         site_col.addWidget(self.fs_site_list, 1)
         columns.addLayout(site_col, 1)
 
@@ -599,10 +656,11 @@ class StructureReconciliationTab(QWidget):
         erp_col.addWidget(QLabel(f"زیرواریانت‌هایِ {self.erp_label}:"))
         self.fs_erp_list = QListWidget()
         self.fs_erp_list.setLayoutDirection(Qt.RightToLeft)
+        self.fs_erp_list.setMinimumHeight(240)
         erp_col.addWidget(self.fs_erp_list, 1)
         columns.addLayout(erp_col, 1)
 
-        v.addLayout(columns, 1)
+        v.addLayout(columns, 3)
 
         self.fs_status_label = QLabel("")
         self.fs_status_label.setStyleSheet("color:#64748b; font-size:12px;")
@@ -615,7 +673,7 @@ class StructureReconciliationTab(QWidget):
         self.fs_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.fs_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.fs_table.verticalHeader().setVisible(False)
-        self.fs_table.setMaximumHeight(160)
+        self.fs_table.setMaximumHeight(120)
         v.addWidget(self.fs_table)
 
         return panel
@@ -644,21 +702,23 @@ class StructureReconciliationTab(QWidget):
                 except (TypeError, ValueError):
                     continue
 
-        self.fs_site_list.clear()
         matched_count = 0
+        entries = []
+        tooltip = f"این محصول الان منبعِ قیمت/موجودیش از یک کدِ {self.erp_label} تعیین شده"
         for pid, label, sku in options:
             matched = int(pid) in matched_ids
             if matched:
                 matched_count += 1
-            item = QListWidgetItem(f"✅ {label}" if matched else label)
-            item.setData(Qt.UserRole, (pid, label, sku))
-            if matched:
-                item.setBackground(_COLOR_MATCHED)
-                item.setToolTip("این محصول الان منبعِ قیمت/موجودیش از یک کدِ ERP تعیین شده")
-            self.fs_site_list.addItem(item)
+            entries.append((label, (pid, label, sku), matched, tooltip if matched else ""))
+        self._fs_site_entries = entries
+        self._render_fs_site_list()
         self.fs_status_label.setText(
             f"✅ {len(options)} محصولِ سایت پیدا شد — {matched_count} تا قبلاً تطبیق داده شده."
         )
+
+    def _render_fs_site_list(self):
+        filter_state = self.fs_link_filter.currentData()
+        self._populate_list_with_matches(self.fs_site_list, getattr(self, "_fs_site_entries", []), filter_state)
 
     def _fs_search_erp(self):
         self.fs_status_label.setText(f"⏳ در حالِ جستجویِ زیرواریانت‌هایِ {self.erp_label}...")
@@ -673,27 +733,32 @@ class StructureReconciliationTab(QWidget):
             return
         from sync_app.core.structure_mismatch_override import get_force_simple_source
 
-        self.fs_erp_list.clear()
         matched_count = 0
+        entries = []
         for parent_sku, variant_sku, label in options:
             matched = get_force_simple_source(parent_sku) == variant_sku
             if matched:
                 matched_count += 1
-            item = QListWidgetItem(f"✅ {label}" if matched else label)
-            item.setData(Qt.UserRole, (parent_sku, variant_sku))
-            if matched:
-                item.setBackground(_COLOR_MATCHED)
-                item.setToolTip("این زیرواریانت الان منبعِ فعاله")
-            self.fs_erp_list.addItem(item)
+            entries.append((label, (parent_sku, variant_sku), matched, "این زیرواریانت الان منبعِ فعاله" if matched else ""))
+        self._fs_erp_entries = entries
+        self._render_fs_erp_list()
         self.fs_status_label.setText(
             f"✅ {len(options)} زیرواریانت پیدا شد — {matched_count} تا قبلاً تطبیق داده شده."
         )
+
+    def _render_fs_erp_list(self):
+        filter_state = self.fs_link_filter.currentData()
+        self._populate_list_with_matches(self.fs_erp_list, getattr(self, "_fs_erp_entries", []), filter_state)
+
+    def _on_fs_link_filter_changed(self):
+        self._render_fs_site_list()
+        self._render_fs_erp_list()
 
     def _fs_save(self):
         site_selected = self.fs_site_list.selectedItems()
         erp_selected = self.fs_erp_list.selectedItems()
         if not site_selected or not erp_selected:
-            QMessageBox.warning(self, "توجه", "یک محصولِ سایت و یک زیرواریانتِ ERP را از لیست‌ها انتخاب کنید.")
+            QMessageBox.warning(self, "توجه", f"یک محصولِ سایت و یک زیرواریانتِ {self.erp_label} را از لیست‌ها انتخاب کنید.")
             return
         site_item = site_selected[0]
         erp_item = erp_selected[0]
