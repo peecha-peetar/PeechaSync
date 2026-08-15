@@ -46,6 +46,22 @@ def save_hash_cache(name: str, cache: dict, config=None) -> None:
         log.warning(f"⚠️ ذخیره‌ی کشِ تشخیصِ تغییرات ({name}) ناموفق بود: {exc}")
 
 
+def clear_hash_cache_entry(name: str, sku: str, config=None) -> None:
+    """پاک‌کردنِ هشِ کش‌شده‌یِ یک SKU — وقتی *target*ِ لینک عوض می‌شه (نه
+    محتوایِ ERP)، مثلاً از طریقِ تبِ تطبیق یا تطبیقِ ساختاری، باید سینکِ
+    بعدی حتماً دوباره ارسال کنه، حتی اگه محتوایِ ERP از آخرین‌بار عوض
+    نشده باشه — وگرنه should_skip_unchanged با دیدنِ هشِ قدیمی (که برایِ
+    یک هدفِ لینکِ دیگه، یا اصلاً بدونِ لینک، ثبت شده بود) این SKU رو
+    «از قبل هماهنگ» تشخیص می‌ده و بی‌صدا رد می‌شه."""
+    sku = str(sku or "").strip()
+    if not sku:
+        return
+    cache = load_hash_cache(name, config)
+    if sku in cache:
+        cache.pop(sku, None)
+        save_hash_cache(name, cache, config)
+
+
 def _canonicalize(obj):
     """لیست‌ها (مثلاً ردیف‌های واریانت از SQL، یا مقادیرِ یک ویژگی) لزوماً
     ترتیبِ پایداری بینِ دو اجرای مختلف ندارن — چه به‌خاطرِ نبودِ ORDER BY تو

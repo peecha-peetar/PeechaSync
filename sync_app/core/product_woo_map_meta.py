@@ -78,11 +78,21 @@ def register_product_link(
         "confirmed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
     save_product_woo_map_meta(meta)
-    kind = "دستی" if manual else "خودکار"
-    from sync_app.core.integrations.erp_provider import erp_provider_label
+
     from sync_app.core.secure_config_loader import load_secure_config
 
-    log.info(f"📌 تطبیق {kind} ثبت شد: {erp_provider_label(load_secure_config(None))} {sku} → Woo #{wc_id}")
+    config = load_secure_config(None)
+    # هدفِ لینک عوض شده — هشِ کش‌شده‌یِ سینکِ قبلی دیگه معتبر نیست، وگرنه
+    # سینکِ بعدی ممکنه به‌خاطرِ «محتوایِ ERP عوض نشده» بی‌صدا رد بشه، با
+    # اینکه این SKU تازه به یک محصولِ کاملاً متفاوتِ سایت وصل شده.
+    from sync_app.core.sync_change_cache import clear_hash_cache_entry
+
+    clear_hash_cache_entry("products", sku, config)
+
+    kind = "دستی" if manual else "خودکار"
+    from sync_app.core.integrations.erp_provider import erp_provider_label
+
+    log.info(f"📌 تطبیق {kind} ثبت شد: {erp_provider_label(config)} {sku} → Woo #{wc_id}")
 
 
 def clear_product_link_meta(erp_sku: str) -> None:
@@ -94,6 +104,10 @@ def clear_product_link_meta(erp_sku: str) -> None:
     if sku in links:
         del links[sku]
         save_product_woo_map_meta(meta)
+        from sync_app.core.secure_config_loader import load_secure_config
+        from sync_app.core.sync_change_cache import clear_hash_cache_entry
+
+        clear_hash_cache_entry("products", sku, load_secure_config(None))
 
 
 def clear_product_link_meta_for_wc_id(wc_id: int) -> None:

@@ -152,7 +152,22 @@ def infer_line_item_sku(item):
 
 
 def resolve_line_item_variant(cursor, item):
-    """تطبیق یک خط سفارش ووکامرس به کد کالا و واریانت ERP."""
+    """تطبیق یک خط سفارش ووکامرس/پرستاشاپ به کد کالا و واریانت ERP."""
+    # حالتِ ۱ از تبِ «تطبیقِ ساختاری»: این واریانتِ سایت در واقع یک SKUِ
+    # سادهٔ ERPِ مستقله (نه واریانتِ خودِ محصول) — قبل از هر تلاشِ دیگه‌ای
+    # چک می‌کنیم، چون SKUِ خودِ این واریانت رویِ سایت با کدِ ERP فرقی داره.
+    try:
+        site_parent_id = int(item.get("product_id") or 0)
+        site_variation_id = int(item.get("variation_id") or 0)
+    except (TypeError, ValueError):
+        site_parent_id = site_variation_id = 0
+    if site_parent_id and site_variation_id:
+        from sync_app.core.structure_mismatch_override import find_erp_sku_for_site_variation
+
+        forced_sku = find_erp_sku_for_site_variation(site_parent_id, site_variation_id)
+        if forced_sku:
+            return forced_sku, None, None, forced_sku
+
     sku = infer_line_item_sku(item)
     a_code, poshak_id_c, parts = parse_sku(sku)
 
@@ -183,6 +198,20 @@ def resolve_line_item_variant(cursor, item):
             poshak_id_f, r_arcode_c = resolve_variant_by_names(
                 cursor, a_code, size_name or "", color_name or ""
             )
+
+    # حالتِ ۲ از تبِ «تطبیقِ ساختاری»: این کدِ ERP رویِ سایت به‌عنوانِ یک
+    # محصولِ سادهٔ بدونِ انتخابِ رنگ/سایز فروخته می‌شه، پس خطِ سفارش هیچ
+    # نشونه‌ای از زیرواریانت نداره — باید همون زیرواریانتِ ثابتی که کاربر
+    # در تبِ «تطبیقِ ساختاری» به‌عنوانِ منبعِ قیمت/موجودی انتخاب کرده،
+    # به فروش نسبت داده بشه.
+    if (poshak_id_f is None or r_arcode_c is None) and a_code:
+        from sync_app.core.structure_mismatch_override import get_force_simple_source
+
+        source_sku = get_force_simple_source(a_code)
+        if source_sku:
+            _src_code, src_poshak_id_c, _src_parts = parse_sku(source_sku)
+            if src_poshak_id_c is not None:
+                poshak_id_f, r_arcode_c = resolve_variant_by_codes(cursor, a_code, src_poshak_id_c)
 
     return a_code, poshak_id_f, r_arcode_c, sku
 
@@ -304,10 +333,35 @@ def insert_order(order):
                 continue
 
             a_code, poshak_id_f, r_arcode_c, sku = resolve_line_item_variant(cursor, item)
-            if not a_code or r_arcode_c is None or poshak_id_f is None:
+            if not a_code:
                 skipped.append(sku or item.get("name") or "?")
-                log.warning(f"⚠️ تطبیق واریانت یافت نشد: order={order_id}, sku='{sku}'")
+                log.warning(f"⚠️ کدِ کالا شناسایی نشد: order={order_id}, sku='{sku}'")
                 continue
+
+            if poshak_id_f is None or r_arcode_c is None:
+                # طبقِ ترِیسِ واقعیِ SQL Profiler از خودِ نرم‌افزارِ دژاوو (نه
+                # حدس): وقتی کاربر مستقیم در دژاوو برایِ یک کالایِ کاملاً سادهٔ
+                # ERP سفارش ثبت می‌کنه، فقط RqTitle + RqDetail درج می‌شه —
+                # اصلاً هیچ ردیفی در ItemFact نمی‌سازه (ItemFact ظاهراً فقط
+                # برایِ کالاهایِ دارایِ رنگ/سایز، برایِ کسرِ موجودیِ دقیقِ همون
+                # واریانت لازمه). پس برایِ کالایِ کاملاً ساده، دیگه کلِ خط رو
+                # رد نمی‌کنیم — عینِ خودِ دژاوو، فقط ردیفِ RqDetail رو می‌سازیم
+                # و ردیفِ ItemFact رو براش نمی‌سازیم (پایین‌تر).
+                if a_code:
+                    from sync_app.core.variation_rules import product_is_variable
+
+                    is_variable = product_is_variable(cursor, a_code)
+                else:
+                    is_variable = None
+                if is_variable:
+                    # کالا واقعاً متغیره (رنگ/سایز داره) ولی واریانتِ درست از
+                    # رویِ این خطِ سفارش پیدا نشد — برایِ جلوگیری از نسبت‌دادنِ
+                    # اشتباهِ فروش/موجودی به یک رنگ/سایزِ غلط، این خط رد می‌شه.
+                    skipped.append(sku or item.get("name") or "?")
+                    log.warning(f"⚠️ تطبیق واریانت یافت نشد: order={order_id}, sku='{sku}'")
+                    continue
+                # کالایِ کاملاً ساده‌ست — poshak_id_f خالی می‌مونه، پایین‌تر
+                # برایِ این خط ItemFact ساخته نمی‌شه (نه خطا، نه رد شدنِ خط).
 
             unit_price = _line_unit_price(item, config)
             r_commen_part = build_r_commen(cursor, poshak_id_f, qty)
@@ -362,6 +416,10 @@ def insert_order(order):
             ))
 
             for variant in variants:
+                if variant["poshak_id_f"] is None:
+                    # کالایِ کاملاً ساده — دقیقاً مثلِ خودِ دژاوو، ItemFact
+                    # براش ساخته نمی‌شه (فقط RqDetailِ بالا کافیه).
+                    continue
                 cursor.execute("""
                     INSERT INTO ItemFact (
                         Fac_Code, Fac_Type, A_Code, A_Index,
@@ -375,7 +433,7 @@ def insert_order(order):
 
         conn.commit()
         inserted_details = len(groups)
-        inserted_facts = sum(len(v) for v in groups.values())
+        inserted_facts = sum(1 for v in groups.values() for variant in v if variant["poshak_id_f"] is not None)
         log.info(
             f"✅ سفارش {order_id} ثبت شد. "
             f"(RqIndex={rqindex_id}, RQDetail={inserted_details}, ItemFact={inserted_facts})"

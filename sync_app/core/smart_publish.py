@@ -365,6 +365,16 @@ def apply_default_pipeline(
         )
         if result.ok and result.dst_path and os.path.isfile(result.dst_path):
             return result.dst_path
+        # run_pipeline خودش استثنا پرت نمی‌کنه — شکستِ هر مرحله رو تویِ
+        # result.error برمی‌گردونه. قبلاً این حالت کاملاً بی‌صدا رد می‌شد
+        # (نه لاگ، نه هیچ نشونه‌ای) و تصویرِ خام آپلود می‌شد — یعنی مثلاً
+        # یک واترمارکِ ناموفق هیچ‌وقت به چشمِ کسی نمی‌رسید.
+        from sync_app.core.sync_utils import log
+
+        log.warning(
+            f"⚠️ روشِ پردازشِ تصویر رویِ {code} ناموفق بود ({result.error or 'نامشخص'}) — "
+            "تصویرِ خام آپلود می‌شه."
+        )
     except Exception as exc:
         from sync_app.core.sync_utils import log
 

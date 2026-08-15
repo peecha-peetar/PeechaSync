@@ -295,6 +295,60 @@ def resolve_existing_product_id(wcapi, sku: str, product_map: dict | None = None
     return None, product_map
 
 
+def fetch_live_wc_ids(wcapi, config=None) -> set[int] | None:
+    """مجموعه‌یِ idِ همه‌ی محصولاتِ زنده‌یِ سایت (برایِ ووکامرس: هر
+    وضعیتی جز trash؛ پرستاشاپ زباله‌دان نداره، هر چی برگرده زنده‌ست) —
+    یک واکشیِ سبکِ یک‌جا در ابتدایِ سینکِ کامل.
+
+    چرا لازمه: تشخیصِ‌تغییرِ سینک (should_skip_unchanged) وقتی SKU در
+    product_woo_map.json باشه و دادهٔ ERP از آخرین‌بار عوض نشده باشه،
+    بی‌صدا رد می‌کنه — بدونِ این‌که هیچ‌وقت با سایت چک کنه اون محصول
+    هنوز زنده‌ست یا نه. اگه کاربر محصول رو مستقیم رویِ سایت پاک کرده
+    باشه، این یعنی سینکِ بعدی هیچ‌وقت متوجه نمی‌شه و محصولِ جدید هم
+    نمی‌سازه. با این مجموعه، فراخوان می‌تونه قبل از تصمیمِ رد/نرد،
+    نگاشتِ محلی رو با واقعیتِ سایت تطبیق بده — بدونِ نیازِ به یک
+    درخواستِ جدا به‌ازایِ هر SKU (که کندی رو کاملاً نقض می‌کرد).
+
+    خروجی None یعنی خودِ واکشی ناموفق بود (نه اینکه فروشگاه خالیه) —
+    فراخوان باید در این حالت به رفتارِ قبلی (اعتماد به نگاشتِ محلی)
+    برگرده؛ وگرنه یک قطعیِ موقتِ شبکه می‌تونه باعثِ ساختِ محصولاتِ
+    تکراری برایِ صدها SKUِ کاملاً معتبر بشه."""
+    from sync_app.core.integrations.commerce_provider import is_prestashop
+
+    cfg = config or {}
+    if is_prestashop(cfg):
+        from sync_app.core.ps_sync_helper import ps_list_products
+
+        try:
+            products = ps_list_products(cfg)
+        except Exception as exc:
+            log.warning(f"⚠️ واکشیِ idهایِ زندهٔ محصولاتِ پرستاشاپ ناموفق بود: {exc}")
+            return None
+        return {int(p["id"]) for p in products if isinstance(p, dict) and p.get("id")}
+
+    ids: set[int] = set()
+    page = 1
+    while True:
+        try:
+            resp = wcapi.get(
+                "products",
+                params={"_fields": "id,status", "status": "any", "per_page": 100, "page": page},
+            )
+            data = wc_parse_json(resp, "واکشیِ idهایِ زندهٔ محصولات")
+        except Exception as exc:
+            log.warning(f"⚠️ واکشیِ idهایِ زندهٔ محصولاتِ ووکامرس ناموفق بود (صفحه {page}): {exc}")
+            return None
+        if not isinstance(data, list) or not data:
+            break
+        for row in data:
+            if isinstance(row, dict) and row.get("id") and _is_active_wc_product(row):
+                ids.add(int(row["id"]))
+        if len(data) < 100:
+            break
+        page += 1
+    return ids
+
+
 def verify_product_saved(wcapi, product_id: int, sku: str = "") -> dict:
     info = fetch_product_by_id(wcapi, int(product_id))
     if not info:

@@ -36,6 +36,14 @@ def _order_row_to_line_item(row: dict) -> dict:
         unit_price = float(row.get("unit_price_tax_excl") or 0)
     except (TypeError, ValueError):
         unit_price = 0.0
+    try:
+        product_id = int(row.get("product_id") or 0)
+    except (TypeError, ValueError):
+        product_id = 0
+    try:
+        variation_id = int(row.get("product_attribute_id") or 0)
+    except (TypeError, ValueError):
+        variation_id = 0
     return {
         "sku": str(row.get("product_reference") or "").strip(),
         "name": str(row.get("product_name") or "").strip(),
@@ -43,6 +51,10 @@ def _order_row_to_line_item(row: dict) -> dict:
         "price": unit_price,
         "subtotal": unit_price * qty,
         "meta_data": [],
+        # هم‌شکلِ خطِ سفارشِ ووکامرس (product_id/variation_id) — برایِ
+        # تطبیقِ ساختاریِ «سایت متغیر/ERP ساده» در ordersync.py.
+        "product_id": product_id,
+        "variation_id": variation_id,
     }
 
 

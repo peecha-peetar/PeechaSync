@@ -20,6 +20,7 @@ from sync_app.core.product_mode import is_simple_only
 from sync_app.core.tabs.tab_categories import CategoryTab
 from sync_app.core.tabs.tab_category_brand_studio import CategoryBrandStudioTab
 from sync_app.core.tabs.tab_price_list_studio import PriceListStudioTab
+from sync_app.core.tabs.tab_structure_reconciliation import StructureReconciliationTab
 from sync_app.core.tabs.tab_properties import PropertiesTab
 from sync_app.core.tabs.tab_products import ProductTab
 from sync_app.core.tabs.tab_variations import VariationsTab
@@ -49,6 +50,7 @@ class SyncHubTab(QWidget):
             product_tab_ref=self.product_tab, category_tab_ref=self.category_tab,
         )
         self.price_list_studio_tab = PriceListStudioTab()
+        self.structure_reconciliation_tab = StructureReconciliationTab()
 
         # اگه فروشگاه فقط محصول ساده داره (بدون ویژگی/متغیر)، این دو زیرتب
         # رو اصلاً نشون نده — نمونه‌شون همچنان ساخته می‌شه (برای سازگاری با
@@ -66,6 +68,7 @@ class SyncHubTab(QWidget):
         self.sub_tabs.addTab(self.order_tab, "🧾 سفارشات")
         self.sub_tabs.addTab(self.category_brand_studio_tab, "🏷️ دسته‌بندی و برند")
         self.sub_tabs.addTab(self.price_list_studio_tab, "💰 لیستِ قیمت")
+        self.sub_tabs.addTab(self.structure_reconciliation_tab, "🔀 تطبیقِ ساختاری")
 
         layout.addWidget(self.sub_tabs)
         self.setLayout(layout)
@@ -81,6 +84,7 @@ class SyncHubTab(QWidget):
             "order_tab": self.order_tab,
             "category_brand_studio_tab": self.category_brand_studio_tab,
             "price_list_studio_tab": self.price_list_studio_tab,
+            "structure_reconciliation_tab": self.structure_reconciliation_tab,
         }
 
     def select_sub_tab(self, attr_name: str) -> bool:
@@ -94,6 +98,7 @@ class SyncHubTab(QWidget):
             "order_tab": self.order_tab,
             "category_brand_studio_tab": self.category_brand_studio_tab,
             "price_list_studio_tab": self.price_list_studio_tab,
+            "structure_reconciliation_tab": self.structure_reconciliation_tab,
         }
         widget = mapping.get(attr_name)
         if widget is None:

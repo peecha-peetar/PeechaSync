@@ -619,7 +619,7 @@ def _fetch_ps_products(
     *,
     cancel_check: Callable[[], bool] | None = None,
 ) -> list[ReconRow]:
-    from sync_app.core.ps_sync_helper import ps_list_products
+    from sync_app.core.ps_sync_helper import ps_list_products, ps_list_categories
     from sync_app.core.ps_variation_helper import ps_list_all_combinations_grouped
 
     _check_recon_cancel(cancel_check)
@@ -632,6 +632,16 @@ def _fetch_ps_products(
         grouped = ps_list_all_combinations_grouped(config, timeout=timeout)
     except Exception:
         grouped = {}
+    try:
+        # برای فیلترِ دسته‌بندیِ سایت — ps_list_products فقط idِ دسته رو
+        # برمی‌گردونه، نامش رو از یک واکشیِ یک‌جای categories می‌گیریم.
+        cat_name_by_id = {
+            int(c["id"]): str(c.get("name") or "").strip()
+            for c in ps_list_categories(config, timeout=timeout)
+            if isinstance(c, dict) and c.get("id")
+        }
+    except Exception:
+        cat_name_by_id = {}
 
     rows: list[ReconRow] = []
     for item in products:
@@ -649,6 +659,11 @@ def _fetch_ps_products(
         if sku:
             label += f" — کد {sku}"
         label += f" — {ptype}"
+        categories = [
+            {"id": int(c["id"]), "name": cat_name_by_id.get(int(c["id"]), "")}
+            for c in (item.get("categories") or [])
+            if isinstance(c, dict) and c.get("id")
+        ]
         rows.append(
             ReconRow(
                 key=f"wc:{wc_id}",
@@ -658,7 +673,7 @@ def _fetch_ps_products(
                 side="wc",
                 match_key=sku.lower() if sku else "",
                 erp_key=sku or None,
-                extra={"sku": sku, "type": ptype, "name": name},
+                extra={"sku": sku, "type": ptype, "name": name, "categories": categories},
             )
         )
     rows.sort(key=lambda r: (bool(r.synced), str(r.label or "")))
@@ -680,7 +695,7 @@ def _fetch_wc_products(
         "products",
         params={
             "status": "any",
-            "_fields": "id,sku,name,status,type",
+            "_fields": "id,sku,name,status,type,categories",
         },
         cancel_check=cancel_check,
     )
@@ -701,6 +716,11 @@ def _fetch_wc_products(
         if sku:
             label += f" — کد {sku}"
         label += f" — {ptype}"
+        categories = [
+            {"id": int(c["id"]), "name": str(c.get("name") or "").strip()}
+            for c in (item.get("categories") or [])
+            if isinstance(c, dict) and c.get("id")
+        ]
         rows.append(
             ReconRow(
                 key=f"wc:{wc_id}",
@@ -710,7 +730,7 @@ def _fetch_wc_products(
                 side="wc",
                 match_key=sku.lower() if sku else "",
                 erp_key=sku or None,
-                extra={"sku": sku, "type": ptype, "name": name},
+                extra={"sku": sku, "type": ptype, "name": name, "categories": categories},
             )
         )
     rows.sort(key=lambda r: (bool(r.synced), str(r.label or "")))

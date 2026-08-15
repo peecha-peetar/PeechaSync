@@ -7,7 +7,6 @@ import threading
 from PyQt5.QtCore import Qt, QTimer, QEvent
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QFileDialog,
     QFrame,
@@ -105,9 +104,13 @@ ATTR_RECON_SYNCED_HEADER = "── ✅ نام یکسان — تطبیق خودک
 RECON_COLUMNS_SPLITTER_KEY = "RECON_COLUMNS_SPLITTER_SIZES"
 DEFAULT_RECON_COLUMNS_SPLITTER_SIZES = [380, 196, 380]
 MIDDLE_COLUMN_WIDTH = 196
-RECON_ONLY_UNSYNCED_KEY = "RECON_ONLY_UNSYNCED"
+RECON_ONLY_UNSYNCED_KEY = "RECON_ONLY_UNSYNCED"  # کلیدِ قدیمی (boolean) — فقط برایِ مهاجرت خونده می‌شه
+RECON_SYNC_FILTER_KEY = "RECON_SYNC_FILTER"  # "all" | "synced" | "unsynced"
 RECON_TOP_SPLITTER_KEY = "RECON_TOP_SPLITTER_SIZES"
-DEFAULT_RECON_TOP_SPLITTER_SIZES = [320, 480]
+# پیش‌فرض جمع‌وجورتر شد (راهنما بسته شروع می‌شه) — قبلاً ۳۲۰px فضای زیادی
+# می‌گرفت؛ کاربر با کشیدنِ اهرمِ splitter (یا دکمهٔ ✕ رو دوباره باز کردن)
+# هنوزم می‌تونه راهنما رو ببینه — همون مکانیزمِ _collapse_hero_guide.
+DEFAULT_RECON_TOP_SPLITTER_SIZES = [0, 480]
 RECON_TOP_MIN_HEIGHT = 0
 RECON_BOTTOM_MIN_HEIGHT = 220
 RECON_TOP_EXPANDED_DEFAULT = 320
@@ -228,30 +231,54 @@ class ReconciliationTab(QWidget):
         type_row.addWidget(type_label)
         type_row.addWidget(self.entity_combo)
 
-        self.category_filter_label = QLabel("دسته‌بندی:")
+        self.category_filter_label = QLabel(f"دستهٔ {self._erp_label()}:")
         self.category_filter_label.setProperty("role", "caption")
         self.category_filter_combo = QComboBox()
         self.category_filter_combo.setObjectName("reconCategoryFilterCombo")
         self.category_filter_combo.setLayoutDirection(Qt.RightToLeft)
-        self.category_filter_combo.setMinimumWidth(120)
-        self.category_filter_combo.setMaximumWidth(170)
-        self.category_filter_combo.addItem("همه دسته‌بندی‌ها", "")
+        self.category_filter_combo.setMinimumWidth(110)
+        self.category_filter_combo.setMaximumWidth(150)
+        self.category_filter_combo.addItem("همه", "")
         self.category_filter_combo.setToolTip(
-            "فقط محصولات/متغیرهای همین دسته‌بندی رو تو لیست پایین نشون بده — "
-            "این فقط روی نمایشه، چیزی رو حذف/غیرفعال نمی‌کنه."
+            f"فقط ردیف‌هایِ {self._erp_label()} همین دسته‌بندی رو تو لیستِ سمتِ "
+            f"{self._erp_label()} نشون بده — این فقط روی نمایشه، چیزی رو حذف/غیرفعال نمی‌کنه."
         )
         self.category_filter_combo.currentIndexChanged.connect(self._on_category_filter_changed)
         type_row.addWidget(self.category_filter_label)
         type_row.addWidget(self.category_filter_combo)
+
+        self.site_category_filter_label = QLabel("دستهٔ سایت:")
+        self.site_category_filter_label.setProperty("role", "caption")
+        self.site_category_filter_combo = QComboBox()
+        self.site_category_filter_combo.setObjectName("reconSiteCategoryFilterCombo")
+        self.site_category_filter_combo.setLayoutDirection(Qt.RightToLeft)
+        self.site_category_filter_combo.setMinimumWidth(110)
+        self.site_category_filter_combo.setMaximumWidth(150)
+        self.site_category_filter_combo.addItem("همه", "")
+        self.site_category_filter_combo.setToolTip(
+            "فقط ردیف‌هایِ همین دسته‌بندیِ واقعیِ سایت (ووکامرس/پرستاشاپ) رو تو "
+            "لیستِ سمتِ سایت نشون بده — مستقل از فیلترِ دستهٔ سمتِ چپ."
+        )
+        self.site_category_filter_combo.currentIndexChanged.connect(self._on_category_filter_changed)
+        type_row.addWidget(self.site_category_filter_label)
+        type_row.addWidget(self.site_category_filter_combo)
+
         self._update_category_filter_visibility()
 
         status_row.addWidget(self.type_filter)
 
-        self.only_unsynced_cb = QCheckBox("فقط غیرسینک")
-        self.only_unsynced_cb.setObjectName("reconStatusOnlyUnsynced")
-        self._restore_only_unsynced_filter()
-        self.only_unsynced_cb.toggled.connect(self._on_only_unsynced_toggled)
-        status_row.addWidget(self.only_unsynced_cb)
+        self.sync_filter_combo = QComboBox()
+        self.sync_filter_combo.setObjectName("reconSyncFilterCombo")
+        self.sync_filter_combo.setLayoutDirection(Qt.RightToLeft)
+        self.sync_filter_combo.setMinimumWidth(110)
+        self.sync_filter_combo.setMaximumWidth(130)
+        self.sync_filter_combo.addItem("همه", "all")
+        self.sync_filter_combo.addItem("فقط لینک‌شده", "synced")
+        self.sync_filter_combo.addItem("فقط لینک‌نشده", "unsynced")
+        self.sync_filter_combo.setToolTip("بر اساسِ اینکه قبلاً به سایت لینک شده یا نه، فیلتر کن.")
+        self._restore_sync_filter()
+        self.sync_filter_combo.currentIndexChanged.connect(self._on_sync_filter_changed)
+        status_row.addWidget(self.sync_filter_combo)
 
         self.search_toggle_btn = QPushButton("🔍")
         self.search_toggle_btn.setObjectName("reconStatusSearchToggle")
@@ -1059,30 +1086,38 @@ class ReconciliationTab(QWidget):
         erp_w, _, wc_w = DEFAULT_RECON_COLUMNS_SPLITTER_SIZES
         self._apply_columns_splitter_sizes(erp_w, wc_w)
 
-    def _restore_only_unsynced_filter(self):
+    def _restore_sync_filter(self):
         cfg = self.config or load_secure_config(None) or {}
-        checked = bool(cfg.get(RECON_ONLY_UNSYNCED_KEY, False))
-        self.only_unsynced_cb.blockSignals(True)
-        self.only_unsynced_cb.setChecked(checked)
-        self.only_unsynced_cb.blockSignals(False)
+        state = str(cfg.get(RECON_SYNC_FILTER_KEY) or "").strip()
+        if state not in ("all", "synced", "unsynced"):
+            # مهاجرت از تیکِ boolean قدیمی («فقط غیرسینک»)
+            state = "unsynced" if bool(cfg.get(RECON_ONLY_UNSYNCED_KEY, False)) else "all"
+        idx = self.sync_filter_combo.findData(state)
+        self.sync_filter_combo.blockSignals(True)
+        self.sync_filter_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self.sync_filter_combo.blockSignals(False)
 
-    def _on_only_unsynced_toggled(self, *_args):
+    def _sync_filter_state(self) -> str:
+        return str(self.sync_filter_combo.currentData() or "all")
+
+    def _on_sync_filter_changed(self, *_args):
         self._refresh_lists()
-        self._schedule_save_only_unsynced_filter()
+        self._schedule_save_sync_filter()
 
-    def _schedule_save_only_unsynced_filter(self):
-        timer = getattr(self, "_only_unsynced_save_timer", None)
+    def _schedule_save_sync_filter(self):
+        timer = getattr(self, "_sync_filter_save_timer", None)
         if timer is None:
             timer = QTimer(self)
             timer.setSingleShot(True)
             timer.setInterval(300)
-            timer.timeout.connect(self._save_only_unsynced_filter)
-            self._only_unsynced_save_timer = timer
+            timer.timeout.connect(self._save_sync_filter)
+            self._sync_filter_save_timer = timer
         timer.start()
 
-    def _save_only_unsynced_filter(self):
+    def _save_sync_filter(self):
         cfg = load_secure_config(None) or {}
-        cfg[RECON_ONLY_UNSYNCED_KEY] = bool(self.only_unsynced_cb.isChecked())
+        cfg[RECON_SYNC_FILTER_KEY] = self._sync_filter_state()
+        cfg.pop(RECON_ONLY_UNSYNCED_KEY, None)
         save_secure_config(cfg)
         self.config = cfg
 
@@ -1257,6 +1292,8 @@ class ReconciliationTab(QWidget):
         show = self._current_entity() in (ENTITY_PRODUCTS, ENTITY_VARIATIONS)
         self.category_filter_label.setVisible(show)
         self.category_filter_combo.setVisible(show)
+        self.site_category_filter_label.setVisible(show)
+        self.site_category_filter_combo.setVisible(show)
 
     def _populate_category_filter_options(self):
         """گزینه‌های فیلتر رو از جدول S_Group واقعی SQL (کد + نام) پر می‌کنه."""
@@ -1310,6 +1347,31 @@ class ReconciliationTab(QWidget):
 
         run_in_thread(_worker, on_complete=_done, on_error=_fail)
 
+    def _populate_site_category_filter_options(self):
+        """گزینه‌های فیلترِ سمتِ سایت رو از دسته‌بندی‌هایِ واقعیِ محصولاتِ
+        بارگذاری‌شده پر می‌کنه — بدونِ واکشیِ اضافه، چون extra["categories"]
+        هر ردیف از قبل تویِ reconciliation_service پر شده."""
+        current_data = self.site_category_filter_combo.currentData()
+        seen: dict[str, str] = {}
+        rows = self._comparison_unfiltered.wc_rows if self._comparison_unfiltered else []
+        for row in rows:
+            for cat in row.extra.get("categories") or []:
+                if not isinstance(cat, dict):
+                    continue
+                cid = str(cat.get("id") or "").strip()
+                if not cid or cid == "0" or cid in seen:
+                    continue
+                seen[cid] = str(cat.get("name") or "").strip() or cid
+
+        self.site_category_filter_combo.blockSignals(True)
+        self.site_category_filter_combo.clear()
+        self.site_category_filter_combo.addItem("همه", "")
+        for cid, name in sorted(seen.items(), key=lambda kv: kv[1]):
+            self.site_category_filter_combo.addItem(name, cid)
+        idx = self.site_category_filter_combo.findData(current_data)
+        self.site_category_filter_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self.site_category_filter_combo.blockSignals(False)
+
     def _on_category_filter_changed(self):
         self._apply_category_filter()
         self._refresh_lists()
@@ -1320,25 +1382,40 @@ class ReconciliationTab(QWidget):
         اعمال می‌کنه — یعنی تغییر/برداشتن فیلتر هیچ‌وقت داده گم نمی‌کنه.
         فقط برای نمایش/کار روزمره‌ست، آمار و match هم بر اساس همین فیلتر
         محاسبه می‌شن (چون از همون self._comparison مشترک می‌خونن).
+
+        دو فیلترِ کاملاً مستقل: دستهٔ سمتِ ERP فقط رویِ erp_rows (بر اساسِ
+        پیشوندِ کدِ ERP)، دستهٔ سمتِ سایت فقط رویِ wc_rows (بر اساسِ
+        دسته‌بندیِ واقعیِ ووکامرس/پرستاشاپ) اثر می‌ذاره.
         """
         if not self._comparison_unfiltered:
             return
-        group_code = str(self.category_filter_combo.currentData() or "").strip()
-        if not group_code or self._current_entity() not in (ENTITY_PRODUCTS, ENTITY_VARIATIONS):
+        entity_ok = self._current_entity() in (ENTITY_PRODUCTS, ENTITY_VARIATIONS)
+        group_code = str(self.category_filter_combo.currentData() or "").strip() if entity_ok else ""
+        site_cat_id = str(self.site_category_filter_combo.currentData() or "").strip() if entity_ok else ""
+
+        if not group_code and not site_cat_id:
             self._comparison = self._comparison_unfiltered
             return
 
         def _sku_of(row: ReconRow) -> str:
             return str(row.erp_key or row.key or "").split(":")[-1].strip()
 
-        def _matches(row: ReconRow) -> bool:
+        def _erp_matches(row: ReconRow) -> bool:
+            if not group_code:
+                return True
             sku = _sku_of(row)
             return bool(sku) and sku.startswith(group_code)
 
+        def _site_matches(row: ReconRow) -> bool:
+            if not site_cat_id:
+                return True
+            cats = row.extra.get("categories") or []
+            return any(str(c.get("id")) == site_cat_id for c in cats if isinstance(c, dict))
+
         from sync_app.core.reconciliation_service import _compute_stats
 
-        filtered_erp = [r for r in self._comparison_unfiltered.erp_rows if _matches(r)]
-        filtered_wc = [r for r in self._comparison_unfiltered.wc_rows if _matches(r)]
+        filtered_erp = [r for r in self._comparison_unfiltered.erp_rows if _erp_matches(r)]
+        filtered_wc = [r for r in self._comparison_unfiltered.wc_rows if _site_matches(r)]
         filtered = ComparisonResult(
             entity=self._comparison_unfiltered.entity,
             erp_rows=filtered_erp,
@@ -1403,7 +1480,10 @@ class ReconciliationTab(QWidget):
         return (self.search_input.text() or "").strip().lower()
 
     def _row_passes_filter(self, row: ReconRow) -> bool:
-        if self.only_unsynced_cb.isChecked() and row.synced:
+        state = self._sync_filter_state()
+        if state == "unsynced" and row.synced:
+            return False
+        if state == "synced" and not row.synced:
             return False
         query = self._filter_text()
         if not query:
@@ -1903,6 +1983,25 @@ class ReconciliationTab(QWidget):
         item.setForeground(QColor("#475569"))
         widget.addItem(item)
 
+    def _linked_counterpart_label(self, row: ReconRow) -> str:
+        """برایِ ردیف‌هایِ قبلاً لینک‌شده — نامِ طرفِ مقابلی که این ردیف
+        بهش وصله، تا با یک نگاه (بدونِ کلیک کردن) معلوم باشه کدوم آیتم
+        به کدوم لینک شده."""
+        if not row.synced or not self._comparison:
+            return ""
+        hit = find_saved_link_pair(
+            self._comparison.entity,
+            self._comparison.erp_rows,
+            self._comparison.wc_rows,
+            erp_row=row if row.side == "erp" else None,
+            wc_row=row if row.side == "wc" else None,
+        )
+        if not hit:
+            return ""
+        erp, wc = hit
+        counterpart = wc if row.side == "erp" else erp
+        return str(counterpart.label or "").strip()
+
     def _add_row_item(
         self,
         widget: QListWidget,
@@ -1911,6 +2010,7 @@ class ReconciliationTab(QWidget):
         section: str,
         pair_index: int | None = None,
         tooltip: str = "",
+        linked_label: str = "",
     ):
         if section == SECTION_PENDING:
             prefix = f"🔗{pair_index} "
@@ -1925,11 +2025,16 @@ class ReconciliationTab(QWidget):
             prefix = "⚠️ "
             bg = COLOR_UNSYNCED
 
-        item = QListWidgetItem(f"{prefix}{row.label}")
+        text = f"{prefix}{row.label}"
+        if linked_label:
+            text += f"  🔗 {linked_label}"
+        item = QListWidgetItem(text)
         item.setData(Qt.UserRole, row)
         item.setData(ITEM_ROLE_SECTION, section)
         item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
         item.setBackground(bg)
+        if not tooltip and linked_label:
+            tooltip = f"لینک به: {linked_label}"
         if tooltip:
             item.setToolTip(tooltip)
         widget.addItem(item)
@@ -2047,9 +2152,15 @@ class ReconciliationTab(QWidget):
             self._add_section_header(self.erp_list, synced_header)
             self._add_section_header(self.wc_list, synced_header)
             for row in erp_synced:
-                self._add_row_item(self.erp_list, row, section=SECTION_SYNCED)
+                self._add_row_item(
+                    self.erp_list, row, section=SECTION_SYNCED,
+                    linked_label=self._linked_counterpart_label(row),
+                )
             for row in wc_synced:
-                self._add_row_item(self.wc_list, row, section=SECTION_SYNCED)
+                self._add_row_item(
+                    self.wc_list, row, section=SECTION_SYNCED,
+                    linked_label=self._linked_counterpart_label(row),
+                )
 
         self.erp_list.blockSignals(False)
         self.wc_list.blockSignals(False)
@@ -2057,8 +2168,11 @@ class ReconciliationTab(QWidget):
         self._update_pair_buttons()
 
     def _add_empty_hint(self, widget: QListWidget, rows: list[ReconRow], *, side: str):
-        if rows and self.only_unsynced_cb.isChecked() and all(r.synced for r in rows):
-            text = "همه موارد سینک‌شده‌اند — تیک «فقط غیرسینک» را بردارید."
+        sync_state = self._sync_filter_state()
+        if rows and sync_state == "unsynced" and all(r.synced for r in rows):
+            text = "همه موارد لینک‌شده‌اند — فیلترِ «فقط لینک‌نشده» را به «همه» تغییر دهید."
+        elif rows and sync_state == "synced" and all(not r.synced for r in rows):
+            text = "هنوز موردی لینک نشده — فیلترِ «فقط لینک‌شده» را به «همه» تغییر دهید."
         elif rows and self._filter_text():
             text = "نتیجه‌ای با این جستجو یافت نشد."
         elif side == "erp" and self._pending_pairs and not self._filter_text():
@@ -2741,6 +2855,8 @@ class ReconciliationTab(QWidget):
             self._apply_category_filter()
             if self._current_entity() in (ENTITY_PRODUCTS, ENTITY_VARIATIONS):
                 self._populate_category_filter_options()
+                self._populate_site_category_filter_options()
+                self._apply_category_filter()
             self._refresh_lists()
             self._end_load_comparison_ui()
             status = (

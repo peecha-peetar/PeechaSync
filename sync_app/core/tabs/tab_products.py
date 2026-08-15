@@ -3175,6 +3175,7 @@ class ProductTab(QWidget):
                 pid = product_map.get(sku)
                 if not pid:
                     log.warning(f"⚠️ محصول {sku} در پرستاشاپ لینک نشده — رد شد.")
+                    self._last_img_upload_detail = f"محصولِ {sku} به هیچ محصولی در پرستاشاپ لینک نشده."
                     fail_count += 1
                     continue
                 pid = int(pid)
@@ -3207,6 +3208,8 @@ class ProductTab(QWidget):
 
                 if not uploaded:
                     log.warning(f"⚠️ هیچ تصویری برای {sku} با موفقیت آپلود نشد.")
+                    if not self._last_img_upload_detail:
+                        self._last_img_upload_detail = f"هیچ فایلِ تصویرِ معتبری برایِ {sku} روی دیسک پیدا نشد."
                     fail_count += 1
                     continue
 
@@ -3218,6 +3221,8 @@ class ProductTab(QWidget):
                 if isinstance(exc, SyncCancelled):
                     raise
                 log.error(f"❌ خطای کلی در پردازش {sku}: {exc}")
+                if not self._last_img_upload_detail:
+                    self._last_img_upload_detail = str(exc)
                 fail_count += 1
 
         if fail_count == 0:
@@ -3260,6 +3265,8 @@ class ProductTab(QWidget):
         # — تا فرقی نکنه تصویر از کجا اومده، همه از یه مسیر پردازش رد بشن.
         from sync_app.core.smart_publish import apply_default_pipeline
 
+        product_map = load_product_woo_map()
+
         def _apply_pipeline_if_needed(sku: str, abs_path: str, already_processed: bool) -> str:
             """اگه پایپ‌لاین خودکار فعاله، تصویر رو پردازش می‌کنه و مسیر
             فایل نهایی (پردازش‌شده) رو برمی‌گردونه؛ وگرنه همون مسیر اصلی.
@@ -3270,7 +3277,7 @@ class ProductTab(QWidget):
                 return abs_path
             site_url = str(cfg.get("WC_URL") or "").strip().rstrip("/")
             product_url = ""
-            wc_id = load_product_woo_map().get(sku)
+            wc_id = product_map.get(sku)
             if wc_id and site_url:
                 product_url = f"{site_url}/?p={int(wc_id)}"
             return apply_default_pipeline(abs_path, cfg, code=sku, product_url=product_url)
@@ -3279,25 +3286,63 @@ class ProductTab(QWidget):
             try:
                 wait_for_connectivity_blocking(cfg, need_sql=False, need_wc=True)
 
-                while True:
-                    wait_for_connectivity_blocking(cfg, need_sql=False, need_wc=True)
-                    try:
-                        res = wc_rest_request(
-                            cfg, "GET", "products", params={"sku": sku}, timeout=timeout
-                        ).json()
-                    except Exception as exc:
-                        if is_transient_connectivity_issue(str(exc)):
-                            continue
-                        raise
-                    break
+                # اول از product_woo_map (نتیجه‌ی تبِ تطبیق/تطبیقِ ساختاری)
+                # با شناسه‌ی محصول می‌ریم — نه فقط با جستجویِ SKU، چون یک
+                # محصولِ لینک‌شده‌یِ دستی ممکنه SKUِ خودِ سایتش با کدِ ERP
+                # فرق داشته باشه (دقیقاً همون منطقی که سینکِ اصلی استفاده
+                # می‌کنه). فقط اگه لینکی نبود یا اون id رویِ سایت پیدا نشد
+                # (مثلاً حذف شده)، به جستجویِ خامِ SKU برمی‌گردیم.
+                res_item = None
+                mapped_id = product_map.get(sku)
+                if mapped_id:
+                    while True:
+                        wait_for_connectivity_blocking(cfg, need_sql=False, need_wc=True)
+                        try:
+                            by_id_resp = wc_rest_request(
+                                cfg, "GET", f"products/{int(mapped_id)}", timeout=timeout
+                            )
+                        except Exception as exc:
+                            if is_transient_connectivity_issue(str(exc)):
+                                continue
+                            by_id_resp = None
+                        break
+                    if by_id_resp is not None and getattr(by_id_resp, "status_code", 0) == 200:
+                        by_id_data = by_id_resp.json()
+                        if isinstance(by_id_data, dict) and by_id_data.get("id"):
+                            res_item = by_id_data
 
-                if not isinstance(res, list) or not res:
-                    log.warning(f"⚠️ محصول {sku} در فروشگاه پیدا نشد — رد شد.")
+                if res_item is None:
+                    while True:
+                        wait_for_connectivity_blocking(cfg, need_sql=False, need_wc=True)
+                        try:
+                            res = wc_rest_request(
+                                cfg, "GET", "products", params={"sku": sku}, timeout=timeout
+                            ).json()
+                        except Exception as exc:
+                            if is_transient_connectivity_issue(str(exc)):
+                                continue
+                            raise
+                        break
+                    if isinstance(res, list) and res:
+                        res_item = res[0]
+
+                if res_item is None:
+                    from sync_app.core.structure_mismatch_override import get_site_variation_target
+
+                    if get_site_variation_target(sku):
+                        log.warning(f"⚠️ {sku} واریانتِ یک محصولِ دیگه‌ست، محصولِ جدایِ خودش رو نداره — رد شد.")
+                        self._last_img_upload_detail = (
+                            f"«{sku}» به‌عنوانِ واریانتِ یک محصولِ دیگه (نه یک محصولِ جدا) تطبیق داده شده — "
+                            "برایِ تغییرِ تصویرش، مستقیم رویِ محصولِ اصلیِ سایت اقدام کنید."
+                        )
+                    else:
+                        log.warning(f"⚠️ محصول {sku} در فروشگاه پیدا نشد — رد شد.")
+                        self._last_img_upload_detail = f"محصولِ {sku} در فروشگاه پیدا نشد (نه با لینکِ ثبت‌شده، نه با جستجویِ SKU)."
                     fail_count += 1
                     continue
 
-                p_id = res[0]["id"]
-                existing_images = res[0].get("images", [])
+                p_id = res_item["id"]
+                existing_images = res_item.get("images", [])
                 sku_manual_paths = manual_paths_by_sku.get(sku, set())
 
                 new_images = []
@@ -3336,8 +3381,11 @@ class ProductTab(QWidget):
 
                     if not src_url:
                         log.error(f"❌ خطا در آپلود {filename} برای {sku}: {upload_err}")
-                        if is_wp_upload_fatal_error(upload_err):
-                            self._last_img_upload_detail = upload_err
+                        # قبلاً فقط خطاهایِ «fatal» (401/403/...) این‌جا ثبت می‌شدن —
+                        # یعنی هر شکستِ دیگه (فرمتِ نامعتبر، خطایِ موقتِ هاست بعد از
+                        # اتمامِ تلاش‌های دوباره، و...) با detail خالی می‌موند و
+                        # دیالوگِ پایانی به‌غلط گمان می‌کرد مشکلِ Application Password‌ه.
+                        self._last_img_upload_detail = upload_err
                         continue
 
                     if media_id:
@@ -3347,6 +3395,8 @@ class ProductTab(QWidget):
 
                 if not new_images:
                     log.warning(f"⚠️ هیچ تصویری برای {sku} با موفقیت آپلود نشد.")
+                    if not self._last_img_upload_detail:
+                        self._last_img_upload_detail = f"هیچ فایلِ تصویرِ معتبری برایِ {sku} روی دیسک پیدا نشد."
                     fail_count += 1
                     continue
 
@@ -3393,6 +3443,8 @@ class ProductTab(QWidget):
                 if isinstance(exc, SyncCancelled):
                     raise
                 log.error(f"❌ خطای کلی در پردازش {sku}: {exc}")
+                if not self._last_img_upload_detail:
+                    self._last_img_upload_detail = str(exc)
                 fail_count += 1
 
         if fail_count == 0:
@@ -3434,9 +3486,15 @@ class ProductTab(QWidget):
                 return
             extra = f"\n\n{detail}" if detail else ""
             wp_hint = ""
-            if not detail or "application password" in detail.lower() or "wp/v2/media" in detail.lower():
+            detail_lower = detail.lower()
+            # قبلاً وقتی detail خالی بود (یعنی خطایِ واقعی هیچ‌جا ثبت نشده بود)
+            # هم به‌غلط گمان می‌کردیم مشکلِ Application Password‌ه — با
+            # پرشدنِ detail تویِ همه‌ی شاخه‌های ممکنِ شکست، این حدس‌زدنِ
+            # نادرست حذف شد؛ فقط وقتی متنِ خطا واقعاً به این مسائل اشاره کنه
+            # این راهنماها نشون داده می‌شن.
+            if detail and ("application password" in detail_lower or "wp/v2/media" in detail_lower):
                 wp_hint = "\n\nتنظیمات: WP Username + Application Password"
-            if "products" in detail.lower() and "wc/v3" not in detail.lower():
+            elif detail and "products" in detail_lower and "wc/v3" not in detail_lower:
                 wp_hint = "\n\nتنظیم تصویر محصول از API فروشگاه (Consumer Key با Write) انجام می‌شود."
             QMessageBox.critical(
                 self,
