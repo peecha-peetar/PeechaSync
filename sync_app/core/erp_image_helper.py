@@ -100,27 +100,30 @@ def mark_images_transferred(sku: str, hlo_ids: list[int], platform: str = "wooco
 
 
 def _stage_one(dst_dir: str, subdir: str, sku_key: str, name_hint: str, blob: bytes, path: str, config: dict | None) -> str:
-    """یه تصویر (blob یا path) رو تو پوشه‌ی مقصد ذخیره می‌کنه، مسیر نسبی رو برمی‌گردونه (یا '' اگه چیزی نبود)."""
+    """یه تصویر (blob یا path) رو تو پوشه‌ی مقصدِ مشترک (بدون زیرپوشه‌ی
+    جداگانه به‌ازایِ هر SKU) ذخیره می‌کنه — نامِ فایل با sku_key شروع
+    می‌شه تا بینِ محصولاتِ مختلف تداخل نداشته باشه. مسیر نسبی رو
+    برمی‌گردونه (یا '' اگه چیزی نبود)."""
     blob = bytes(blob or b"")
     if len(blob) > 64:
         ext = _detect_ext(blob)
-        dst_name = f"{name_hint}{ext}"
+        dst_name = f"{sku_key}_{name_hint}{ext}"
         dst_abs = os.path.join(dst_dir, dst_name)
         try:
             with open(dst_abs, "wb") as f:
                 f.write(blob)
-            return os.path.join(subdir, sku_key, dst_name).replace("\\", "/")
+            return os.path.join(subdir, dst_name).replace("\\", "/")
         except OSError:
             pass
 
     resolved = resolve_erp_picture_path(str(path or ""), config)
     if resolved:
         base = os.path.basename(resolved)
-        dst_name = f"{name_hint}_{base}"
+        dst_name = f"{sku_key}_{name_hint}_{base}"
         dst_abs = os.path.join(dst_dir, dst_name)
         try:
             shutil.copy2(resolved, dst_abs)
-            return os.path.join(subdir, sku_key, dst_name).replace("\\", "/")
+            return os.path.join(subdir, dst_name).replace("\\", "/")
         except OSError:
             pass
     return ""
@@ -136,7 +139,8 @@ def stage_erp_images(
     extra_images: list[tuple[bytes, str]] | None = None,
 ) -> list[str]:
     """
-    تصویر(های) ERP را در پوشه محلی ذخیره می‌کند.
+    تصویر(های) ERP را در یک پوشه‌ی مشترک (بدون زیرپوشه‌ی جداگانه به‌ازایِ
+    هر تصویر/SKU) ذخیره می‌کند.
     key = SKU محصول یا SKU واریانت
     extra_images: بقیه‌ی تصاویر همون کد کالا (از جدول HLOpictures) — یه
     محصول می‌تونه چند تصویر داشته باشه، همه‌شون باید منتقل بشن، نه فقط اولی.
@@ -145,7 +149,7 @@ def stage_erp_images(
     if not sku_key:
         return []
 
-    dst_dir = app_path(subdir, sku_key)
+    dst_dir = app_path(subdir)
     os.makedirs(dst_dir, exist_ok=True)
     rel_paths: list[str] = []
 

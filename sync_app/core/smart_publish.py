@@ -7,6 +7,8 @@ Resize (با پروفایل) ← Remove Background ← Shadow ← Watermark ← 
 from __future__ import annotations
 
 import os
+import shutil
+import tempfile
 from dataclasses import dataclass, field
 
 from sync_app.core.media_center import (
@@ -216,6 +218,11 @@ def run_pipeline(
     Resize ← Watermark ← حک متن ← QR کد ← Compress/WebP
     (بدون توجه به ترتیب آیتم‌های لیست steps، چون این ترتیب همیشه فنی-درسته).
 
+    فایل‌هایِ میانیِ هر مرحله رو تویِ یه پوشه‌ی موقتِ سیستمی می‌سازه (نه
+    داخلِ out_dir) و در پایان فقط تصویرِ نهاییِ آخرین مرحله رو به out_dir
+    منتقل می‌کنه — تا به‌ازایِ هر عکس فقط یک فایل رویِ دیسک بمونه، نه یک
+    فایل به‌ازایِ هر مرحله.
+
     product_info (فقط برای مراحل «حک متن»/«QR کد» لازمه): دیکشنری شامل
     a_code (کد اتوماتیک)، a_code_c (کد دستی)، name (نام کالا)، product_url
     (لینک محصول در سایت — برای QR).
@@ -225,6 +232,7 @@ def run_pipeline(
         result.error = "فایل مبدا یافت نشد."
         return result
 
+    work_dir = tempfile.mkdtemp(prefix="peecha_sp_")
     try:
         result.size_before = os.path.getsize(src_path)
         current = src_path
@@ -242,14 +250,14 @@ def run_pipeline(
                 fitted = _fit_to_size_with_padding(
                     img, profile["w"], profile["h"], margin_percent=int(profile.get("margin", 0))
                 )
-                resized_path = os.path.join(out_dir, f"{stem}_resized.png")
+                resized_path = os.path.join(work_dir, f"{stem}_resized.png")
                 fitted.save(resized_path)
                 current = resized_path
 
         if "watermark" in steps:
             if not watermark or not watermark.get("path"):
                 raise RuntimeError("برای مرحله‌ی Watermark باید فایل لوگو در تنظیمات انتخاب شود.")
-            wm_dst = os.path.join(out_dir, f"{stem}_wm.png")
+            wm_dst = os.path.join(work_dir, f"{stem}_wm.png")
             r = apply_watermark(
                 current, watermark["path"], wm_dst,
                 opacity=watermark.get("opacity", 0.55),
@@ -267,7 +275,7 @@ def run_pipeline(
             text_cfg = text_engrave or load_text_engrave_settings({})
             text_to_engrave = resolve_engrave_text(product_info or {}, text_cfg.get("source", "auto_code"))
             if text_to_engrave:
-                dst = os.path.join(out_dir, f"{stem}_txt.png")
+                dst = os.path.join(work_dir, f"{stem}_txt.png")
                 r = engrave_text_on_image(
                     current, text_to_engrave, dst,
                     font_size=int(text_cfg.get("font_size", 22)),
@@ -283,7 +291,7 @@ def run_pipeline(
             product_url = str((product_info or {}).get("product_url") or "").strip()
             if product_url:
                 qr_cfg = qr_code or load_qr_code_settings({})
-                dst = os.path.join(out_dir, f"{stem}_qr.png")
+                dst = os.path.join(work_dir, f"{stem}_qr.png")
                 r = add_qr_code_overlay(
                     current, product_url, dst,
                     position=qr_cfg.get("position", "bottom-left"),
@@ -295,23 +303,36 @@ def run_pipeline(
         do_webp = "webp" in steps
         do_compress = "compress" in steps
         if do_webp:
-            dst = os.path.join(out_dir, f"{stem}_final.webp")
+            dst = os.path.join(work_dir, f"{stem}_final.webp")
             r = convert_to_webp(current, dst, quality=webp_quality)
             if not r.ok:
                 raise RuntimeError(f"تبدیل WebP ناموفق بود: {r.error}")
             current = r.dst_path
         elif do_compress:
-            dst = os.path.join(out_dir, f"{stem}_final{os.path.splitext(current)[1]}")
+            dst = os.path.join(work_dir, f"{stem}_final{os.path.splitext(current)[1]}")
             r = compress_image(current, dst)
             if not r.ok:
                 raise RuntimeError(f"فشرده‌سازی ناموفق بود: {r.error}")
             current = r.dst_path
+
+        # فقط همینِ آخری (نتیجه‌ی آخرین مرحله‌ای که واقعاً اجرا شده) به
+        # out_dir واقعی منتقل می‌شه — بقیه‌ی فایل‌هایِ میانی با حذفِ
+        # work_dir (در finally) از بین می‌رن.
+        final_name = f"{stem}_final{os.path.splitext(current)[1]}"
+        final_dst = os.path.join(out_dir, final_name)
+        if os.path.abspath(current) == os.path.abspath(src_path):
+            shutil.copy2(current, final_dst)
+        else:
+            shutil.move(current, final_dst)
+        current = final_dst
 
         result.dst_path = current
         result.size_after = os.path.getsize(current)
         result.ok = True
     except Exception as exc:
         result.error = str(exc)
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
     return result
 
 
@@ -352,8 +373,10 @@ def apply_default_pipeline(
 
         profiles = load_image_profiles(cfg)
         profile_name = pipeline.get("profile")
-        out_dir = os.path.join(os.path.dirname(abs_path), "_pipeline_out")
-        os.makedirs(out_dir, exist_ok=True)
+        # همون پوشه‌ی خودِ تصویرِ خام (product_images/) — بدونِ زیرپوشه‌ی
+        # جداگانه؛ run_pipeline خودش فایل‌هایِ میانی رو تویِ یه پوشه‌ی
+        # موقتِ سیستمی می‌سازه و پاک می‌کنه، فقط نتیجه‌ی نهایی این‌جا می‌شینه.
+        out_dir = os.path.dirname(abs_path)
         result = run_pipeline(
             abs_path, steps, out_dir=out_dir,
             profile=profiles.get(profile_name) if profile_name else None,
@@ -364,6 +387,11 @@ def apply_default_pipeline(
             product_info={"a_code": code, "a_code_c": code, "name": name or code, "product_url": product_url},
         )
         if result.ok and result.dst_path and os.path.isfile(result.dst_path):
+            from sync_app.core.sync_utils import log
+
+            log.info(
+                f"🖼️ روشِ پردازشِ تصویرِ «{pipeline_name}» ({', '.join(steps)}) رویِ {code} اجرا شد."
+            )
             return result.dst_path
         # run_pipeline خودش استثنا پرت نمی‌کنه — شکستِ هر مرحله رو تویِ
         # result.error برمی‌گردونه. قبلاً این حالت کاملاً بی‌صدا رد می‌شد
