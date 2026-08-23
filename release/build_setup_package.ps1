@@ -22,8 +22,6 @@ function Get-BuildPython {
     throw 'Python 3.11+ not found. Install from https://www.python.org/downloads/'
 }
 
-$script:CopyTreeAlwaysSkipDirs = @('__pycache__', '.venv', 'venv', '.git', '.pytest_cache', '.mypy_cache')
-
 function Copy-TreeFiltered {
     param(
         [string]$Source,
@@ -36,13 +34,6 @@ function Copy-TreeFiltered {
     New-Item -ItemType Directory -Path $Destination -Force | Out-Null
     foreach ($item in Get-ChildItem -LiteralPath $Source -Force) {
         if ($SkipNames -contains $item.Name) { continue }
-        # __pycache__/.venv نباید هیچ‌وقت وارد بسته بشن — این‌جا نه فقط
-        # فضایِ اضافه‌ست، هرباری که کاربر برنامه رو محلی اجرا/تست کرده
-        # باشه (مثلاً از PyCharm)، این پوشه‌ها تویِ sync_app پخش می‌شن و
-        # اگه کپی بشن، مرحله‌ی compileall/پاک‌سازیِ .pyc بعداً روی همین
-        # فایل‌هایِ اضافه (که فرمتِ متفاوتی هم دارن: cpython-312.pyc به‌جایِ
-        # الگویِ legacy) گیر می‌کنه و کل build رو fail می‌کنه.
-        if ($item.PSIsContainer -and $script:CopyTreeAlwaysSkipDirs -contains $item.Name) { continue }
         $target = Join-Path $Destination $item.Name
         if ($item.PSIsContainer) {
             Copy-TreeFiltered -Source $item.FullName -Destination $target -SkipNames $SkipNames
@@ -181,23 +172,10 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $mainPy = Join-Path $appDir 'main.py'
-# هرکدوم از این حذف‌ها (.py خام بعدِ compile، یا هر __pycache__ِ باقی‌مونده)
-# صرفاً برایِ نظافته — نه چیزی که واقعاً لازمِ اجرا باشه (main.pyc از قبل
-# ساخته شده). برایِ همین اگه یک فایل/پوشه به هر دلیلی (قفل‌شدن توسطِ
-# آنتی‌ویروس، مسیرِ طولانی) پاک نشد، فقط هشدار می‌دیم و ادامه می‌دیم —
-# قبلاً یک شکستِ تکی این‌جا کلِ ساختِ نسخه رو fail می‌کرد.
 Get-ChildItem -LiteralPath $appDir -Recurse -Filter '*.py' -ErrorAction SilentlyContinue |
     Where-Object { -not $_.PSIsContainer } |
-    ForEach-Object {
-        try { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction Stop }
-        catch { Write-Host "  warn: could not remove $($_.FullName): $($_.Exception.Message)" -ForegroundColor DarkYellow }
-    }
-Get-ChildItem -LiteralPath $appDir -Recurse -Directory -Filter '__pycache__' -ErrorAction SilentlyContinue |
-    Sort-Object { $_.FullName.Length } -Descending |
-    ForEach-Object {
-        try { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction Stop }
-        catch { Write-Host "  warn: could not remove $($_.FullName): $($_.Exception.Message)" -ForegroundColor DarkYellow }
-    }
+    Remove-Item -Force
+Get-ChildItem -LiteralPath $appDir -Recurse -Directory -Filter '__pycache__' | Remove-Item -Recurse -Force
 
 $mainPyc = Join-Path $appDir 'main.pyc'
 if (-not (Test-Path -LiteralPath $mainPyc)) {

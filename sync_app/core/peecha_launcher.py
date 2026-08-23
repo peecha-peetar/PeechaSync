@@ -3300,23 +3300,6 @@ def _on_profile_bootstrap_done(parent, cfg) -> None:
 _startup_log = logging.getLogger("peecha.startup")
 
 
-def _boot_log(msg: str) -> None:
-    """هم‌الگویِ main.py._boot_log — مستقیم رویِ فایل، بدونِ وابستگی به
-    تنظیمِ لاگینگ (که هنوز موقعِ ساختِ پنجره‌ی اصلی کامل نشده) — برایِ
-    اندازه‌گیریِ زمانِ واقعیِ ساختِ تب‌ها هنگامِ کندی‌هایِ گزارش‌شده."""
-    try:
-        from datetime import datetime
-
-        base = os.getenv("LOCALAPPDATA") or os.path.expanduser("~")
-        folder = os.path.join(base, "PeechaSync")
-        os.makedirs(folder, exist_ok=True)
-        path = os.path.join(folder, "startup-errors.log")
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(f"[{datetime.now():%a %m/%d/%Y %H:%M:%S.%f}] boot {msg}\n")
-    except Exception:
-        pass
-
-
 def _install_crash_logger():
     """خطاهای بدون catch در thread/timer — لاگ + پیام به کاربر"""
     import traceback
@@ -3500,13 +3483,10 @@ def main(existing_app=None):
     def show_main_launcher():
         global main_win
         _startup_log.info("Opening main window...")
-        _boot_log("main window construction start")
         cfg_local = load_secure_config_after_profile(log) or {}
         main_win = PeechaLauncher()
-        _boot_log("main window construction done (all tabs built)")
         apply_window_geometry(main_win, cfg_local)
         _present_startup_window(main_win, "Main window")
-        _boot_log("main window shown")
         apply_brand_window_icon(main_win)
         QTimer.singleShot(0, lambda: main_win.apply_theme(cfg_local.get("APP_THEME", "navy")))
         QTimer.singleShot(0, lambda: main_win.apply_font_size(cfg_local.get("APP_FONT_SIZE", 14)))

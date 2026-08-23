@@ -458,19 +458,9 @@ class SmartPublishSettingsTab(QWidget):
         auto_row = QHBoxLayout()
         auto_row.addWidget(QLabel("روش پردازش تصویر:"))
         self.auto_pipeline_combo = QComboBox()
-        self.auto_pipeline_combo.currentIndexChanged.connect(self._update_auto_pipeline_summary)
         auto_row.addWidget(self.auto_pipeline_combo)
         auto_row.addStretch()
         layout.addLayout(auto_row)
-
-        # خلاصه‌ی زنده‌ی مراحلِ روشِ انتخاب‌شده — تا معلوم باشه دقیقاً همین
-        # الان واترمارک داره یا نه (سرچشمه‌ی سردرگمیِ «روشِ بدونِ واترمارک
-        # انتخاب کردم ولی بازم واترمارک افتاد»).
-        self.auto_pipeline_summary_label = QLabel("")
-        self.auto_pipeline_summary_label.setWordWrap(True)
-        self.auto_pipeline_summary_label.setStyleSheet("color:#334155; font-size:11px; font-weight:600;")
-        layout.addWidget(self.auto_pipeline_summary_label)
-
         self._refresh_auto_pipeline_combo()
 
         note = QLabel(
@@ -487,7 +477,6 @@ class SmartPublishSettingsTab(QWidget):
         return group
 
     def _refresh_auto_pipeline_combo(self):
-        self.auto_pipeline_combo.blockSignals(True)
         self.auto_pipeline_combo.clear()
         pipelines = load_pipelines(self.config)
         for name in pipelines:
@@ -496,29 +485,6 @@ class SmartPublishSettingsTab(QWidget):
         idx = self.auto_pipeline_combo.findData(current)
         if idx >= 0:
             self.auto_pipeline_combo.setCurrentIndex(idx)
-        self.auto_pipeline_combo.blockSignals(False)
-        if current and idx < 0 and pipelines:
-            # روشِ ذخیره‌شده دیگه وجود نداره (حذف/تغییرِ نام شده) — کمبو
-            # بی‌صدا رویِ روشِ دیگه‌ای مونده؛ اگه هشدار ندیم، اولین «ذخیره»
-            # همین روشِ اشتباه رو جایِ اون یکی می‌نویسه.
-            QMessageBox.warning(
-                self, "روشِ پردازشِ تصویر",
-                f"روشِ ذخیره‌شده‌ی «{current}» دیگه در لیستِ روش‌ها نیست (احتمالاً حذف/تغییرِ نام "
-                f"شده) — کمبو رویِ «{self.auto_pipeline_combo.currentText()}» ایستاده. اگه این روش "
-                "درست نیست، یکی از روش‌هایِ موجود رو انتخاب و «ذخیره» کنید.",
-            )
-        self._update_auto_pipeline_summary()
-
-    def _update_auto_pipeline_summary(self):
-        name = self.auto_pipeline_combo.currentData()
-        pipelines = load_pipelines(self.config)
-        pipeline = pipelines.get(name) if name else None
-        if not pipeline:
-            self.auto_pipeline_summary_label.setText("⚠️ هیچ روشِ پردازشِ تصویری تعریف نشده.")
-            return
-        steps = pipeline.get("steps") or []
-        wm_state = "✅ واترمارک دارد" if "watermark" in steps else "⭕ بدونِ واترمارک"
-        self.auto_pipeline_summary_label.setText(f"مراحلِ این روش: {pipeline_summary(steps)}  —  {wm_state}")
 
     def _save(self):
         cfg = load_secure_config(None) or {}

@@ -148,29 +148,6 @@ call "set-python-env.bat" "%CD%\%PY%" "%CD%"
 
 
 
-REM با نسخه‌ی نصب‌شده کلید می‌شه، نه یک‌بار برای همیشه — بعدِ هر
-REM آپدیت، VERSION.txt عوض می‌شه و تست‌های سنگینِ زیر یک‌بار دیگه
-REM (و فقط یک‌بار) اجرا می‌شن، نه هر بار که کاربر برنامه رو باز می‌کنه.
-REM هر کدوم از این سه مرحله (self-test importها، verify-main-pyc.ps1،
-REM test-bootstrap.ps1) خودش یک پردازشِ کاملِ پایتون/PyQt5 رو دوباره
-REM import می‌کنه — یعنی قبل از اجرایِ واقعی، PyQt5 تا سه بار جدا از هم
-REM لود می‌شد؛ همینه که «بازشدنِ برنامه کند»ه.
-set "VERIFIED_FILE=%LOCALAPPDATA%\PeechaSync\verified-launch.txt"
-set "CUR_VER="
-if exist "%ROOT%VERSION.txt" set /p CUR_VER=<"%ROOT%VERSION.txt"
-set "LAST_VERIFIED="
-if exist "%VERIFIED_FILE%" set /p LAST_VERIFIED=<"%VERIFIED_FILE%"
-
-if defined CUR_VER if "%CUR_VER%"=="%LAST_VERIFIED%" (
-
-    echo [%date% %time%] skip heavy verify - already verified v%CUR_VER% >> "%LOG_FILE%"
-
-    goto :after_verify
-
-)
-
-
-
 set "IMPORT_LOG=%TEMP%\peecha-import-test.txt"
 
 "%CD%\%PY%" -c "import PyQt5, pyodbc, requests, woocommerce, cryptography, psutil; print('OK all imports')" >"%IMPORT_LOG%" 2>&1
@@ -258,16 +235,6 @@ if exist "main.pyc" (
 )
 
 
-
-if defined CUR_VER (
-
-    > "%VERIFIED_FILE%" echo %CUR_VER%
-
-)
-
-
-
-:after_verify
 
 echo [%date% %time%] using %CD%\%PY% >> "%LOG_FILE%"
 
