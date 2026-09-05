@@ -1852,21 +1852,32 @@ class ProductTab(QWidget):
             warn.setStyleSheet("color:#b45309;")
             layout.addWidget(warn)
 
-        if not suggestions:
-            layout.addWidget(QLabel("✅ همه‌ی موارد سئوی قابل‌بررسی از قبل تکمیل است — چیزی برای پیشنهاد نیست."))
-            buttons = QDialogButtonBox(QDialogButtonBox.Close)
-            buttons.rejected.connect(dialog.reject)
-            buttons.accepted.connect(dialog.accept)
-            layout.addWidget(buttons)
-            dialog.exec_()
-            return
+        current_values = bundle.get("current_values") or {}
+        # همه‌ی فیلدهای شناخته‌شده رو نشون می‌دیم (نه فقط اونایی که تویِ
+        # suggestions هستن) — چون یه فیلد که قبلاً «رفع» شده دیگه تویِ
+        # suggestions نمی‌مونه (چکش OK شده)، ولی کاربر باید بتونه هروقت
+        # خواست دوباره برگرده و ویرایشش کنه، نه اینکه فقط یک‌بار قابلِ‌تنظیم
+        # باشه.
+        already_fixed = [
+            field_labels.get(k, k) for k in field_labels
+            if k not in suggestions and str(current_values.get(k) or "").strip()
+        ]
+        if already_fixed:
+            done_label = QLabel("✅ قبلاً تنظیم شده (برایِ ویرایشِ دوباره تیک بزنید): " + "، ".join(already_fixed))
+            done_label.setWordWrap(True)
+            done_label.setStyleSheet("color:#16a34a; font-size:11px;")
+            layout.addWidget(done_label)
 
-        layout.addWidget(QLabel("موارد ناقص — تیک بزنید تا پیشنهاد ساخته‌شده روی سایت ثبت شود:"))
+        layout.addWidget(QLabel("فیلدها — تیک بزنید تا مقدارِ همون کادر روی سایت ثبت/به‌روزرسانی شود:"))
 
         checkbox_map = {}
         edit_map = {}
-        for field_key, suggested_text in suggestions.items():
-            label_text = field_labels.get(field_key, field_key)
+        for field_key, label_base in field_labels.items():
+            if field_key == "alt_text" and not bundle["has_image"]:
+                continue
+            is_suggestion = field_key in suggestions
+            text_value = suggestions.get(field_key, current_values.get(field_key, ""))
+            label_text = label_base
             if field_key == "alt_text" and not bundle["has_image"]:
                 label_text += " (تصویر ندارد — غیرفعال)"
             if field_key == "description":
@@ -1874,14 +1885,26 @@ class ProductTab(QWidget):
             cb = QCheckBox(label_text)
             enabled = field_key != "alt_text" or bundle["has_image"]
             cb.setEnabled(enabled)
-            cb.setChecked(enabled)
+            # فقط مواردِ واقعاً ناقص از قبل تیک‌خورده‌ن (برایِ رفعِ سریع)؛
+            # مواردی که قبلاً تنظیم شدن، بدونِ تیک نشون داده می‌شن — تا
+            # کاربر خودش تصمیم بگیره کدوم رو دوباره ارسال/ویرایش کنه.
+            cb.setChecked(enabled and is_suggestion)
             layout.addWidget(cb)
-            edit = QTextEdit(suggested_text)
+            edit = QTextEdit(text_value)
             edit.setMaximumHeight(160 if field_key == "description" else 50)
             edit.setPlaceholderText("توضیحات کامل محصول را اینجا بنویسید یا پیست کنید..." if field_key == "description" else "")
             layout.addWidget(edit)
             checkbox_map[field_key] = cb
             edit_map[field_key] = edit
+
+        if not checkbox_map:
+            layout.addWidget(QLabel("✅ همه‌ی موارد سئوی قابل‌بررسی از قبل تکمیل است."))
+            buttons = QDialogButtonBox(QDialogButtonBox.Close)
+            buttons.rejected.connect(dialog.reject)
+            buttons.accepted.connect(dialog.accept)
+            layout.addWidget(buttons)
+            dialog.exec_()
+            return
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.button(QDialogButtonBox.Ok).setText("📤 ارسال موارد تیک‌خورده به سایت")
