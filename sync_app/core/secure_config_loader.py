@@ -54,16 +54,19 @@ def _base_paths():
 
 
 def _candidate_pairs():
+    # اگه پروفایل فعالی داریم، پوشه‌ش رو از قبل می‌سازیم (برای save بعدی)،
+    # ولی دیگه اینجا return زودهنگام نمی‌کنیم — چون قبلاً وقتی پروفایل فعال
+    # بود ولی هنوز فایل کانفیگش ساخته نشده بود (مثلاً کانفیگِ قدیمی هنوز
+    # کنارِ فایل‌هایِ نصب مونده بود)، هیچ‌وقت به مسیرهایِ قدیمی/legacy سر
+    # نمی‌زدیم و load_secure_config بی‌صدا {} برمی‌گردوند — یعنی تنظیماتی
+    # که واقعاً وجود داشتن، «گم‌شده» به نظر می‌رسیدن (و با نصبِ نسخه‌ی جدید
+    # که پوشه‌ی نصب رو بازنویسی می‌کنه، واقعاً از بین می‌رفتن).
     try:
-        from sync_app.core.user_profile import get_current_profile_id, profile_dir, ensure_profile_dir
+        from sync_app.core.user_profile import get_current_profile_id, ensure_profile_dir
 
         pid = get_current_profile_id()
         if pid:
-            base = ensure_profile_dir(pid)
-            return [(
-                os.path.join(base, "sync_key.key"),
-                os.path.join(base, "secure_config.bin"),
-            )]
+            ensure_profile_dir(pid)
     except Exception:
         pass
 
@@ -74,6 +77,47 @@ def _candidate_pairs():
             os.path.join(base, 'secure_config.bin')
         ))
     return pairs
+
+
+def _migrate_to_profile_if_needed(key_file: str, config_file: str, log=None):
+    """اگه کانفیگ از یه مسیرِ قدیمی/legacy (مثلاً کنارِ فایل‌هایِ نصب) خونده
+    شده ولی الان یه پروفایلِ فعال داریم، فایل‌ها رو به پوشه‌ی پروفایل (که
+    بیرون از پوشه‌ی نصب و امن در برابرِ آپدیت/نصبِ مجدده) کپی می‌کنه و
+    مسیرِ جدید رو برمی‌گردونه — تا ذخیره‌هایِ بعدی دیگه هیچ‌وقت به پوشه‌ی
+    نصب برنگردن."""
+    try:
+        from sync_app.core.user_profile import get_current_profile_id, profile_dir
+    except Exception:
+        return key_file, config_file
+
+    pid = get_current_profile_id()
+    if not pid:
+        return key_file, config_file
+
+    base = profile_dir(pid)
+    target_key = os.path.join(base, "sync_key.key")
+    target_config = os.path.join(base, "secure_config.bin")
+
+    if os.path.normpath(config_file) == os.path.normpath(target_config):
+        return key_file, config_file
+    if os.path.exists(target_config):
+        # پروفایل از قبل کانفیگِ خودش رو داره — نباید جایگزینش کنیم
+        return key_file, config_file
+
+    try:
+        os.makedirs(base, exist_ok=True)
+        if os.path.exists(key_file):
+            shutil.copy2(key_file, target_key)
+        shutil.copy2(config_file, target_config)
+        _safe_log(
+            log, "info",
+            f"📁 تنظیمات از مسیرِ قدیمیِ «{config_file}» به پوشه‌ی پروفایل منتقل شد "
+            "(برای اینکه با نصبِ نسخه‌ی جدید از بین نره).",
+        )
+        return target_key, target_config
+    except Exception as e:
+        _safe_log(log, "warning", f"⚠️ انتقالِ تنظیمات به پوشه‌ی پروفایل ناموفق بود: {e}")
+        return key_file, config_file
 
 
 def _read_key(path):
@@ -114,6 +158,8 @@ def load_secure_config(log):
                 encrypted_data = file.read()
             decrypted_data = f.decrypt(encrypted_data)
             config = json.loads(decrypted_data.decode('utf-8'))
+
+            key_file, config_file = _migrate_to_profile_if_needed(key_file, config_file, log)
 
             # مسیر برای save هم
             config["_CONFIG_PATH"] = config_file

@@ -776,6 +776,19 @@ def main():
             f"(Code LIKE {[f'{g}%' for g in GROUPS]}, Type=1)."
         )
 
+    # لیستِ hlo_idهایی که قبلاً *واقعاً* منتقل شدن (نه صرفاً «آخرین‌بار تلاش
+    # کردیم») — برای اینکه تشخیصِ تغییر (should_skip_unchanged پایین‌تر) رو
+    # روی همینِ منبعِ قابل‌اعتماد بسازیم، نه روی لیستِ خامِ image_idها. وگرنه:
+    # اگه آپلودِ تصویر یک‌بار با خطا مواجه بشه (شبکه/سرور)، همون دور کشِ
+    # موفقیت برای این SKU با image_idهایِ فعلی ثبت می‌شه (چون بقیه‌ی
+    # محصول با موفقیت سینک شده) و از اون به بعد، تا وقتی HLOpictures دوباره
+    # عوض نشه، این SKU همیشه «بدون تغییر» تشخیص داده می‌شه و
+    # _sync_product_images_if_needed دیگه هیچ‌وقت دوباره صدا زده نمی‌شه —
+    # یعنی همون تصویرِ ناموفق برای همیشه گم می‌مونه.
+    from sync_app.core.erp_image_helper import load_transferred_image_ids
+
+    _transferred_images_map = load_transferred_image_ids("prestashop" if ps_mode else "woocommerce")
+
     def _attribute_labels():
         nonlocal attr_labels
         if attr_labels is not None:
@@ -1055,7 +1068,15 @@ def main():
         # ردیف‌های واریانت، برای محصولِ متغیر) دقیقاً با آخرین باری که این
         # SKU با موفقیت سینک شده یکی باشه (و از قبل روی فروشگاه ساخته شده)،
         # نیازی به فراخوانیِ API نیست — رد می‌شیم و می‌ریم سراغ محصول بعدی.
-        image_ids = sorted(hlo_id for hlo_id, _, _ in erp_images_by_sku.get(sku, []))
+        # نکته: مبنایِ تشخیصِ تغییرِ تصویر، لیستِ hlo_idهایِ «هنوز منتقل‌نشده»
+        # است (بر اساسِ transferred_erp_images.json که تنها منبعِ معتبرِ
+        # موفقیتِ واقعیِ آپلوده)، نه کلِ image_idهایِ فعلی — تا اگه یک‌بار
+        # آپلود ناموفق بود، همچنان «تغییریافته» حساب بشه و دوباره تلاش بشه.
+        already_transferred_ids = set(_transferred_images_map.get(str(sku).strip(), []))
+        image_ids = sorted(
+            hlo_id for hlo_id, _, _ in erp_images_by_sku.get(sku, [])
+            if hlo_id not in already_transferred_ids
+        )
         hash_payload = {
             "p_data": p_data, "categories": categories,
             "image_ids": image_ids, "settings": settings_fingerprint,
