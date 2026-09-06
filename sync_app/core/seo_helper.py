@@ -283,6 +283,17 @@ def analyze_product_seo_live(live: dict, *, fallback_name: str = "", fallback_de
         "missing_alt_image_ids": missing_alt_image_ids,
         "has_image": bool(images),
         "suggestions": suggestions,
+        # مقدارِ فعلیِ هر فیلد (چه خالی چه پر) — برایِ اینکه دیالوگ بتونه
+        # حتی فیلدهایی که قبلاً «رفع» شدن (و دیگه تویِ suggestions نیستن،
+        # چون چکشون OK شده) رو هم برایِ ویرایشِ دوباره نشون بده.
+        "current_values": {
+            "description": description,
+            "short_description": short_description,
+            "alt_text": alt_text,
+            "meta_description": meta_desc,
+            "seo_title": seo_title,
+            "meta_keywords": meta_keywords,
+        },
     }
 
 
@@ -367,6 +378,13 @@ def analyze_ps_product_seo(product: dict, *, category_name: str = "") -> dict:
         "missing_alt_image_ids": [],
         "has_image": False,
         "suggestions": suggestions,
+        "current_values": {
+            "description": description,
+            "short_description": short_description,
+            "meta_description": meta_desc,
+            "seo_title": seo_title,
+            "meta_keywords": meta_keywords,
+        },
     }
 
 
