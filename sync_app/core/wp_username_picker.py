@@ -17,7 +17,7 @@ from PyQt5.QtWidgets import (
 
 def _role_label_fa(roles: list[str]) -> str:
     mapping = {
-        "administrator": "مدیر (Administrator)",
+        "administrator": "مدیر",
         "shop_manager": "مدیر فروشگاه",
         "editor": "ویرایشگر",
         "author": "نویسنده",

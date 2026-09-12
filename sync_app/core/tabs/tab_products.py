@@ -386,6 +386,11 @@ class ProductTab(QWidget):
 
         return erp_provider_label(self.config)
 
+    def _platform_label(self) -> str:
+        from sync_app.core.integrations.commerce_provider import store_platform_label
+
+        return store_platform_label(self.config)
+
     def _tick_products_sync_ui(self):
         """آپدیت زنده‌ی درصد پیشرفت — با خواندن همون خط لاگ «محصول X/Y» که خودِ اسکریپت سینک می‌نویسه."""
         import re
@@ -863,6 +868,8 @@ class ProductTab(QWidget):
         # با کاتالوگِ بزرگ باعثِ کندیِ محسوسِ بارگذاریِ لیست می‌شد.
         from sync_app.core.product_category_override import load_category_overrides
         category_overrides = load_category_overrides()
+        erp_label = self._erp_label()
+        platform_label = self._platform_label()
 
         try:
             for row in rows or []:
@@ -876,9 +883,9 @@ class ProductTab(QWidget):
                 has_erp_image = erp_image_count > 0
                 image_url = self._image_url_cache.get(sku, "")
                 if has_erp_image:
-                    image_status = f"ERP ({erp_image_count})" if erp_image_count > 1 else "ERP"
+                    image_status = f"{erp_label} ({erp_image_count})" if erp_image_count > 1 else erp_label
                 elif image_url:
-                    image_status = "Woo"
+                    image_status = platform_label
                 else:
                     image_status = "ندارد"
 

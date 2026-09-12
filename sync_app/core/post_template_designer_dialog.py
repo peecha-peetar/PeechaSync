@@ -63,9 +63,9 @@ def _field_summary(field: dict) -> str:
         label = f'{label}: {field["text"][:20]}'
     extras = []
     if field.get("bold"):
-        extras.append("Bold")
+        extras.append("پررنگ")
     if field.get("italic"):
-        extras.append("Italic")
+        extras.append("مورب")
     if field.get("align") and field.get("align") != "right":
         extras.append(TEXT_ALIGN_LABELS.get(field["align"], field["align"]))
     if field.get("blank_line_before"):
