@@ -64,6 +64,27 @@ class OrderTab(SitePreviewLoaderMixin, SyncTab):
         filter_row.addWidget(self.order_status_filter)
         filter_row.addStretch()
 
+        # فیلترِ بازه‌ی تاریخِ شمسی — پیش‌فرض از اولِ ماهِ جاری تا امروز؛
+        # وگرنه این تب بدونِ هیچ فیلترِ اولیه‌ای همه‌ی سفارش‌ها (حتی خیلی
+        # قدیمی) رو می‌آورد.
+        from sync_app.core.jalali_date_widget import JalaliDateEdit
+
+        date_filter_row = QHBoxLayout()
+        date_filter_row.addWidget(QLabel("از تاریخ:"))
+        self.order_date_from = JalaliDateEdit()
+        self.order_date_from.set_start_of_month()
+        date_filter_row.addWidget(self.order_date_from)
+        date_filter_row.addWidget(QLabel("تا تاریخ:"))
+        self.order_date_to = JalaliDateEdit()
+        date_filter_row.addWidget(self.order_date_to)
+        self.order_date_from.dateChanged.connect(
+            lambda: self.load_site_orders(silent=False, show_error_dialog=False)
+        )
+        self.order_date_to.dateChanged.connect(
+            lambda: self.load_site_orders(silent=False, show_error_dialog=False)
+        )
+        date_filter_row.addStretch()
+
         self.orders_list = QListWidget()
         self.orders_list.setLayoutDirection(Qt.RightToLeft)
         self.orders_list.setMinimumHeight(240)
@@ -88,7 +109,8 @@ class OrderTab(SitePreviewLoaderMixin, SyncTab):
 
         self.content_layout.insertWidget(3, self.orders_preview_label)
         self.content_layout.insertLayout(4, filter_row)
-        self.content_layout.insertWidget(5, self.orders_list)
+        self.content_layout.insertLayout(5, date_filter_row)
+        self.content_layout.insertWidget(6, self.orders_list)
         self.content_layout.setStretchFactor(self.orders_list, 1)
 
         self.content_layout.addWidget(
@@ -190,11 +212,18 @@ class OrderTab(SitePreviewLoaderMixin, SyncTab):
         self._last_orders_refresh_at = time.monotonic()
         self._begin_site_fetch(silent=silent)
 
-        # مقدار فیلتر رو همین‌جا (تو Thread اصلی UI) می‌خونیم — نه داخل
+        # مقدار فیلترها رو همین‌جا (تو Thread اصلی UI) می‌خونیم — نه داخل
         # Thread پس‌زمینه‌ی fetch — چون خوندن ویجت Qt از یه Thread دیگه ایمن نیست.
         status_filter = "any"
         if hasattr(self, "order_status_filter"):
             status_filter = str(self.order_status_filter.currentData() or "any")
+
+        date_from = date_to = None
+        if hasattr(self, "order_date_from") and hasattr(self, "order_date_to"):
+            date_from = self.order_date_from.get_gregorian_date()
+            date_to = self.order_date_to.get_gregorian_date()
+            if date_from > date_to:
+                date_from, date_to = date_to, date_from
 
         on_complete, on_error = self._wrap_site_fetch_callbacks(
             generation,
@@ -205,19 +234,19 @@ class OrderTab(SitePreviewLoaderMixin, SyncTab):
         )
 
         run_in_thread(
-            lambda: self._fetch_site_orders(status_filter),
+            lambda: self._fetch_site_orders(status_filter, date_from, date_to),
             on_complete=on_complete,
             on_error=on_error,
         )
 
-    def _fetch_site_orders(self, status_filter="any"):
+    def _fetch_site_orders(self, status_filter="any", date_from=None, date_to=None):
         try:
             cfg = load_secure_config(None) or {}
             timeout = site_preview_http_timeout(cfg)
 
             from sync_app.core.integrations.commerce_provider import is_prestashop
             if is_prestashop(cfg):
-                return self._fetch_site_orders_ps(cfg, timeout)
+                return self._fetch_site_orders_ps(cfg, timeout, date_from, date_to)
 
             ck = cfg.get("WC_CONSUMER_KEY")
             cs = cfg.get("WC_CONSUMER_SECRET")
@@ -225,11 +254,19 @@ class OrderTab(SitePreviewLoaderMixin, SyncTab):
             if not cfg.get("WC_URL") or not ck or not cs:
                 return {"kind": "message", "items": ["⚠️ تنظیمات ووکامرس کامل نیست."]}
 
+            params = {"per_page": 100, "orderby": "date", "order": "desc", "status": status_filter}
+            if date_from is not None:
+                params["after"] = f"{date_from.isoformat()}T00:00:00"
+            if date_to is not None:
+                from datetime import timedelta
+
+                params["before"] = f"{(date_to + timedelta(days=1)).isoformat()}T00:00:00"
+
             response = wc_rest_request(
                 cfg,
                 "GET",
                 "orders",
-                params={"per_page": 20, "orderby": "date", "order": "desc", "status": status_filter},
+                params=params,
                 timeout=timeout,
             )
             if int(response.status_code or 0) >= 400:
@@ -265,21 +302,33 @@ class OrderTab(SitePreviewLoaderMixin, SyncTab):
             cfg = load_secure_config(None) or {}
             raise Exception(format_network_error_message(e, cfg))
 
-    def _fetch_site_orders_ps(self, cfg, timeout):
+    def _fetch_site_orders_ps(self, cfg, timeout, date_from=None, date_to=None):
         # پرستاشاپ برخلاف ووکامرس وضعیت سفارش رو با current_state (عدد
         # قابل‌تنظیم توسط فروشگاه) نشون می‌ده، نه یک رشته‌ی ثابت — این پیش‌نمایش
         # فیلتر وضعیت رو نادیده می‌گیره و «پرداخت‌شده/در انتظار» رو از روی
         # فیلد valid نشون می‌ده (همون فیلدی که ordersync.py هم برای انتخاب
         # سفارش‌های واقعی استفاده می‌کنه).
+        # فیلترِ بازه‌ی تاریخ هم (برخلافِ ووکامرس که سمتِ سرور با after/before
+        # انجام می‌شه) این‌جا سمتِ کلاینت روی date_add اعمال می‌شه — همون
+        # الگویِ ps_list_orders_for_sales_report، چون سینتکسِ فیلترِ تاریخِ
+        # Webserviceِ پرستاشاپ با اطمینان تأیید نشده.
         if not cfg.get("PS_URL") or not cfg.get("PS_API_KEY"):
             return {"kind": "message", "items": ["⚠️ تنظیمات پرستاشاپ کامل نیست."]}
 
         from sync_app.core.ps_order_helper import ps_list_recent_orders_preview
 
         try:
-            orders = ps_list_recent_orders_preview(cfg, limit=20, timeout=timeout)
+            orders = ps_list_recent_orders_preview(cfg, limit=100, timeout=timeout)
         except Exception as e:
             raise Exception(format_network_error_message(e, cfg))
+
+        if date_from is not None or date_to is not None:
+            from_str = date_from.isoformat() if date_from is not None else ""
+            to_str = date_to.isoformat() if date_to is not None else "9999-99-99"
+            orders = [
+                o for o in orders
+                if from_str <= str(o.get("date_add") or "")[:10] <= to_str
+            ]
 
         if not orders:
             return {"kind": "message", "items": ["ℹ️ سفارشی روی سایت یافت نشد."], "ids": []}

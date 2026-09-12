@@ -308,16 +308,98 @@ class _SiteVariationSearchLoader(QThread):
 # ----------------------------------------------------------------------
 # Loaderهایِ پس‌زمینه — سمتِ ERP
 # ----------------------------------------------------------------------
+def _fetch_group_name_map(conn) -> dict[str, str]:
+    """{کدِ گروه (۲ رقمی) یا زیرگروه (۴ رقمی): نامِ دسته‌بندی} — از رویِ
+    جدولِ M_Group/S_Group واقعیِ SQL. دقیقاً هم‌الگویِ چیزی که تبِ «تطبیق»
+    برایِ فیلترِ دسته‌بندی استفاده می‌کنه."""
+    name_map: dict[str, str] = {}
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT M_Groupcode, M_GroupName FROM M_Group ORDER BY M_Groupcode")
+        main_names: dict[str, str] = {}
+        for m_code, m_name in cursor.fetchall():
+            m_code = str(m_code).strip()
+            m_name = str(m_name or "").strip()
+            main_names[m_code] = m_name
+            if m_name:
+                name_map[m_code] = m_name
+        cursor.execute(
+            "SELECT M_Groupcode, S_Groupcode, S_GroupName FROM S_Group ORDER BY M_Groupcode, S_Groupcode"
+        )
+        for m_code, s_code, s_name in cursor.fetchall():
+            m_code = str(m_code).strip()
+            full_code = f"{m_code}{str(s_code).strip()}"
+            s_name = str(s_name or "").strip()
+            m_name = main_names.get(m_code, "")
+            if s_name:
+                name_map[full_code] = f"{m_name} › {s_name}" if m_name else s_name
+    except Exception:
+        pass
+    return name_map
+
+
+def _category_name_for_code(name_map: dict, code: str) -> str:
+    code = str(code or "").strip()
+    if len(code) >= 4 and name_map.get(code[:4]):
+        return name_map[code[:4]]
+    if len(code) >= 2 and name_map.get(code[:2]):
+        return name_map[code[:2]]
+    return ""
+
+
+class _CategoryOptionsLoader(QThread):
+    """گزینه‌هایِ فیلترِ دسته‌بندی — از جدولِ M_Group/S_Group واقعیِ SQL،
+    دقیقاً هم‌الگویِ فیلترِ دسته‌بندیِ تبِ «تطبیق»."""
+
+    done = pyqtSignal(list, str)  # [(code, display_name), ...], error
+
+    def __init__(self, cfg):
+        super().__init__()
+        self.cfg = cfg
+
+    def run(self):
+        try:
+            from sync_app.core.sql_connection_helper import open_sql_connection
+
+            conn, _, _ = open_sql_connection(self.cfg, timeout=5)
+            try:
+                cursor = conn.cursor()
+                cursor.execute("SELECT M_Groupcode, M_GroupName FROM M_Group ORDER BY M_Groupcode")
+                main_groups = [(str(r[0]).strip(), str(r[1] or "").strip()) for r in cursor.fetchall()]
+                cursor.execute(
+                    "SELECT M_Groupcode, S_Groupcode, S_GroupName FROM S_Group ORDER BY M_Groupcode, S_Groupcode"
+                )
+                sub_by_main: dict[str, list[tuple[str, str]]] = {}
+                for m_code, s_code, s_name in cursor.fetchall():
+                    m_code = str(m_code).strip()
+                    full_code = f"{m_code}{str(s_code).strip()}"
+                    sub_by_main.setdefault(m_code, []).append((full_code, str(s_name or "").strip()))
+                cursor.close()
+            finally:
+                conn.close()
+
+            options = []
+            for m_code, m_name in main_groups:
+                options.append((m_code, m_name or m_code))
+                for full_code, s_name in sub_by_main.get(m_code, []):
+                    label = f"{m_name} › {s_name}" if m_name else s_name
+                    options.append((full_code, label or full_code))
+            self.done.emit(options, "")
+        except Exception as exc:
+            self.done.emit([], str(exc))
+
+
 class _ErpSimpleSkuLoader(QThread):
-    """لیستِ SKUهایِ سادهٔ ERP (در گروه‌هایِ انتخاب‌شده) با فیلترِ نام/کد —
-    برایِ حالتِ «سایت متغیر / ERP ساده»."""
+    """لیستِ SKUهایِ سادهٔ ERP (در گروه‌هایِ انتخاب‌شده) با فیلترِ نام/کد/
+    دسته‌بندی — برایِ حالتِ «سایت متغیر / ERP ساده»."""
 
     done = pyqtSignal(list, str)  # [(sku, label), ...], error
 
-    def __init__(self, cfg, query: str):
+    def __init__(self, cfg, query: str, category_code: str = ""):
         super().__init__()
         self.cfg = cfg
         self.query = query
+        self.category_code = category_code
 
     def run(self):
         try:
@@ -336,13 +418,29 @@ class _ErpSimpleSkuLoader(QThread):
                 if needle:
                     where_bits.append("(A_Code LIKE ? OR A_Name LIKE ?)")
                     params.extend([f"%{needle}%", f"%{needle}%"])
-                sql = f"SELECT TOP 200 A_Code, A_Name FROM Article WHERE {' AND '.join(where_bits)}"
+                category_code = str(self.category_code or "").strip()
+                if category_code:
+                    where_bits.append("A_Code LIKE ?")
+                    params.append(f"{category_code}%")
+                sql = f"SELECT TOP 200 A_Code, A_Name, A_Code_C FROM Article WHERE {' AND '.join(where_bits)}"
                 cursor.execute(sql, params)
                 rows = cursor.fetchall()
+                name_map = _fetch_group_name_map(conn)
                 cursor.close()
             finally:
                 conn.close()
-            out = [(str(r[0]).strip(), f"{str(r[0]).strip()} — {str(r[1] or '').strip()}") for r in rows]
+            out = []
+            for r in rows:
+                code = str(r[0]).strip()
+                name = str(r[1] or "").strip()
+                manual_code = str(r[2] or "").strip() if len(r) > 2 else ""
+                cat_name = _category_name_for_code(name_map, code)
+                parts = [code, name]
+                if manual_code:
+                    parts.append(f"کدِ دستی: {manual_code}")
+                if cat_name:
+                    parts.append(cat_name)
+                out.append((code, " — ".join(parts)))
             self.done.emit(out, "")
         except Exception as exc:
             self.done.emit([], str(exc))
@@ -355,10 +453,11 @@ class _ErpVariantSkuLoader(QThread):
 
     done = pyqtSignal(list, str)  # [(parent_sku, variant_sku, label), ...], error
 
-    def __init__(self, cfg, query: str):
+    def __init__(self, cfg, query: str, category_code: str = ""):
         super().__init__()
         self.cfg = cfg
         self.query = query
+        self.category_code = category_code
 
     def run(self):
         try:
@@ -380,16 +479,23 @@ class _ErpVariantSkuLoader(QThread):
                 if needle:
                     where_bits.append("(A_Code LIKE ? OR A_Name LIKE ?)")
                     params.extend([f"%{needle}%", f"%{needle}%"])
-                sql = f"SELECT TOP 30 A_Code, A_Name FROM Article WHERE {' AND '.join(where_bits)}"
+                category_code = str(self.category_code or "").strip()
+                if category_code:
+                    where_bits.append("A_Code LIKE ?")
+                    params.append(f"{category_code}%")
+                sql = f"SELECT TOP 30 A_Code, A_Name, A_Code_C FROM Article WHERE {' AND '.join(where_bits)}"
                 cursor.execute(sql, params)
                 candidates = cursor.fetchall()
+                name_map = _fetch_group_name_map(conn)
 
                 out = []
                 size_label, color_label, dim3_label = _fetch_attribute_labels(conn)
-                for a_code, a_name in candidates:
+                for a_code, a_name, a_code_c in candidates:
                     a_code = str(a_code).strip()
                     if not product_is_variable(cursor, a_code):
                         continue
+                    manual_code = str(a_code_c or "").strip()
+                    cat_name = _category_name_for_code(name_map, a_code)
                     price_col = resolve_article_price_column(a_code, "", self.cfg)
                     cursor.execute(f"SELECT TOP 1 {price_col} FROM Article WHERE A_Code = ?", (a_code,))
                     price_row = cursor.fetchone()
@@ -404,7 +510,10 @@ class _ErpVariantSkuLoader(QThread):
                         attrs = "، ".join(
                             str(a.get("option") or "") for a in (v.get("attributes") or []) if a.get("option")
                         )
-                        label = f"{a_name} ({a_code}) — {attrs or v_sku}"
+                        code_part = f"{a_code} — کدِ دستی: {manual_code}" if manual_code else a_code
+                        label = f"{a_name} ({code_part}) — {attrs or v_sku}"
+                        if cat_name:
+                            label = f"{label} — {cat_name}"
                         out.append((a_code, v_sku, label))
                 cursor.close()
             finally:
@@ -431,6 +540,27 @@ class StructureReconciliationTab(QWidget):
         self.init_ui()
         self._refresh_sv_table()
         self._refresh_fs_table()
+        self._load_category_options()
+
+    def _load_category_options(self):
+        loader = _CategoryOptionsLoader(self.config)
+        self._keep_loader(loader)
+        loader.done.connect(self._on_category_options_loaded)
+        loader.start()
+
+    def _on_category_options_loaded(self, options, error):
+        if error:
+            return
+        for combo in (self.sv_category_filter, self.fs_category_filter):
+            current = combo.currentData()
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItem("همه", "")
+            for code, name in options:
+                combo.addItem(f"{name} ({code})" if name else code, code)
+            idx = combo.findData(current)
+            combo.setCurrentIndex(idx if idx >= 0 else 0)
+            combo.blockSignals(False)
 
     # ------------------------------------------------------------------
     def init_ui(self):
@@ -533,6 +663,13 @@ class StructureReconciliationTab(QWidget):
         filter_row.addWidget(QLabel("نمایش:"))
         self.sv_link_filter = self._build_link_filter_combo(self._on_sv_link_filter_changed)
         filter_row.addWidget(self.sv_link_filter)
+        filter_row.addWidget(QLabel(f"دسته‌بندیِ {self.erp_label}:"))
+        self.sv_category_filter = QComboBox()
+        self.sv_category_filter.setLayoutDirection(Qt.RightToLeft)
+        self.sv_category_filter.addItem("همه", "")
+        self.sv_category_filter.setMinimumWidth(160)
+        self.sv_category_filter.currentIndexChanged.connect(self._sv_search_erp)
+        filter_row.addWidget(self.sv_category_filter)
         self.sv_auto_suggest_btn = QPushButton("🤖 پیشنهادِ خودکار")
         self.sv_auto_suggest_btn.clicked.connect(self._sv_auto_suggest)
         filter_row.addWidget(self.sv_auto_suggest_btn)
@@ -631,8 +768,8 @@ class StructureReconciliationTab(QWidget):
         self.sv_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.sv_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.sv_table.verticalHeader().setVisible(False)
-        self.sv_table.setMinimumHeight(140)
-        self.sv_table.setMaximumHeight(220)
+        self.sv_table.setMinimumHeight(260)
+        self.sv_table.setMaximumHeight(480)
         v.addWidget(self.sv_table)
 
         self.sv_site_list.itemSelectionChanged.connect(self._on_sv_site_selection_changed)
@@ -686,7 +823,8 @@ class StructureReconciliationTab(QWidget):
     def _sv_search_erp(self):
         self._reload_config()
         self.sv_status_label.setText(f"⏳ در حالِ جستجویِ کالاهایِ {self.erp_label}...")
-        loader = _ErpSimpleSkuLoader(self.config, self.sv_erp_search.text())
+        category_code = self.sv_category_filter.currentData() or ""
+        loader = _ErpSimpleSkuLoader(self.config, self.sv_erp_search.text(), category_code)
         self._keep_loader(loader)
         loader.done.connect(self._on_sv_erp_results)
         loader.start()
@@ -1053,6 +1191,13 @@ class StructureReconciliationTab(QWidget):
         filter_row.addWidget(QLabel("نمایش:"))
         self.fs_link_filter = self._build_link_filter_combo(self._on_fs_link_filter_changed)
         filter_row.addWidget(self.fs_link_filter)
+        filter_row.addWidget(QLabel(f"دسته‌بندیِ {self.erp_label}:"))
+        self.fs_category_filter = QComboBox()
+        self.fs_category_filter.setLayoutDirection(Qt.RightToLeft)
+        self.fs_category_filter.addItem("همه", "")
+        self.fs_category_filter.setMinimumWidth(160)
+        self.fs_category_filter.currentIndexChanged.connect(self._fs_search_erp)
+        filter_row.addWidget(self.fs_category_filter)
         self.fs_auto_suggest_btn = QPushButton("🤖 پیشنهادِ خودکار")
         self.fs_auto_suggest_btn.clicked.connect(self._fs_auto_suggest)
         filter_row.addWidget(self.fs_auto_suggest_btn)
@@ -1151,8 +1296,8 @@ class StructureReconciliationTab(QWidget):
         self.fs_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.fs_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.fs_table.verticalHeader().setVisible(False)
-        self.fs_table.setMinimumHeight(140)
-        self.fs_table.setMaximumHeight(220)
+        self.fs_table.setMinimumHeight(260)
+        self.fs_table.setMaximumHeight(480)
         v.addWidget(self.fs_table)
 
         self.fs_site_list.itemSelectionChanged.connect(self._on_fs_site_selection_changed)
@@ -1207,7 +1352,8 @@ class StructureReconciliationTab(QWidget):
     def _fs_search_erp(self):
         self._reload_config()
         self.fs_status_label.setText(f"⏳ در حالِ جستجویِ زیرواریانت‌هایِ {self.erp_label}...")
-        loader = _ErpVariantSkuLoader(self.config, self.fs_erp_search.text())
+        category_code = self.fs_category_filter.currentData() or ""
+        loader = _ErpVariantSkuLoader(self.config, self.fs_erp_search.text(), category_code)
         self._keep_loader(loader)
         loader.done.connect(self._on_fs_erp_results)
         loader.start()

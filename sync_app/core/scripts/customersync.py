@@ -226,14 +226,18 @@ def get_buyers_preview_from_orders(*, max_orders=50, max_customer_lookups=30, ti
         raise RuntimeError("دریافت سفارشات ووکامرس ناموفق بود (مشکل شبکه/Timeout).") from e
 
     registered_ids = set()
+    registered_billing_by_id: dict[int, dict] = {}
     guests_by_email = {}
 
     for order in orders:
         cid = int(order.get("customer_id") or 0)
+        billing = order.get("billing") or {}
         if cid > 0:
             registered_ids.add(cid)
+            # اولین سفارشی که تلفن داره رو نگه می‌داریم — برای fallback پایین.
+            if billing.get("phone") and not (registered_billing_by_id.get(cid) or {}).get("phone"):
+                registered_billing_by_id[cid] = billing
             continue
-        billing = order.get("billing") or {}
         email = (billing.get("email") or "").strip().lower()
         if not email:
             continue
@@ -255,6 +259,17 @@ def get_buyers_preview_from_orders(*, max_orders=50, max_customer_lookups=30, ti
         try:
             customer = _wc_get_json(f"customers/{cid}", timeout=request_timeout)
             if customer and not customer.get("code"):
+                # رکوردِ حسابِ مشتری (customers/{id}) خیلی وقت‌ها تلفن نداره —
+                # کاربر هیچ‌وقت پروفایلِ حسابش رو پر نکرده، فقط موقعِ سفارش
+                # تلفن داده. اگه این‌طوره، از تلفنِ همون سفارشی که این مشتری
+                # رو پیدا کردیم استفاده می‌کنیم (وگرنه تبِ مشتریان همیشه
+                # ستونِ تلفن رو خالی نشون می‌داد).
+                billing = dict(customer.get("billing") or {})
+                if not str(billing.get("phone") or "").strip():
+                    order_phone = (registered_billing_by_id.get(cid) or {}).get("phone")
+                    if order_phone:
+                        billing["phone"] = order_phone
+                        customer["billing"] = billing
                 customers.append(customer)
         except Exception as e:
             log.error(f"❌ خطا در دریافت مشتری {cid}: {e}")
