@@ -1227,6 +1227,8 @@ class SettingsTab(QWidget):
         # کمبوباکس انتخاب سایز فونت (درخواست کارفرما)
         self.font_size_combo = QComboBox()
         self.font_size_combo.setObjectName("fontSizeComboUnlocked")
+        self.font_size_combo.addItem("خیلی خیلی کوچک (8px)", 8)
+        self.font_size_combo.addItem("خیلی کوچک (10px)", 10)
         self.font_size_combo.addItem("کوچک (12px)", 12)
         self.font_size_combo.addItem("متوسط (14px)", 14)
         self.font_size_combo.addItem("بزرگ (16px)", 16)

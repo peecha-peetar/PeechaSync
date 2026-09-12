@@ -1438,6 +1438,7 @@ class ProductTab(QWidget):
         rows_layout.addStretch(1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.button(QDialogButtonBox.Close).setText("بستن")
         buttons.rejected.connect(dlg.reject)
         outer.addWidget(buttons)
 
@@ -1615,6 +1616,8 @@ class ProductTab(QWidget):
         btn_row.addWidget(clear_btn)
         btn_row.addStretch(1)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Ok).setText("✅ ذخیره")
+        buttons.button(QDialogButtonBox.Cancel).setText("انصراف")
         btn_row.addWidget(buttons)
         layout.addLayout(btn_row)
 
@@ -1838,11 +1841,16 @@ class ProductTab(QWidget):
         checks = bundle["checks"]
         suggestions = bundle["suggestions"]
 
+        from sync_app.core.scrollable_dialog import build_scrollable_dialog_body, add_footer_widget
+
         dialog = QDialog(self)
         dialog.setWindowTitle(f"سئوی محصول — {sku}")
         dialog.setLayoutDirection(Qt.RightToLeft)
         dialog.resize(560, 680)
-        layout = QVBoxLayout(dialog)
+        # محتوا قابلِ‌اسکروله، ولی دکمه‌های تأیید/لغو (outer_layout) همیشه
+        # پایینِ دیالوگ ثابت و قابلِ‌دیدن می‌مونن — حتی رویِ صفحه‌نمایشِ
+        # کوچیک/رزولوشنِ پایین که قبلاً این دکمه‌ها از دید خارج می‌شدن.
+        layout, outer_layout = build_scrollable_dialog_body(dialog)
 
         score_label = QLabel(f"امتیاز فعلی (واقعی، از روی سایت): {bundle['current_score']}/100")
         score_label.setStyleSheet("font-weight:700; font-size:14px;")
@@ -1907,9 +1915,10 @@ class ProductTab(QWidget):
         if not checkbox_map:
             layout.addWidget(QLabel("✅ همه‌ی موارد سئوی قابل‌بررسی از قبل تکمیل است."))
             buttons = QDialogButtonBox(QDialogButtonBox.Close)
+            buttons.button(QDialogButtonBox.Close).setText("بستن")
             buttons.rejected.connect(dialog.reject)
             buttons.accepted.connect(dialog.accept)
-            layout.addWidget(buttons)
+            add_footer_widget(outer_layout, buttons)
             dialog.exec_()
             return
 
@@ -1984,7 +1993,7 @@ class ProductTab(QWidget):
         buttons.button(QDialogButtonBox.Cancel).setText("بستن")
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
-        layout.addWidget(buttons)
+        add_footer_widget(outer_layout, buttons)
 
         if dialog.exec_() != QDialog.Accepted:
             return
@@ -2210,11 +2219,16 @@ class ProductTab(QWidget):
         except Exception:
             short_link = ""
 
+        from sync_app.core.scrollable_dialog import build_scrollable_dialog_body, add_footer_widget
+
         dialog = QDialog(self)
         dialog.setWindowTitle(f"AI Content Studio — {sku}")
         dialog.setLayoutDirection(Qt.RightToLeft)
         dialog.resize(560, 620)
-        outer = QVBoxLayout(dialog)
+        # زیرتبِ «زمان‌بندیِ شبکه‌ی اجتماعی» (بله/تلگرام) محتوایِ زیادی داره —
+        # رویِ صفحه‌نمایشِ کوچیک، بدونِ اسکرول، دکمه‌ی «بستن» از دید خارج
+        # می‌شد. حالا کلِ تب‌ها قابلِ‌اسکرول‌ان و دکمه‌ی پایین همیشه ثابته.
+        outer, outer_footer_layout = build_scrollable_dialog_body(dialog)
 
         sub_tabs = QTabWidget()
         sub_tabs.setLayoutDirection(Qt.RightToLeft)
@@ -2636,9 +2650,10 @@ class ProductTab(QWidget):
         sub_tabs.addTab(schedule_tab, "📅 زمان‌بندی شبکه اجتماعی")
 
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.button(QDialogButtonBox.Close).setText("بستن")
         buttons.rejected.connect(dialog.reject)
         buttons.accepted.connect(dialog.accept)
-        outer.addWidget(buttons)
+        add_footer_widget(outer_footer_layout, buttons)
 
         dialog.exec_()
 

@@ -173,6 +173,8 @@ class JalaliDatePicker(QWidget):
         form.addRow("روز:", day_box)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Ok).setText("تأیید")
+        buttons.button(QDialogButtonBox.Cancel).setText("انصراف")
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
