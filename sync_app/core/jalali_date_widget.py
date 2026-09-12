@@ -34,14 +34,19 @@ class JalaliDateEdit(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
 
+        # عرضِ ثابتِ کوچیک برایِ هر سه — تا وقتی کنارِ فیلترهایِ دیگه میاد،
+        # فضایِ زیادی نگیره (قبلاً هر سه با عرضِ پیش‌فرضِ Qt جاگیر بودن).
         self.day_spin = QSpinBox()
         self.day_spin.setRange(1, 31)
+        self.day_spin.setFixedWidth(54)
         self.month_combo = QComboBox()
         self.month_combo.setLayoutDirection(Qt.RightToLeft)
         for i, name in enumerate(JALALI_MONTH_NAMES, start=1):
             self.month_combo.addItem(name, i)
+        self.month_combo.setFixedWidth(110)
         self.year_spin = QSpinBox()
         self.year_spin.setRange(1380, 1420)
+        self.year_spin.setFixedWidth(78)
 
         layout.addWidget(self.day_spin)
         layout.addWidget(self.month_combo)

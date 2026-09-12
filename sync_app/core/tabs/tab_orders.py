@@ -23,6 +23,28 @@ from sync_app.core.compact_icon_action_bar import CompactCaptionButton
 # 📌 اجرای مستقیم اسکریپت سفارشات
 from sync_app.core.scripts import ordersync
 
+# وضعیت‌هایِ سفارشِ ووکامرس — کدهایِ انگلیسیِ خودِ WooCommerce، برایِ
+# نمایش هم تویِ کمبویِ فیلتر و هم تویِ ردیفِ خودِ سفارش به فارسی ترجمه
+# می‌شن (قبلاً ردیفِ سفارش وضعیت رو خامِ انگلیسی نشون می‌داد).
+ORDER_STATUS_LABELS = {
+    "any": "همه",
+    "processing": "در حال انجام",
+    "pending": "در انتظار پرداخت",
+    "on-hold": "معلق",
+    "completed": "تکمیل‌شده",
+    "cancelled": "لغوشده",
+    "refunded": "بازگشت‌وجه",
+    "failed": "ناموفق",
+    "draft": "پیش‌نویس",
+    "trash": "حذف‌شده",
+    "checkout-draft": "پیش‌نویسِ پرداخت",
+}
+
+
+def order_status_label(raw_status: str) -> str:
+    key = str(raw_status or "").strip().lower()
+    return ORDER_STATUS_LABELS.get(key, str(raw_status or "-"))
+
 
 class OrderTab(SitePreviewLoaderMixin, SyncTab):
     def __init__(self):
@@ -36,21 +58,16 @@ class OrderTab(SitePreviewLoaderMixin, SyncTab):
         self.orders_preview_label.setStyleSheet("font-weight: bold;")
 
         from PyQt5.QtWidgets import QComboBox, QHBoxLayout
+        from sync_app.core.jalali_date_widget import JalaliDateEdit
+
+        # همه‌ی فیلترها (وضعیت + بازه‌ی تاریخ) تویِ یک ردیف — قبلاً دو ردیفِ
+        # جدا بودن که هم فضایِ اضافه می‌گرفت هم لازم نبود.
         filter_row = QHBoxLayout()
-        filter_row.addWidget(QLabel("فیلتر نمایش وضعیت:"))
+        filter_row.addWidget(QLabel("وضعیت:"))
         self.order_status_filter = QComboBox()
         self.order_status_filter.setLayoutDirection(Qt.RightToLeft)
-        for value, label in (
-            ("any", "همه"),
-            ("processing", "در حال انجام"),
-            ("pending", "در انتظار پرداخت"),
-            ("on-hold", "معلق"),
-            ("completed", "تکمیل‌شده"),
-            ("cancelled", "لغوشده"),
-            ("refunded", "بازگشت‌وجه"),
-            ("failed", "ناموفق"),
-        ):
-            self.order_status_filter.addItem(label, value)
+        for value in ("any", "processing", "pending", "on-hold", "completed", "cancelled", "refunded", "failed"):
+            self.order_status_filter.addItem(ORDER_STATUS_LABELS[value], value)
         from sync_app.core.integrations.erp_provider import erp_provider_label
         from sync_app.core.secure_config_loader import load_secure_config
 
@@ -62,28 +79,24 @@ class OrderTab(SitePreviewLoaderMixin, SyncTab):
             lambda: self.load_site_orders(silent=False, show_error_dialog=False)
         )
         filter_row.addWidget(self.order_status_filter)
-        filter_row.addStretch()
 
         # فیلترِ بازه‌ی تاریخِ شمسی — پیش‌فرض از اولِ ماهِ جاری تا امروز؛
         # وگرنه این تب بدونِ هیچ فیلترِ اولیه‌ای همه‌ی سفارش‌ها (حتی خیلی
         # قدیمی) رو می‌آورد.
-        from sync_app.core.jalali_date_widget import JalaliDateEdit
-
-        date_filter_row = QHBoxLayout()
-        date_filter_row.addWidget(QLabel("از تاریخ:"))
+        filter_row.addWidget(QLabel("از تاریخ:"))
         self.order_date_from = JalaliDateEdit()
         self.order_date_from.set_start_of_month()
-        date_filter_row.addWidget(self.order_date_from)
-        date_filter_row.addWidget(QLabel("تا تاریخ:"))
+        filter_row.addWidget(self.order_date_from)
+        filter_row.addWidget(QLabel("تا تاریخ:"))
         self.order_date_to = JalaliDateEdit()
-        date_filter_row.addWidget(self.order_date_to)
+        filter_row.addWidget(self.order_date_to)
         self.order_date_from.dateChanged.connect(
             lambda: self.load_site_orders(silent=False, show_error_dialog=False)
         )
         self.order_date_to.dateChanged.connect(
             lambda: self.load_site_orders(silent=False, show_error_dialog=False)
         )
-        date_filter_row.addStretch()
+        filter_row.addStretch()
 
         self.orders_list = QListWidget()
         self.orders_list.setLayoutDirection(Qt.RightToLeft)
@@ -109,8 +122,7 @@ class OrderTab(SitePreviewLoaderMixin, SyncTab):
 
         self.content_layout.insertWidget(3, self.orders_preview_label)
         self.content_layout.insertLayout(4, filter_row)
-        self.content_layout.insertLayout(5, date_filter_row)
-        self.content_layout.insertWidget(6, self.orders_list)
+        self.content_layout.insertWidget(5, self.orders_list)
         self.content_layout.setStretchFactor(self.orders_list, 1)
 
         self.content_layout.addWidget(
@@ -286,7 +298,7 @@ class OrderTab(SitePreviewLoaderMixin, SyncTab):
             ids = []
             for order in orders:
                 order_id = order.get("id", "-")
-                status = order.get("status", "-")
+                status = order_status_label(order.get("status", "-"))
                 total = order.get("total", "0")
                 currency = order.get("currency", "")
                 billing = order.get("billing", {}) or {}
