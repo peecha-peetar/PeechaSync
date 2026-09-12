@@ -342,6 +342,10 @@ class StructureReconciliationTab(QWidget):
 
         sub_tabs = QTabWidget()
         sub_tabs.setLayoutDirection(Qt.RightToLeft)
+        # پدینگِ سراسریِ QTabBar::tab برایِ لیبل‌هایِ ایموجی+فارسیِ این دو
+        # زیرتب کافی نیست و متن نصفه دیده می‌شه — همون مشکلی که برایِ
+        # زیرتب‌هایِ «همگام‌سازی»/«دستیار هوشمند» با همین objectName رفع شد.
+        sub_tabs.tabBar().setObjectName("hubSubTabBar")
         sub_tabs.addTab(self._build_site_variation_section(), f"🧩 سایت متغیر / {self.erp_label} ساده")
         sub_tabs.addTab(self._build_force_simple_section(), f"📦 {self.erp_label} متغیر / سایت ساده")
         root.addWidget(sub_tabs)
@@ -503,7 +507,18 @@ class StructureReconciliationTab(QWidget):
 
         return scroll
 
+    def _reload_config(self):
+        """کانفیگ رو تازه از دیسک می‌خونه — قبل از هر عملیاتِ شبکه/دیتابیس.
+        وگرنه اگه کاربر تویِ تبِ تنظیمات دیتابیس/سایت رو عوض کنه، این تب
+        (که کانفیگش فقط یک‌بار در __init__ لود شده بود) همچنان با تنظیماتِ
+        قدیمی به دیتابیس/سایتِ قبلی وصل می‌شد."""
+        self.config = load_secure_config(None) or {}
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+
+        self.erp_label = erp_provider_label(self.config)
+
     def _sv_search_site(self):
+        self._reload_config()
         self.sv_status_label.setText("⏳ در حالِ جستجویِ محصولاتِ سایت...")
         loader = _SiteVariationSearchLoader(self.config, self.sv_site_search.text())
         self._keep_loader(loader)
@@ -536,6 +551,7 @@ class StructureReconciliationTab(QWidget):
         self._populate_list_with_matches(self.sv_site_list, getattr(self, "_sv_site_entries", []), filter_state)
 
     def _sv_search_erp(self):
+        self._reload_config()
         self.sv_status_label.setText(f"⏳ در حالِ جستجویِ کالاهایِ {self.erp_label}...")
         loader = _ErpSimpleSkuLoader(self.config, self.sv_erp_search.text())
         self._keep_loader(loader)
@@ -785,6 +801,7 @@ class StructureReconciliationTab(QWidget):
         return scroll
 
     def _fs_search_site(self):
+        self._reload_config()
         self.fs_status_label.setText("⏳ در حالِ جستجویِ محصولاتِ سایت...")
         loader = _SiteProductSearchLoader(self.config, self.fs_site_search.text())
         self._keep_loader(loader)
@@ -828,6 +845,7 @@ class StructureReconciliationTab(QWidget):
         self._populate_list_with_matches(self.fs_site_list, getattr(self, "_fs_site_entries", []), filter_state)
 
     def _fs_search_erp(self):
+        self._reload_config()
         self.fs_status_label.setText(f"⏳ در حالِ جستجویِ زیرواریانت‌هایِ {self.erp_label}...")
         loader = _ErpVariantSkuLoader(self.config, self.fs_erp_search.text())
         self._keep_loader(loader)
