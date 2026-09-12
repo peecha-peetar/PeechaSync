@@ -1913,6 +1913,72 @@ class ProductTab(QWidget):
             dialog.exec_()
             return
 
+        # بهبودِ متنِ فیلدها با هوشِ مصنوعی (Gemini) — اختیاری: فقط وقتی
+        # کلیدِ API در تنظیمات وارد شده باشه و اتصال برقرار باشه؛ وگرنه
+        # (بدونِ اینترنت/کلید/سهمیه) بی‌سروصدا از همون پیشنهادهایِ آفلاینِ
+        # فعلی (که از قبل تویِ کادرها هست) صرف‌نظر می‌شه — چیزی خراب نمی‌شه.
+        ai_row = QHBoxLayout()
+        ai_button = QPushButton("🤖 بهبودِ متن‌ها با هوشِ مصنوعی (Gemini)")
+        ai_row.addWidget(ai_button)
+        ai_status_label = QLabel("")
+        ai_status_label.setWordWrap(True)
+        ai_status_label.setStyleSheet("color:#64748b; font-size:11px;")
+        ai_row.addWidget(ai_status_label, 1)
+        layout.addLayout(ai_row)
+
+        def _run_ai_improve():
+            from sync_app.core.secure_config_loader import load_secure_config as _load_cfg
+
+            ai_cfg = _load_cfg(None) or {}
+            if not str(ai_cfg.get("AI_API_KEY") or "").strip():
+                ai_status_label.setText(
+                    "ℹ️ کلیدِ API هوشِ مصنوعی تنظیم نشده (تنظیمات ← هوشِ مصنوعی) — "
+                    "همینِ پیشنهادهایِ فعلی (روشِ آفلاین) دست‌نخورده می‌مونه."
+                )
+                return
+
+            ai_button.setEnabled(False)
+            ai_status_label.setText("⏳ در حالِ ارتباط با Gemini...")
+            product_for_ai = {
+                "name": bundle.get("name", ""),
+                "description": (
+                    edit_map["description"].toPlainText().strip()
+                    if "description" in edit_map
+                    else current_values.get("description", "")
+                ),
+                "category": bundle.get("category_name", ""),
+            }
+
+            def _worker():
+                from sync_app.core.ai_content_helper import generate_smart_seo_suggestions
+
+                return generate_smart_seo_suggestions(ai_cfg, product_for_ai)
+
+            def _done(result):
+                ai_button.setEnabled(True)
+                ai_suggestions, used_ai = result
+                for key in ("short_description", "meta_description", "seo_title", "meta_keywords"):
+                    if key in edit_map and ai_suggestions.get(key):
+                        edit_map[key].setPlainText(ai_suggestions[key])
+                        checkbox_map[key].setChecked(True)
+                if used_ai:
+                    ai_status_label.setText("✅ متن‌ها با هوشِ مصنوعی (Gemini) بهبود یافتن.")
+                else:
+                    ai_status_label.setText(
+                        "⚠️ اتصال به هوشِ مصنوعی برقرار نشد (اینترنت/سهمیه) — "
+                        "از همون روشِ معمولیِ آفلاین استفاده شد."
+                    )
+
+            def _fail(_msg):
+                ai_button.setEnabled(True)
+                ai_status_label.setText(
+                    "⚠️ خطا در ارتباط با هوشِ مصنوعی — از همون روشِ معمولیِ آفلاین استفاده شد."
+                )
+
+            run_in_thread(_worker, on_complete=_done, on_error=_fail)
+
+        ai_button.clicked.connect(_run_ai_improve)
+
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.button(QDialogButtonBox.Ok).setText("📤 ارسال موارد تیک‌خورده به سایت")
         buttons.button(QDialogButtonBox.Cancel).setText("بستن")

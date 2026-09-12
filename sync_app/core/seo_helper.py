@@ -277,6 +277,7 @@ def analyze_product_seo_live(live: dict, *, fallback_name: str = "", fallback_de
 
     return {
         "name": name,
+        "category_name": category_name,
         "current_score": current.score,
         "checks": current.checks,
         "image_id": image_id,
@@ -372,6 +373,7 @@ def analyze_ps_product_seo(product: dict, *, category_name: str = "") -> dict:
 
     return {
         "name": name,
+        "category_name": category_name,
         "current_score": current.score,
         "checks": current.checks,
         "image_id": None,
