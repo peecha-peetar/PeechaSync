@@ -663,9 +663,12 @@ def _fetch_ps_products(
         # پرستاشاپ زباله‌دان نداره — هر محصولی که برگرده یعنی هنوز روی
         # فروشگاهه (فیلتر _ACTIVE_WC_STATUSES معادلی نداره).
         ptype = "variable" if grouped.get(wc_id) else "simple"
-        label = f"{name} — #{wc_id}"
+        # شناسهٔ خودکارِ عددیِ سایت (#wc_id) نمایش داده نمی‌شه — چون تطبیق و
+        # جستجو بر اساسِ SKU انجام می‌شه، نه این شناسه؛ نمایشش فقط باعثِ
+        # اشتباه‌گرفتنِ آن با یک کد می‌شد.
+        label = name
         if sku:
-            label += f" — کد {sku}"
+            label += f" — SKU: {sku}"
         label += f" — {ptype}"
         categories = [
             {"id": int(c["id"]), "name": cat_name_by_id.get(int(c["id"]), "")}
@@ -720,9 +723,12 @@ def _fetch_wc_products(
         sku = str(item.get("sku") or "").strip()
         name = str(item.get("name") or "").strip()
         ptype = str(item.get("type") or "simple").strip()
-        label = f"{name} — #{wc_id}"
+        # شناسهٔ خودکارِ عددیِ سایت (#wc_id) نمایش داده نمی‌شه — چون تطبیق و
+        # جستجو بر اساسِ SKU انجام می‌شه، نه این شناسه؛ نمایشش فقط باعثِ
+        # اشتباه‌گرفتنِ آن با یک کد می‌شد.
+        label = name
         if sku:
-            label += f" — کد {sku}"
+            label += f" — SKU: {sku}"
         label += f" — {ptype}"
         categories = [
             {"id": int(c["id"]), "name": str(c.get("name") or "").strip()}
@@ -1750,6 +1756,17 @@ def _pair_by_match_key(
     return pairs
 
 
+def _normalize_code_for_match(value: str) -> str:
+    """کدهایی که کاملاً عددی‌اند رو با حذفِ صفرهای ابتداییِ رشته یکسان‌سازی
+    می‌کنه — مثلاً کدِ دستیِ «000020012» تویِ ERP و SKUِ «20012» تویِ
+    فروشگاه باید یک کد در نظر گرفته بشن (رایج وقتی یکی از دو سیستم
+    صفرهای ابتداییِ کد رو نگه نمی‌داره)."""
+    text = str(value or "").strip().casefold()
+    if text and text.isdigit():
+        return text.lstrip("0") or "0"
+    return text
+
+
 def _pair_by_field(
     erp_rows: list[ReconRow],
     wc_rows: list[ReconRow],
@@ -1813,8 +1830,8 @@ def suggest_auto_pairs(
         for erp, wc in _pair_by_field(
             erp_pool,
             wc_pool,
-            erp_key_fn=lambda r: str((r.extra or {}).get("a_code_c") or "").strip().casefold(),
-            wc_key_fn=lambda r: str(r.match_key or "").strip().casefold(),
+            erp_key_fn=lambda r: _normalize_code_for_match((r.extra or {}).get("a_code_c") or ""),
+            wc_key_fn=lambda r: _normalize_code_for_match(r.match_key or ""),
         ):
             if erp.key in used_erp or wc.key in used_wc:
                 continue
