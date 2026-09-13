@@ -597,22 +597,14 @@ def _fetch_erp_products(config: dict) -> list[ReconRow]:
         name = str(row[1]).strip()
         price = resolve_article_price(row, price_col, price_start_index=2)
         sale_price = resolve_sale_article_price(row, config, price_start_index=2)
-        stock = int(row[7] or 0)
         manual_code = str(row[8] or "").strip() if len(row) > 8 else ""
         ptype_fa = "متغیر" if sku in variable_codes else "ساده"
 
-        # ترتیبِ ثابت: نوع - کدِ دستی - کدِ اتوماتیک - نام - قیمت - علائمِ دیگر
-        parts = [
-            ptype_fa,
-            f"کدِ دستی: {manual_code or '—'}",
-            f"کدِ اتوماتیک: {sku or '—'}",
-            name,
-            f"{price:,.0f}",
-        ]
-        if sale_price > 0:
-            parts.append(f"ویژه: {sale_price:,.0f}")
-        parts.append(f"موجودی: {stock}")
-        label = " - ".join(parts)
+        # ترتیبِ ثابت و کوتاه (وضعیتِ لینک جدا، بیرونِ این متن اضافه می‌شه):
+        # نوع | کدِ دستی | نام | قیمتِ اصلی — بدونِ کدِ اتوماتیک/قیمتِ ویژه/
+        # موجودی، چون طولانی و تکراری بودن (کدِ اتوماتیک همون‌جوری تویِ
+        # ستونِ راستِ لیست و تویِ خودِ عملیاتِ تطبیق در دسترسه).
+        label = " | ".join([ptype_fa, manual_code or "—", name, f"{price:,.0f}"])
 
         rows.append(
             ReconRow(
@@ -681,10 +673,10 @@ def _fetch_ps_products(
             price_num = float(item.get("regular_price") or 0)
         except (TypeError, ValueError):
             price_num = 0.0
-        # ترتیبِ ثابت: نوع - SKU - نام - قیمت — همون ترتیبی که سمتِ ERP هم
-        # استفاده می‌شه. شناسهٔ خودکارِ عددیِ سایت (#wc_id) نمایش داده
-        # نمی‌شه چون تطبیق و جستجو بر اساسِ SKU انجام می‌شه، نه این شناسه.
-        label = f"{ptype_fa} - SKU: {sku or '—'} - {name} - {price_num:,.0f}"
+        # ترتیبِ ثابت و کوتاه (وضعیتِ لینک جدا، بیرونِ این متن اضافه می‌شه):
+        # نوع | SKU | نام | قیمتِ اصلی. شناسهٔ خودکارِ عددیِ سایت (#wc_id)
+        # نمایش داده نمی‌شه چون تطبیق و جستجو بر اساسِ SKU انجام می‌شه.
+        label = " | ".join([ptype_fa, sku or "—", name, f"{price_num:,.0f}"])
         categories = [
             {"id": int(c["id"]), "name": cat_name_by_id.get(int(c["id"]), "")}
             for c in (item.get("categories") or [])
@@ -743,10 +735,10 @@ def _fetch_wc_products(
             price_num = float(item.get("price") or 0)
         except (TypeError, ValueError):
             price_num = 0.0
-        # ترتیبِ ثابت: نوع - SKU - نام - قیمت — همون ترتیبی که سمتِ ERP هم
-        # استفاده می‌شه. شناسهٔ خودکارِ عددیِ سایت (#wc_id) نمایش داده
-        # نمی‌شه چون تطبیق و جستجو بر اساسِ SKU انجام می‌شه، نه این شناسه.
-        label = f"{ptype_fa} - SKU: {sku or '—'} - {name} - {price_num:,.0f}"
+        # ترتیبِ ثابت و کوتاه (وضعیتِ لینک جدا، بیرونِ این متن اضافه می‌شه):
+        # نوع | SKU | نام | قیمتِ اصلی. شناسهٔ خودکارِ عددیِ سایت (#wc_id)
+        # نمایش داده نمی‌شه چون تطبیق و جستجو بر اساسِ SKU انجام می‌شه.
+        label = " | ".join([ptype_fa, sku or "—", name, f"{price_num:,.0f}"])
         categories = [
             {"id": int(c["id"]), "name": str(c.get("name") or "").strip()}
             for c in (item.get("categories") or [])

@@ -2052,21 +2052,23 @@ class ReconciliationTab(QWidget):
         linked_label: str = "",
     ):
         if section == SECTION_PENDING:
-            prefix = f"🔗{pair_index} "
+            prefix = f"🔗{pair_index}"
             bg = COLOR_PENDING
         elif section == SECTION_AUTO:
-            prefix = f"🤖{pair_index} "
+            prefix = f"🤖{pair_index}"
             bg = self._default_row_bg(row, section)
         elif section == SECTION_SYNCED or row.synced:
-            prefix = "✅ "
+            prefix = "✅"
             bg = COLOR_SYNCED
         else:
-            prefix = "⚠️ "
+            prefix = "⚠️"
             bg = COLOR_UNSYNCED
 
-        text = f"{prefix}{row.label}"
+        # وضعیتِ کالا (لینک‌شده/لینک‌نشده/پیشنهاد) هم مثلِ بقیهٔ اطلاعاتِ
+        # ردیف با همین علامتِ | جدا می‌شه — یک ترتیبِ یکدست از اول تا آخرِ متن.
+        text = f"{prefix} | {row.label}"
         if linked_label:
-            text += f"  🔗 {linked_label}"
+            text += f" | 🔗 {linked_label}"
         item = QListWidgetItem(text)
         item.setData(Qt.UserRole, row)
         item.setData(ITEM_ROLE_SECTION, section)
