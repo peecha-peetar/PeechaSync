@@ -121,6 +121,7 @@ class SuggestedPair:
 
 
 SUGGEST_REASON_MANUAL_CODE = "manual_code"
+SUGGEST_REASON_CODE_LOOSE = "code_loose"
 SUGGEST_REASON_MATCH_KEY = "match_key"
 SUGGEST_REASON_NAME_EXACT = "name_exact"
 SUGGEST_REASON_NAME_SIMILAR = "name_similar"
@@ -152,6 +153,12 @@ def format_suggestion_tooltip(reason: str, erp: ReconRow, wc: ReconRow, config: 
         return (
             f"پیشنهاد سیستم: {code_line}\n"
             "بالاترین اولویتِ تطبیق (کدِ دستی)؛ برای ثبت «پذیرش» بزنید، اگر اشتباه است «رد پیشنهاد»."
+        )
+    if code == SUGGEST_REASON_CODE_LOOSE:
+        return (
+            "پیشنهاد سیستم: کدهای این دو با نادیده‌گرفتنِ حرف/خط‌تیره/صفرِ "
+            f"اضافه (مثلِ S{match_code} یا 00{match_code}) یکسان به نظر می‌رسن.\n"
+            "این تطبیق کمتر از بقیه مطمئنه — حتماً قبل از پذیرش بررسی کنید."
         )
     if code == SUGGEST_REASON_MATCH_KEY:
         code_line = f"SKUِ «{match_code}» در {erp_label} و فروشگاه یکسان است."
@@ -1776,6 +1783,18 @@ def _normalize_code_for_match(value: str) -> str:
     return text
 
 
+def _normalize_code_loose(value: str) -> str:
+    """نرمال‌سازیِ سخت‌گیرانه‌ترِ کد — هر کاراکترِ غیرعددی (حرف، خط‌تیره،
+    فاصله، زیرخط، ...) حذف می‌شه و بعد صفرهایِ ابتداییِ عددِ باقی‌مونده هم
+    حذف می‌شن؛ برایِ وقتی سایت جلویِ کدِ ERP یک حرف/خط‌تیرهٔ اضافه گذاشته
+    (مثلِ «S3001» یا «-3001») یا برعکس صفر اضافه کرده («003001»)."""
+    text = str(value or "").strip().casefold()
+    digits = "".join(ch for ch in text if ch.isdigit())
+    if digits:
+        return digits.lstrip("0") or "0"
+    return text
+
+
 def _pair_by_field(
     erp_rows: list[ReconRow],
     wc_rows: list[ReconRow],
@@ -1921,6 +1940,36 @@ def suggest_auto_pairs(
         suggestions.append(SuggestedPair(erp, wc, SUGGEST_REASON_NAME_SIMILAR))
         used_erp.add(erp.key)
         used_wc.add(wc.key)
+
+    # اولویتِ آخر (fallback): اگه با کدِ دقیق (دستی/اتوماتیک) و نام هیچی
+    # پیدا نشد، دوباره از کدِ دستی و بعد کدِ اتوماتیک شروع می‌کنیم — این‌بار
+    # با نرمال‌سازیِ سخت‌گیرانه‌تر (حذفِ هر حرف/خط‌تیره/فاصله + صفرهایِ
+    # ابتدایی) تا کدهایی مثلِ «S3001»، «003001» یا «-3001» هم معادلِ «3001»
+    # تشخیص داده بشن. چون این نوع تطبیق کمتر مطمئنه، اولویتش از همه پایین‌تره.
+    if entity == ENTITY_PRODUCTS:
+        for erp, wc in _pair_by_field(
+            erp_pool,
+            wc_pool,
+            erp_key_fn=lambda r: _normalize_code_loose((r.extra or {}).get("a_code_c") or ""),
+            wc_key_fn=lambda r: _normalize_code_loose(r.match_key or ""),
+        ):
+            if erp.key in used_erp or wc.key in used_wc:
+                continue
+            suggestions.append(SuggestedPair(erp, wc, SUGGEST_REASON_CODE_LOOSE))
+            used_erp.add(erp.key)
+            used_wc.add(wc.key)
+
+        for erp, wc in _pair_by_field(
+            erp_pool,
+            wc_pool,
+            erp_key_fn=lambda r: _normalize_code_loose(r.erp_key or ""),
+            wc_key_fn=lambda r: _normalize_code_loose(r.match_key or ""),
+        ):
+            if erp.key in used_erp or wc.key in used_wc:
+                continue
+            suggestions.append(SuggestedPair(erp, wc, SUGGEST_REASON_CODE_LOOSE))
+            used_erp.add(erp.key)
+            used_wc.add(wc.key)
 
     return suggestions
 
