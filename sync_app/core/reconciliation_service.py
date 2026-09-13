@@ -120,6 +120,7 @@ class SuggestedPair:
     reason: str
 
 
+SUGGEST_REASON_MANUAL_CODE = "manual_code"
 SUGGEST_REASON_MATCH_KEY = "match_key"
 SUGGEST_REASON_NAME_EXACT = "name_exact"
 SUGGEST_REASON_NAME_SIMILAR = "name_similar"
@@ -144,6 +145,13 @@ def format_suggestion_tooltip(reason: str, erp: ReconRow, wc: ReconRow, config: 
     erp_label = erp_provider_label(config)
     code = normalize_suggestion_reason(reason)
     match_code = str(erp.match_key or wc.match_key or "").strip()
+    if code == SUGGEST_REASON_MANUAL_CODE:
+        manual_code = str((erp.extra or {}).get("a_code_c") or "").strip()
+        code_line = f"کدِ دستیِ «{manual_code}» در {erp_label} با کدِ محصول در فروشگاه یکسان است."
+        return (
+            f"پیشنهاد سیستم: {code_line}\n"
+            "بالاترین اولویتِ تطبیق (کدِ دستی)؛ برای ثبت «پذیرش» بزنید، اگر اشتباه است «رد پیشنهاد»."
+        )
     if code == SUGGEST_REASON_MATCH_KEY:
         code_line = f"کد محصول «{match_code}» در {erp_label} و فروشگاه یکسان است."
         if not match_code:
@@ -588,11 +596,10 @@ def _fetch_erp_products(config: dict) -> list[ReconRow]:
         stock = int(row[7] or 0)
         manual_code = str(row[8] or "").strip() if len(row) > 8 else ""
 
-        # ترتیب راست‌به‌چپ: نام - کد اتوماتیک - کد دستی - قیمت عادی - قیمت ویژه - موجودی
-        # بدون عنوان کلمه‌ای (کد/قیمت/موجودی) — چون با کاراکترهای انگلیسی به‌هم می‌ریخت.
+        # ترتیب راست‌به‌چپ: نام - کد اتوماتیک - کد دستی (برچسب‌دار) - قیمت عادی - قیمت ویژه - موجودی
         parts = [name, sku]
         if manual_code:
-            parts.append(manual_code)
+            parts.append(f"کدِ دستی: {manual_code}")
         parts.append(f"{price:,.0f}")
         if sale_price > 0:
             parts.append(f"{sale_price:,.0f}")
@@ -1742,6 +1749,33 @@ def _pair_by_match_key(
     return pairs
 
 
+def _pair_by_field(
+    erp_rows: list[ReconRow],
+    wc_rows: list[ReconRow],
+    *,
+    erp_key_fn: Callable[[ReconRow], str],
+    wc_key_fn: Callable[[ReconRow], str],
+) -> list[tuple[ReconRow, ReconRow]]:
+    """تطبیقِ عمومیِ ۱↔۱ با هر فیلدِ دلخواه از دو طرف (نه فقط match_key)."""
+    wc_index: dict[str, list[ReconRow]] = {}
+    for wc in wc_rows:
+        key = wc_key_fn(wc)
+        if key:
+            wc_index.setdefault(key, []).append(wc)
+
+    pairs: list[tuple[ReconRow, ReconRow]] = []
+    used_wc: set[str] = set()
+    for erp in erp_rows:
+        key = erp_key_fn(erp)
+        if not key:
+            continue
+        candidates = [wc for wc in wc_index.get(key, []) if wc.key not in used_wc]
+        if len(candidates) == 1:
+            pairs.append((erp, candidates[0]))
+            used_wc.add(candidates[0].key)
+    return pairs
+
+
 def suggest_auto_pairs(
     entity: str,
     erp_rows: list[ReconRow],
@@ -1769,6 +1803,24 @@ def suggest_auto_pairs(
     used_erp: set[str] = set()
     used_wc: set[str] = set()
 
+    # اولویتِ اول: کدِ دستیِ ERP (A_Code_C) در برابرِ کدِ محصولِ فروشگاه —
+    # چون فروشنده‌ها معمولاً همین کدِ دستی رو به‌عنوانِ SKU رویِ سایت هم
+    # می‌ذارن، این دقیق‌ترین و مطمئن‌ترین تطبیقه؛ قبل از کدِ اتوماتیک بررسی می‌شه.
+    if entity == ENTITY_PRODUCTS:
+        for erp, wc in _pair_by_field(
+            erp_pool,
+            wc_pool,
+            erp_key_fn=lambda r: str((r.extra or {}).get("a_code_c") or "").strip().casefold(),
+            wc_key_fn=lambda r: str(r.match_key or "").strip().casefold(),
+        ):
+            if erp.key in used_erp or wc.key in used_wc:
+                continue
+            suggestions.append(SuggestedPair(erp, wc, SUGGEST_REASON_MANUAL_CODE))
+            used_erp.add(erp.key)
+            used_wc.add(wc.key)
+
+    # اولویتِ دوم: کدِ اتوماتیکِ ERP (A_Code — «کدِ کالایِ قبلی») در برابرِ
+    # کدِ محصولِ فروشگاه.
     for erp, wc in _pair_by_match_key(
         erp_pool,
         wc_pool,

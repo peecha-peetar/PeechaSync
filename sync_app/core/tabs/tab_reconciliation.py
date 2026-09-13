@@ -263,6 +263,23 @@ class ReconciliationTab(QWidget):
         type_row.addWidget(self.site_category_filter_label)
         type_row.addWidget(self.site_category_filter_combo)
 
+        self.product_type_filter_label = QLabel("نوعِ محصول:")
+        self.product_type_filter_label.setProperty("role", "caption")
+        self.product_type_filter_combo = QComboBox()
+        self.product_type_filter_combo.setObjectName("reconProductTypeFilterCombo")
+        self.product_type_filter_combo.setLayoutDirection(Qt.RightToLeft)
+        self.product_type_filter_combo.setMinimumWidth(90)
+        self.product_type_filter_combo.setMaximumWidth(110)
+        self.product_type_filter_combo.addItem("همه", "")
+        self.product_type_filter_combo.addItem("ساده", "simple")
+        self.product_type_filter_combo.addItem("متغیر", "variable")
+        self.product_type_filter_combo.setToolTip(
+            "فقط محصولاتِ سادهِ فروشگاه یا فقط محصولاتِ متغیرِ فروشگاه را نشان بده."
+        )
+        self.product_type_filter_combo.currentIndexChanged.connect(self._on_category_filter_changed)
+        type_row.addWidget(self.product_type_filter_label)
+        type_row.addWidget(self.product_type_filter_combo)
+
         self._update_category_filter_visibility()
 
         status_row.addWidget(self.type_filter)
@@ -1294,6 +1311,9 @@ class ReconciliationTab(QWidget):
         self.category_filter_combo.setVisible(show)
         self.site_category_filter_label.setVisible(show)
         self.site_category_filter_combo.setVisible(show)
+        show_type = self._current_entity() == ENTITY_PRODUCTS
+        self.product_type_filter_label.setVisible(show_type)
+        self.product_type_filter_combo.setVisible(show_type)
 
     def _populate_category_filter_options(self):
         """گزینه‌های فیلتر رو از جدول S_Group واقعی SQL (کد + نام) پر می‌کنه."""
@@ -1392,8 +1412,13 @@ class ReconciliationTab(QWidget):
         entity_ok = self._current_entity() in (ENTITY_PRODUCTS, ENTITY_VARIATIONS)
         group_code = str(self.category_filter_combo.currentData() or "").strip() if entity_ok else ""
         site_cat_id = str(self.site_category_filter_combo.currentData() or "").strip() if entity_ok else ""
+        product_type = (
+            str(self.product_type_filter_combo.currentData() or "").strip()
+            if self._current_entity() == ENTITY_PRODUCTS
+            else ""
+        )
 
-        if not group_code and not site_cat_id:
+        if not group_code and not site_cat_id and not product_type:
             self._comparison = self._comparison_unfiltered
             return
 
@@ -1407,10 +1432,15 @@ class ReconciliationTab(QWidget):
             return bool(sku) and sku.startswith(group_code)
 
         def _site_matches(row: ReconRow) -> bool:
-            if not site_cat_id:
-                return True
-            cats = row.extra.get("categories") or []
-            return any(str(c.get("id")) == site_cat_id for c in cats if isinstance(c, dict))
+            if site_cat_id:
+                cats = row.extra.get("categories") or []
+                if not any(str(c.get("id")) == site_cat_id for c in cats if isinstance(c, dict)):
+                    return False
+            if product_type:
+                ptype = str(row.extra.get("type") or "").strip()
+                if ptype != product_type:
+                    return False
+            return True
 
         from sync_app.core.reconciliation_service import _compute_stats
 

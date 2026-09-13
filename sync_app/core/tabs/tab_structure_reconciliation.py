@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 
-from PyQt5.QtCore import Qt, QThread, pyqtSignal
+from PyQt5.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QCheckBox,
@@ -590,6 +590,18 @@ class StructureReconciliationTab(QWidget):
         self._loaders.append(loader)
         loader.finished.connect(lambda l=loader: self._loaders.remove(l) if l in self._loaders else None)
 
+    def _wire_live_search(self, line_edit: QLineEdit, callback, *, delay_ms: int = 450) -> None:
+        """جستجویِ زنده: با هر تایپ، بعدِ یک مکثِ کوتاه (بدونِ نیاز به Enter
+        یا زدنِ دکمه) خودش دوباره جستجو می‌کنه. تایمر singleShot با هر
+        keystroke دوباره start می‌شه، پس فقط یک بار — بعدِ توقفِ تایپ — اجرا
+        می‌شه (نه به‌ازایِ هر حرف، که فشارِ زیادی رو دیتابیس/سایت می‌ذاشت)."""
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        timer.setInterval(delay_ms)
+        timer.timeout.connect(callback)
+        line_edit.textChanged.connect(lambda _text=None: timer.start())
+        line_edit.destroyed.connect(timer.stop)
+
     def _build_link_filter_combo(self, on_change) -> QComboBox:
         """کمبویِ «همه/فقط لینک‌شده/فقط لینک‌نشده» — بالایِ هر دو لیستِ
         یک بخش، تا نتیجه‌هایِ قبلاً‌تطبیق‌داده‌شده از تطبیق‌نشده‌ها جدا
@@ -692,6 +704,7 @@ class StructureReconciliationTab(QWidget):
         self.sv_site_search = QLineEdit()
         self.sv_site_search.setPlaceholderText("جستجویِ نامِ محصولِ سایت...")
         self.sv_site_search.returnPressed.connect(self._sv_search_site)
+        self._wire_live_search(self.sv_site_search, self._sv_search_site)
         site_search_row.addWidget(self.sv_site_search, 1)
         sv_search_btn = QPushButton("🔍")
         sv_search_btn.clicked.connect(self._sv_search_site)
@@ -722,6 +735,7 @@ class StructureReconciliationTab(QWidget):
         self.sv_erp_search = QLineEdit()
         self.sv_erp_search.setPlaceholderText(f"جستجویِ کد/نامِ کالایِ {self.erp_label}...")
         self.sv_erp_search.returnPressed.connect(self._sv_search_erp)
+        self._wire_live_search(self.sv_erp_search, self._sv_search_erp)
         erp_search_row.addWidget(self.sv_erp_search, 1)
         sv_erp_btn = QPushButton("🔍")
         sv_erp_btn.clicked.connect(self._sv_search_erp)
@@ -1220,6 +1234,7 @@ class StructureReconciliationTab(QWidget):
         self.fs_site_search = QLineEdit()
         self.fs_site_search.setPlaceholderText("جستجویِ نامِ محصولِ سایت...")
         self.fs_site_search.returnPressed.connect(self._fs_search_site)
+        self._wire_live_search(self.fs_site_search, self._fs_search_site)
         site_search_row.addWidget(self.fs_site_search, 1)
         fs_search_btn = QPushButton("🔍")
         fs_search_btn.clicked.connect(self._fs_search_site)
@@ -1250,6 +1265,7 @@ class StructureReconciliationTab(QWidget):
         self.fs_erp_search = QLineEdit()
         self.fs_erp_search.setPlaceholderText(f"جستجویِ کد/نامِ کالایِ والدِ {self.erp_label}...")
         self.fs_erp_search.returnPressed.connect(self._fs_search_erp)
+        self._wire_live_search(self.fs_erp_search, self._fs_search_erp)
         erp_search_row.addWidget(self.fs_erp_search, 1)
         fs_erp_btn = QPushButton("🔍")
         fs_erp_btn.clicked.connect(self._fs_search_erp)
