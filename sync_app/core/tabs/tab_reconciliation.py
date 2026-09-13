@@ -2066,9 +2066,12 @@ class ReconciliationTab(QWidget):
 
         # وضعیتِ کالا (لینک‌شده/لینک‌نشده/پیشنهاد) هم مثلِ بقیهٔ اطلاعاتِ
         # ردیف با همین علامتِ | جدا می‌شه — یک ترتیبِ یکدست از اول تا آخرِ متن.
+        # توجه: linked_label (اطلاعاتِ طرفِ مقابل) دیگه تویِ متنِ ردیف چاپ
+        # نمی‌شه — چون ستونِ ERP باید فقط اطلاعاتِ ERP و ستونِ سایت فقط
+        # اطلاعاتِ سایت رو نشون بده (نه هر دو تکراری تویِ یک ردیف). برایِ
+        # اینکه هنوز بشه فهمید این ردیف به کدوم موردِ طرفِ مقابل لینکه، فقط
+        # با نگه‌داشتنِ ماوس (tooltip) پایین نشون داده می‌شه.
         text = f"{prefix} | {row.label}"
-        if linked_label:
-            text += f" | 🔗 {linked_label}"
         item = QListWidgetItem(text)
         item.setData(Qt.UserRole, row)
         item.setData(ITEM_ROLE_SECTION, section)
