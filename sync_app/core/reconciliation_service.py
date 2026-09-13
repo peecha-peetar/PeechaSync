@@ -577,9 +577,12 @@ def _fetch_wc_categories(
 
 def _fetch_erp_products(config: dict) -> list[ReconRow]:
     """همه محصولات ERP — بدون فیلتر گروه انتخاب‌شده (برای نگاشت فروشگاه موجود)."""
+    from sync_app.core.variation_query import load_variable_a_codes
+
     price_col = config.get("PRICE_LIST_COLUMN", "Sel_Price")
     conn, _, _ = open_sql_connection(config, timeout=8)
     cursor = conn.cursor()
+    variable_codes = load_variable_a_codes(cursor)
     cursor.execute(
         """
         SELECT A_Code, A_Name, Sel_Price, Sel_Price2, Sel_Price3, Sel_Price4, Sel_Price5, Exist, A_Code_C
@@ -596,15 +599,19 @@ def _fetch_erp_products(config: dict) -> list[ReconRow]:
         sale_price = resolve_sale_article_price(row, config, price_start_index=2)
         stock = int(row[7] or 0)
         manual_code = str(row[8] or "").strip() if len(row) > 8 else ""
+        ptype_fa = "متغیر" if sku in variable_codes else "ساده"
 
-        # ترتیب راست‌به‌چپ: نام - کد اتوماتیک - کد دستی (برچسب‌دار) - قیمت عادی - قیمت ویژه - موجودی
-        parts = [name, sku]
-        if manual_code:
-            parts.append(f"کدِ دستی: {manual_code}")
-        parts.append(f"{price:,.0f}")
+        # ترتیبِ ثابت: نوع - کدِ دستی - کدِ اتوماتیک - نام - قیمت - علائمِ دیگر
+        parts = [
+            ptype_fa,
+            f"کدِ دستی: {manual_code or '—'}",
+            f"کدِ اتوماتیک: {sku or '—'}",
+            name,
+            f"{price:,.0f}",
+        ]
         if sale_price > 0:
-            parts.append(f"{sale_price:,.0f}")
-        parts.append(str(stock))
+            parts.append(f"ویژه: {sale_price:,.0f}")
+        parts.append(f"موجودی: {stock}")
         label = " - ".join(parts)
 
         rows.append(
@@ -615,7 +622,13 @@ def _fetch_erp_products(config: dict) -> list[ReconRow]:
                 synced=False,
                 side="erp",
                 match_key=sku.lower(),
-                extra={"sku": sku, "name": name, "a_code_c": manual_code, "sale_price": sale_price},
+                extra={
+                    "sku": sku,
+                    "name": name,
+                    "a_code_c": manual_code,
+                    "sale_price": sale_price,
+                    "type": "variable" if sku in variable_codes else "simple",
+                },
             )
         )
     conn.close()
@@ -663,13 +676,15 @@ def _fetch_ps_products(
         # پرستاشاپ زباله‌دان نداره — هر محصولی که برگرده یعنی هنوز روی
         # فروشگاهه (فیلتر _ACTIVE_WC_STATUSES معادلی نداره).
         ptype = "variable" if grouped.get(wc_id) else "simple"
-        # شناسهٔ خودکارِ عددیِ سایت (#wc_id) نمایش داده نمی‌شه — چون تطبیق و
-        # جستجو بر اساسِ SKU انجام می‌شه، نه این شناسه؛ نمایشش فقط باعثِ
-        # اشتباه‌گرفتنِ آن با یک کد می‌شد.
-        label = name
-        if sku:
-            label += f" — SKU: {sku}"
-        label += f" — {ptype}"
+        ptype_fa = "متغیر" if ptype == "variable" else "ساده"
+        try:
+            price_num = float(item.get("regular_price") or 0)
+        except (TypeError, ValueError):
+            price_num = 0.0
+        # ترتیبِ ثابت: نوع - SKU - نام - قیمت — همون ترتیبی که سمتِ ERP هم
+        # استفاده می‌شه. شناسهٔ خودکارِ عددیِ سایت (#wc_id) نمایش داده
+        # نمی‌شه چون تطبیق و جستجو بر اساسِ SKU انجام می‌شه، نه این شناسه.
+        label = f"{ptype_fa} - SKU: {sku or '—'} - {name} - {price_num:,.0f}"
         categories = [
             {"id": int(c["id"]), "name": cat_name_by_id.get(int(c["id"]), "")}
             for c in (item.get("categories") or [])
@@ -706,7 +721,7 @@ def _fetch_wc_products(
         "products",
         params={
             "status": "any",
-            "_fields": "id,sku,name,status,type,categories",
+            "_fields": "id,sku,name,status,type,price,categories",
         },
         cancel_check=cancel_check,
     )
@@ -723,13 +738,15 @@ def _fetch_wc_products(
         sku = str(item.get("sku") or "").strip()
         name = str(item.get("name") or "").strip()
         ptype = str(item.get("type") or "simple").strip()
-        # شناسهٔ خودکارِ عددیِ سایت (#wc_id) نمایش داده نمی‌شه — چون تطبیق و
-        # جستجو بر اساسِ SKU انجام می‌شه، نه این شناسه؛ نمایشش فقط باعثِ
-        # اشتباه‌گرفتنِ آن با یک کد می‌شد.
-        label = name
-        if sku:
-            label += f" — SKU: {sku}"
-        label += f" — {ptype}"
+        ptype_fa = "متغیر" if ptype == "variable" else "ساده"
+        try:
+            price_num = float(item.get("price") or 0)
+        except (TypeError, ValueError):
+            price_num = 0.0
+        # ترتیبِ ثابت: نوع - SKU - نام - قیمت — همون ترتیبی که سمتِ ERP هم
+        # استفاده می‌شه. شناسهٔ خودکارِ عددیِ سایت (#wc_id) نمایش داده
+        # نمی‌شه چون تطبیق و جستجو بر اساسِ SKU انجام می‌شه، نه این شناسه.
+        label = f"{ptype_fa} - SKU: {sku or '—'} - {name} - {price_num:,.0f}"
         categories = [
             {"id": int(c["id"]), "name": str(c.get("name") or "").strip()}
             for c in (item.get("categories") or [])
