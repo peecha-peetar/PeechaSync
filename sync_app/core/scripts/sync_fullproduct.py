@@ -144,6 +144,8 @@ def _apply_field_sync_config(payload, config, *, is_create):
         payload.pop("description", None)
     if not is_field_enabled(cfg, "SYNC_FIELD_PRODUCT_CATEGORIES"):
         payload.pop("categories", None)
+    if not is_field_enabled(cfg, "SYNC_FIELD_PRODUCT_PRICE"):
+        payload.pop("regular_price", None)
     if not is_field_enabled(cfg, "SYNC_FIELD_PRODUCT_VISIBILITY"):
         payload.pop("catalog_visibility", None)
     # روی ووکامرس، manage_stock=False برای محصول متغیر یک تنظیم فنیِ ثابته

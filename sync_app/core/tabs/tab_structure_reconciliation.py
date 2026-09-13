@@ -18,6 +18,7 @@ import logging
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QHBoxLayout,
     QHeaderView,
@@ -50,6 +51,100 @@ _LINK_FILTER_UNLINKED = "unlinked"
 _MATCH_NONE = "none"
 _MATCH_STRUCTURAL = "structural"
 _MATCH_RECONCILED = "reconciled"
+
+_MIN_NAME_MATCH_RATIO = 0.45
+
+
+# ----------------------------------------------------------------------
+# تطبیقِ خودکار — بر اساسِ کدِ یکسان، شباهتِ کد، بعد شباهتِ نام
+# ----------------------------------------------------------------------
+def _normalize_match_text(text: str) -> str:
+    """برایِ مقایسه‌یِ نام‌ها: حذفِ پرانتزها/اعداد/جداکننده‌ها تا شباهتِ
+    متنی گمراه‌کننده نشه (مثلاً شماره‌ی #محصول/#واریانت تویِ لیبل)."""
+    import re
+
+    t = str(text or "")
+    t = re.sub(r"\([^)]*\)", " ", t)
+    t = re.sub(r"#\S+", " ", t)
+    t = re.sub(r"[\d/_\-—,،:؛]+", " ", t)
+    t = re.sub(r"\s+", " ", t).strip().lower()
+    return t
+
+
+def _name_match_ratio(a_text: str, b_text: str) -> float:
+    """شباهتِ دو متن — هم بر اساسِ کاراکتر (SequenceMatcher) و هم بر اساسِ
+    مجموعه‌یِ کلمات (Jaccard) — تا ترتیبِ متفاوتِ کلمات (مثلِ اضافه‌شدنِ
+    برند/سایز وسطِ نام) نمره رو بی‌خود پایین نیاره."""
+    import difflib
+
+    a_norm = _normalize_match_text(a_text)
+    b_norm = _normalize_match_text(b_text)
+    seq_ratio = difflib.SequenceMatcher(None, a_norm, b_norm).ratio()
+    a_tokens = set(a_norm.split())
+    b_tokens = set(b_norm.split())
+    jaccard = len(a_tokens & b_tokens) / len(a_tokens | b_tokens) if (a_tokens and b_tokens) else 0.0
+    return max(seq_ratio, jaccard)
+
+
+def _suggest_matches(site_items, erp_items, *, min_name_ratio: float = _MIN_NAME_MATCH_RATIO):
+    """site_items/erp_items: [(key, sku, display_text), ...] — کلید هرچی
+    باشه (فقط باید یکتا و hashable باشه). هر طرف حداکثر یک‌بار استفاده
+    می‌شه (اولین/بهترین تطبیق برنده‌ست). اولویت: کدِ کاملاً یکسان → شباهتِ
+    زیررشته‌ایِ کد (حداقل ۴ کاراکتر) → شباهتِ متنیِ نام (SequenceMatcher).
+    خروجی: [(site_key, erp_key, erp_sku, reason), ...]"""
+    used_erp_keys = set()
+
+    def _pick_by_sku(site_sku_norm):
+        for erp_key, erp_sku, _erp_text in erp_items:
+            if erp_key in used_erp_keys:
+                continue
+            erp_sku_norm = str(erp_sku or "").strip().lower()
+            if erp_sku_norm and erp_sku_norm == site_sku_norm:
+                return erp_key, erp_sku, "کدِ یکسان"
+        return None
+
+    def _pick_by_sku_substring(site_sku_norm):
+        if len(site_sku_norm) < 4:
+            return None
+        for erp_key, erp_sku, _erp_text in erp_items:
+            if erp_key in used_erp_keys:
+                continue
+            erp_sku_norm = str(erp_sku or "").strip().lower()
+            if not erp_sku_norm:
+                continue
+            if site_sku_norm in erp_sku_norm or erp_sku_norm in site_sku_norm:
+                return erp_key, erp_sku, "شباهتِ کد"
+        return None
+
+    def _pick_by_name(site_text):
+        if not _normalize_match_text(site_text):
+            return None
+        best_ratio = 0.0
+        best = None
+        for erp_key, erp_sku, erp_text in erp_items:
+            if erp_key in used_erp_keys:
+                continue
+            ratio = _name_match_ratio(site_text, erp_text)
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best = (erp_key, erp_sku)
+        if best and best_ratio >= min_name_ratio:
+            return best[0], best[1], f"شباهتِ نام ({int(best_ratio * 100)}٪)"
+        return None
+
+    results = []
+    for site_key, site_sku, site_text in site_items:
+        site_sku_norm = str(site_sku or "").strip().lower()
+        found = None
+        if site_sku_norm:
+            found = _pick_by_sku(site_sku_norm) or _pick_by_sku_substring(site_sku_norm)
+        if not found:
+            found = _pick_by_name(site_text)
+        if found:
+            erp_key, erp_sku, reason = found
+            used_erp_keys.add(erp_key)
+            results.append((site_key, erp_key, erp_sku, reason))
+    return results
 
 
 # ----------------------------------------------------------------------
@@ -108,10 +203,11 @@ def _search_site_products(cfg, query: str) -> list[dict]:
 
 
 def _list_site_variations_for_product(cfg, product: dict) -> list[dict]:
-    """واریانت‌هایِ یک محصولِ سایت — شکلِ خروجی: [{"id", "label"}, ...]
+    """واریانت‌هایِ یک محصولِ سایت — شکلِ خروجی: [{"id", "label", "sku"}, ...]
     (خالی اگه محصول واریانت نداشته باشه — چه ساده باشه چه متغیر). لیبل
     ترجیحاً نامِ خودِ واریانت (مثلِ «قرمز، L») هست، نه فقط کدش — تا کنارِ
-    نامِ محصول قابلِ‌تشخیص باشه."""
+    نامِ محصول قابلِ‌تشخیص باشه. sku برایِ تطبیقِ خودکار (مقایسه با کدِ
+    ERP) لازمه."""
     from sync_app.core.integrations.commerce_provider import is_prestashop
 
     pid = int(product["id"])
@@ -137,7 +233,7 @@ def _list_site_variations_for_product(cfg, product: dict) -> list[dict]:
                 label = f"{variant_name} ({reference})"
             else:
                 label = variant_name or reference or f"ترکیب #{c['id']}"
-            out.append({"id": int(c["id"]), "label": label})
+            out.append({"id": int(c["id"]), "label": label, "sku": reference})
         return out
 
     from sync_app.core.wc_sync_helper import apply_network_overrides, build_wcapi
@@ -158,7 +254,7 @@ def _list_site_variations_for_product(cfg, product: dict) -> list[dict]:
             label = f"{attrs} ({sku})"
         else:
             label = attrs or sku or f"واریانت #{v['id']}"
-        out.append({"id": int(v["id"]), "label": label})
+        out.append({"id": int(v["id"]), "label": label, "sku": sku})
     return out
 
 
@@ -188,7 +284,7 @@ class _SiteVariationSearchLoader(QThread):
     """جستجویِ محصولات با نام و بازکردنِ واریانت‌هایِ همه‌یِ نتایج — برایِ
     حالتِ «سایت متغیر / ERP ساده». هر ردیفِ خروجی یک واریانتِ مشخصه."""
 
-    done = pyqtSignal(list, str)  # [(parent_id, variation_id, label), ...], error
+    done = pyqtSignal(list, str)  # [(parent_id, variation_id, label, sku), ...], error
 
     def __init__(self, cfg, query: str):
         super().__init__()
@@ -203,7 +299,7 @@ class _SiteVariationSearchLoader(QThread):
                 variations = _list_site_variations_for_product(self.cfg, p)
                 for v in variations:
                     label = f"{p['name']} — {v['label']} (#محصول {p['id']} / #واریانت {v['id']})"
-                    out.append((p["id"], v["id"], label))
+                    out.append((p["id"], v["id"], label, str(v.get("sku") or "")))
             self.done.emit(out, "")
         except Exception as exc:
             self.done.emit([], str(exc))
@@ -212,16 +308,98 @@ class _SiteVariationSearchLoader(QThread):
 # ----------------------------------------------------------------------
 # Loaderهایِ پس‌زمینه — سمتِ ERP
 # ----------------------------------------------------------------------
+def _fetch_group_name_map(conn) -> dict[str, str]:
+    """{کدِ گروه (۲ رقمی) یا زیرگروه (۴ رقمی): نامِ دسته‌بندی} — از رویِ
+    جدولِ M_Group/S_Group واقعیِ SQL. دقیقاً هم‌الگویِ چیزی که تبِ «تطبیق»
+    برایِ فیلترِ دسته‌بندی استفاده می‌کنه."""
+    name_map: dict[str, str] = {}
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT M_Groupcode, M_GroupName FROM M_Group ORDER BY M_Groupcode")
+        main_names: dict[str, str] = {}
+        for m_code, m_name in cursor.fetchall():
+            m_code = str(m_code).strip()
+            m_name = str(m_name or "").strip()
+            main_names[m_code] = m_name
+            if m_name:
+                name_map[m_code] = m_name
+        cursor.execute(
+            "SELECT M_Groupcode, S_Groupcode, S_GroupName FROM S_Group ORDER BY M_Groupcode, S_Groupcode"
+        )
+        for m_code, s_code, s_name in cursor.fetchall():
+            m_code = str(m_code).strip()
+            full_code = f"{m_code}{str(s_code).strip()}"
+            s_name = str(s_name or "").strip()
+            m_name = main_names.get(m_code, "")
+            if s_name:
+                name_map[full_code] = f"{m_name} › {s_name}" if m_name else s_name
+    except Exception:
+        pass
+    return name_map
+
+
+def _category_name_for_code(name_map: dict, code: str) -> str:
+    code = str(code or "").strip()
+    if len(code) >= 4 and name_map.get(code[:4]):
+        return name_map[code[:4]]
+    if len(code) >= 2 and name_map.get(code[:2]):
+        return name_map[code[:2]]
+    return ""
+
+
+class _CategoryOptionsLoader(QThread):
+    """گزینه‌هایِ فیلترِ دسته‌بندی — از جدولِ M_Group/S_Group واقعیِ SQL،
+    دقیقاً هم‌الگویِ فیلترِ دسته‌بندیِ تبِ «تطبیق»."""
+
+    done = pyqtSignal(list, str)  # [(code, display_name), ...], error
+
+    def __init__(self, cfg):
+        super().__init__()
+        self.cfg = cfg
+
+    def run(self):
+        try:
+            from sync_app.core.sql_connection_helper import open_sql_connection
+
+            conn, _, _ = open_sql_connection(self.cfg, timeout=5)
+            try:
+                cursor = conn.cursor()
+                cursor.execute("SELECT M_Groupcode, M_GroupName FROM M_Group ORDER BY M_Groupcode")
+                main_groups = [(str(r[0]).strip(), str(r[1] or "").strip()) for r in cursor.fetchall()]
+                cursor.execute(
+                    "SELECT M_Groupcode, S_Groupcode, S_GroupName FROM S_Group ORDER BY M_Groupcode, S_Groupcode"
+                )
+                sub_by_main: dict[str, list[tuple[str, str]]] = {}
+                for m_code, s_code, s_name in cursor.fetchall():
+                    m_code = str(m_code).strip()
+                    full_code = f"{m_code}{str(s_code).strip()}"
+                    sub_by_main.setdefault(m_code, []).append((full_code, str(s_name or "").strip()))
+                cursor.close()
+            finally:
+                conn.close()
+
+            options = []
+            for m_code, m_name in main_groups:
+                options.append((m_code, m_name or m_code))
+                for full_code, s_name in sub_by_main.get(m_code, []):
+                    label = f"{m_name} › {s_name}" if m_name else s_name
+                    options.append((full_code, label or full_code))
+            self.done.emit(options, "")
+        except Exception as exc:
+            self.done.emit([], str(exc))
+
+
 class _ErpSimpleSkuLoader(QThread):
-    """لیستِ SKUهایِ سادهٔ ERP (در گروه‌هایِ انتخاب‌شده) با فیلترِ نام/کد —
-    برایِ حالتِ «سایت متغیر / ERP ساده»."""
+    """لیستِ SKUهایِ سادهٔ ERP (در گروه‌هایِ انتخاب‌شده) با فیلترِ نام/کد/
+    دسته‌بندی — برایِ حالتِ «سایت متغیر / ERP ساده»."""
 
     done = pyqtSignal(list, str)  # [(sku, label), ...], error
 
-    def __init__(self, cfg, query: str):
+    def __init__(self, cfg, query: str, category_code: str = ""):
         super().__init__()
         self.cfg = cfg
         self.query = query
+        self.category_code = category_code
 
     def run(self):
         try:
@@ -240,13 +418,29 @@ class _ErpSimpleSkuLoader(QThread):
                 if needle:
                     where_bits.append("(A_Code LIKE ? OR A_Name LIKE ?)")
                     params.extend([f"%{needle}%", f"%{needle}%"])
-                sql = f"SELECT TOP 200 A_Code, A_Name FROM Article WHERE {' AND '.join(where_bits)}"
+                category_code = str(self.category_code or "").strip()
+                if category_code:
+                    where_bits.append("A_Code LIKE ?")
+                    params.append(f"{category_code}%")
+                sql = f"SELECT TOP 200 A_Code, A_Name, A_Code_C FROM Article WHERE {' AND '.join(where_bits)}"
                 cursor.execute(sql, params)
                 rows = cursor.fetchall()
+                name_map = _fetch_group_name_map(conn)
                 cursor.close()
             finally:
                 conn.close()
-            out = [(str(r[0]).strip(), f"{str(r[0]).strip()} — {str(r[1] or '').strip()}") for r in rows]
+            out = []
+            for r in rows:
+                code = str(r[0]).strip()
+                name = str(r[1] or "").strip()
+                manual_code = str(r[2] or "").strip() if len(r) > 2 else ""
+                cat_name = _category_name_for_code(name_map, code)
+                parts = [code, name]
+                if manual_code:
+                    parts.append(f"کدِ دستی: {manual_code}")
+                if cat_name:
+                    parts.append(cat_name)
+                out.append((code, " — ".join(parts)))
             self.done.emit(out, "")
         except Exception as exc:
             self.done.emit([], str(exc))
@@ -259,10 +453,11 @@ class _ErpVariantSkuLoader(QThread):
 
     done = pyqtSignal(list, str)  # [(parent_sku, variant_sku, label), ...], error
 
-    def __init__(self, cfg, query: str):
+    def __init__(self, cfg, query: str, category_code: str = ""):
         super().__init__()
         self.cfg = cfg
         self.query = query
+        self.category_code = category_code
 
     def run(self):
         try:
@@ -284,16 +479,23 @@ class _ErpVariantSkuLoader(QThread):
                 if needle:
                     where_bits.append("(A_Code LIKE ? OR A_Name LIKE ?)")
                     params.extend([f"%{needle}%", f"%{needle}%"])
-                sql = f"SELECT TOP 30 A_Code, A_Name FROM Article WHERE {' AND '.join(where_bits)}"
+                category_code = str(self.category_code or "").strip()
+                if category_code:
+                    where_bits.append("A_Code LIKE ?")
+                    params.append(f"{category_code}%")
+                sql = f"SELECT TOP 30 A_Code, A_Name, A_Code_C FROM Article WHERE {' AND '.join(where_bits)}"
                 cursor.execute(sql, params)
                 candidates = cursor.fetchall()
+                name_map = _fetch_group_name_map(conn)
 
                 out = []
                 size_label, color_label, dim3_label = _fetch_attribute_labels(conn)
-                for a_code, a_name in candidates:
+                for a_code, a_name, a_code_c in candidates:
                     a_code = str(a_code).strip()
                     if not product_is_variable(cursor, a_code):
                         continue
+                    manual_code = str(a_code_c or "").strip()
+                    cat_name = _category_name_for_code(name_map, a_code)
                     price_col = resolve_article_price_column(a_code, "", self.cfg)
                     cursor.execute(f"SELECT TOP 1 {price_col} FROM Article WHERE A_Code = ?", (a_code,))
                     price_row = cursor.fetchone()
@@ -308,7 +510,10 @@ class _ErpVariantSkuLoader(QThread):
                         attrs = "، ".join(
                             str(a.get("option") or "") for a in (v.get("attributes") or []) if a.get("option")
                         )
-                        label = f"{a_name} ({a_code}) — {attrs or v_sku}"
+                        code_part = f"{a_code} — کدِ دستی: {manual_code}" if manual_code else a_code
+                        label = f"{a_name} ({code_part}) — {attrs or v_sku}"
+                        if cat_name:
+                            label = f"{label} — {cat_name}"
                         out.append((a_code, v_sku, label))
                 cursor.close()
             finally:
@@ -325,6 +530,8 @@ class StructureReconciliationTab(QWidget):
         self.config = load_secure_config(None) or {}
         self._loaders: list[QThread] = []
         self._syncing_selection = False
+        self.sv_suggestions: list[dict] = []
+        self.fs_suggestions: list[dict] = []
 
         from sync_app.core.integrations.erp_provider import erp_provider_label
 
@@ -333,6 +540,27 @@ class StructureReconciliationTab(QWidget):
         self.init_ui()
         self._refresh_sv_table()
         self._refresh_fs_table()
+        self._load_category_options()
+
+    def _load_category_options(self):
+        loader = _CategoryOptionsLoader(self.config)
+        self._keep_loader(loader)
+        loader.done.connect(self._on_category_options_loaded)
+        loader.start()
+
+    def _on_category_options_loaded(self, options, error):
+        if error:
+            return
+        for combo in (self.sv_category_filter, self.fs_category_filter):
+            current = combo.currentData()
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItem("همه", "")
+            for code, name in options:
+                combo.addItem(f"{name} ({code})" if name else code, code)
+            idx = combo.findData(current)
+            combo.setCurrentIndex(idx if idx >= 0 else 0)
+            combo.blockSignals(False)
 
     # ------------------------------------------------------------------
     def init_ui(self):
@@ -342,6 +570,10 @@ class StructureReconciliationTab(QWidget):
 
         sub_tabs = QTabWidget()
         sub_tabs.setLayoutDirection(Qt.RightToLeft)
+        # پدینگِ سراسریِ QTabBar::tab برایِ لیبل‌هایِ ایموجی+فارسیِ این دو
+        # زیرتب کافی نیست و متن نصفه دیده می‌شه — همون مشکلی که برایِ
+        # زیرتب‌هایِ «همگام‌سازی»/«دستیار هوشمند» با همین objectName رفع شد.
+        sub_tabs.tabBar().setObjectName("hubSubTabBar")
         sub_tabs.addTab(self._build_site_variation_section(), f"🧩 سایت متغیر / {self.erp_label} ساده")
         sub_tabs.addTab(self._build_force_simple_section(), f"📦 {self.erp_label} متغیر / سایت ساده")
         root.addWidget(sub_tabs)
@@ -431,6 +663,16 @@ class StructureReconciliationTab(QWidget):
         filter_row.addWidget(QLabel("نمایش:"))
         self.sv_link_filter = self._build_link_filter_combo(self._on_sv_link_filter_changed)
         filter_row.addWidget(self.sv_link_filter)
+        filter_row.addWidget(QLabel(f"دسته‌بندیِ {self.erp_label}:"))
+        self.sv_category_filter = QComboBox()
+        self.sv_category_filter.setLayoutDirection(Qt.RightToLeft)
+        self.sv_category_filter.addItem("همه", "")
+        self.sv_category_filter.setMinimumWidth(160)
+        self.sv_category_filter.currentIndexChanged.connect(self._sv_search_erp)
+        filter_row.addWidget(self.sv_category_filter)
+        self.sv_auto_suggest_btn = QPushButton("🤖 پیشنهادِ خودکار")
+        self.sv_auto_suggest_btn.clicked.connect(self._sv_auto_suggest)
+        filter_row.addWidget(self.sv_auto_suggest_btn)
         filter_row.addStretch(1)
         v.addLayout(filter_row)
 
@@ -454,12 +696,15 @@ class StructureReconciliationTab(QWidget):
         site_col.addWidget(self.sv_site_list, 1)
         columns.addLayout(site_col, 1)
 
-        # وسط: دکمه‌ی تطبیق
+        # وسط: دکمه‌هایِ تطبیق/لغوِ تطبیق
         mid_col = QVBoxLayout()
         mid_col.addStretch(1)
-        self.sv_match_btn = QPushButton("🔗 تطبیق")
+        self.sv_match_btn = QPushButton("🔗 تطبیقِ تکی")
         self.sv_match_btn.clicked.connect(self._sv_save)
         mid_col.addWidget(self.sv_match_btn)
+        self.sv_cancel_btn = QPushButton("❌ لغوِ تطبیق")
+        self.sv_cancel_btn.clicked.connect(self._sv_cancel_match)
+        mid_col.addWidget(self.sv_cancel_btn)
         mid_col.addStretch(1)
         columns.addLayout(mid_col)
 
@@ -487,6 +732,35 @@ class StructureReconciliationTab(QWidget):
         self.sv_status_label.setStyleSheet("color:#64748b; font-size:12px;")
         v.addWidget(self.sv_status_label)
 
+        self.sv_suggest_label = QLabel("پیشنهادهایِ خودکار:")
+        self.sv_suggest_label.setVisible(False)
+        v.addWidget(self.sv_suggest_label)
+        self.sv_suggest_table = QTableWidget(0, 4)
+        self.sv_suggest_table.setLayoutDirection(Qt.RightToLeft)
+        self.sv_suggest_table.setHorizontalHeaderLabels(
+            ["✓", "نام کالا و متغیرِ سایت", f"کالای سادهٔ {self.erp_label} (دلیل)", ""]
+        )
+        self.sv_suggest_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.sv_suggest_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.sv_suggest_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.sv_suggest_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.sv_suggest_table.verticalHeader().setVisible(False)
+        self.sv_suggest_table.setMaximumHeight(180)
+        self.sv_suggest_table.setVisible(False)
+        v.addWidget(self.sv_suggest_table)
+
+        suggest_actions_row = QHBoxLayout()
+        self.sv_apply_selected_btn = QPushButton("✅ تطبیقِ چندتاییِ انتخاب‌شده‌ها")
+        self.sv_apply_selected_btn.clicked.connect(self._sv_apply_selected_suggestions)
+        self.sv_apply_selected_btn.setVisible(False)
+        suggest_actions_row.addWidget(self.sv_apply_selected_btn)
+        self.sv_discard_suggestions_btn = QPushButton("🗑 نادیده‌گرفتنِ پیشنهادها")
+        self.sv_discard_suggestions_btn.clicked.connect(self._sv_discard_suggestions)
+        self.sv_discard_suggestions_btn.setVisible(False)
+        suggest_actions_row.addWidget(self.sv_discard_suggestions_btn)
+        suggest_actions_row.addStretch(1)
+        v.addLayout(suggest_actions_row)
+
         v.addWidget(QLabel("تطبیق‌هایِ ثبت‌شده:"))
         self.sv_table = QTableWidget(0, 3)
         self.sv_table.setLayoutDirection(Qt.RightToLeft)
@@ -494,8 +768,8 @@ class StructureReconciliationTab(QWidget):
         self.sv_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.sv_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.sv_table.verticalHeader().setVisible(False)
-        self.sv_table.setMinimumHeight(140)
-        self.sv_table.setMaximumHeight(220)
+        self.sv_table.setMinimumHeight(260)
+        self.sv_table.setMaximumHeight(480)
         v.addWidget(self.sv_table)
 
         self.sv_site_list.itemSelectionChanged.connect(self._on_sv_site_selection_changed)
@@ -503,7 +777,18 @@ class StructureReconciliationTab(QWidget):
 
         return scroll
 
+    def _reload_config(self):
+        """کانفیگ رو تازه از دیسک می‌خونه — قبل از هر عملیاتِ شبکه/دیتابیس.
+        وگرنه اگه کاربر تویِ تبِ تنظیمات دیتابیس/سایت رو عوض کنه، این تب
+        (که کانفیگش فقط یک‌بار در __init__ لود شده بود) همچنان با تنظیماتِ
+        قدیمی به دیتابیس/سایتِ قبلی وصل می‌شد."""
+        self.config = load_secure_config(None) or {}
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+
+        self.erp_label = erp_provider_label(self.config)
+
     def _sv_search_site(self):
+        self._reload_config()
         self.sv_status_label.setText("⏳ در حالِ جستجویِ محصولاتِ سایت...")
         loader = _SiteVariationSearchLoader(self.config, self.sv_site_search.text())
         self._keep_loader(loader)
@@ -518,13 +803,13 @@ class StructureReconciliationTab(QWidget):
 
         matched_count = 0
         entries = []
-        for parent_id, variation_id, label in options:
+        for parent_id, variation_id, label, site_sku in options:
             matched_sku = find_erp_sku_for_site_variation(parent_id, variation_id)
             state = _MATCH_STRUCTURAL if matched_sku else _MATCH_NONE
             if matched_sku:
                 matched_count += 1
             tooltip = f"قبلاً به SKUِ «{matched_sku}» تطبیق داده شده" if matched_sku else ""
-            entries.append((label, (parent_id, variation_id, label), state, tooltip))
+            entries.append((label, (parent_id, variation_id, label, site_sku), state, tooltip))
         self._sv_site_entries = entries
         self._render_sv_site_list()
         self.sv_status_label.setText(
@@ -536,8 +821,10 @@ class StructureReconciliationTab(QWidget):
         self._populate_list_with_matches(self.sv_site_list, getattr(self, "_sv_site_entries", []), filter_state)
 
     def _sv_search_erp(self):
+        self._reload_config()
         self.sv_status_label.setText(f"⏳ در حالِ جستجویِ کالاهایِ {self.erp_label}...")
-        loader = _ErpSimpleSkuLoader(self.config, self.sv_erp_search.text())
+        category_code = self.sv_category_filter.currentData() or ""
+        loader = _ErpSimpleSkuLoader(self.config, self.sv_erp_search.text(), category_code)
         self._keep_loader(loader)
         loader.done.connect(self._on_sv_erp_results)
         loader.start()
@@ -594,7 +881,7 @@ class StructureReconciliationTab(QWidget):
         items = self.sv_site_list.selectedItems()
         if not items:
             return
-        parent_id, variation_id, _label = items[0].data(Qt.UserRole)
+        parent_id, variation_id, _label, _site_sku = items[0].data(Qt.UserRole)
         from sync_app.core.structure_mismatch_override import find_erp_sku_for_site_variation
 
         matched_sku = find_erp_sku_for_site_variation(parent_id, variation_id)
@@ -627,17 +914,13 @@ class StructureReconciliationTab(QWidget):
         finally:
             self._syncing_selection = False
 
-    def _sv_save(self):
-        site_selected = self.sv_site_list.selectedItems()
-        erp_selected = self.sv_erp_list.selectedItems()
-        if not site_selected or not erp_selected:
-            QMessageBox.warning(self, "توجه", f"یک واریانتِ سایت و یک SKUِ {self.erp_label} را از لیست‌ها انتخاب کنید.")
-            return
-        site_item = site_selected[0]
-        erp_item = erp_selected[0]
-        parent_id, variation_id, label = site_item.data(Qt.UserRole)
-        sku = erp_item.data(Qt.UserRole)
-        erp_label = erp_item.text()
+    def _sv_apply_match(self, site_data, sku: str, erp_label: str, *, silent: bool = False) -> bool:
+        """ثبتِ یک تطبیقِ ساختاری (سایت متغیر ↔ ERP ساده) — چه از انتخابِ
+        دستیِ کاربر بیاد چه از پیشنهادِ خودکار/تطبیقِ چندتایی."""
+        parent_id, variation_id, label, _site_sku = site_data
+        sku = str(sku or "").strip()
+        if not sku:
+            return False
 
         from sync_app.core.structure_mismatch_override import set_site_variation_target
         from sync_app.core.product_woo_map_helper import load_product_woo_map, save_product_woo_map
@@ -653,9 +936,183 @@ class StructureReconciliationTab(QWidget):
         product_map[sku] = int(parent_id)
         save_product_woo_map(product_map)
         register_product_link(sku, int(parent_id), wc_label=label, manual=True)
+        if not silent:
+            self._refresh_sv_table()
+        return True
 
-        self._refresh_sv_table()
+    def _sv_save(self):
+        site_selected = self.sv_site_list.selectedItems()
+        erp_selected = self.sv_erp_list.selectedItems()
+        if not site_selected or not erp_selected:
+            QMessageBox.warning(self, "توجه", f"یک واریانتِ سایت و یک SKUِ {self.erp_label} را از لیست‌ها انتخاب کنید.")
+            return
+        site_item = site_selected[0]
+        erp_item = erp_selected[0]
+        site_data = site_item.data(Qt.UserRole)
+        sku = erp_item.data(Qt.UserRole)
+        erp_label = erp_item.text()
+
+        self._sv_apply_match(site_data, sku, erp_label)
+        self._sv_drop_suggestions_for(sku=sku, site_data=site_data)
         QMessageBox.information(self, "انجام شد", f"SKUِ «{sku}» به واریانتِ سایت وصل شد.")
+
+    def _sv_cancel_match(self):
+        """لغوِ تطبیقِ ساختاریِ آیتمِ انتخاب‌شده — از هرکدوم از دو لیست که
+        انتخاب شده باشه (سایت یا ERP)."""
+        from sync_app.core.structure_mismatch_override import (
+            get_site_variation_target,
+            find_erp_sku_for_site_variation,
+        )
+
+        erp_selected = self.sv_erp_list.selectedItems()
+        if erp_selected:
+            sku = erp_selected[0].data(Qt.UserRole)
+            if get_site_variation_target(sku):
+                if QMessageBox.question(
+                    self, "لغوِ تطبیق", f"تطبیقِ ساختاریِ SKUِ «{sku}» لغو بشه؟",
+                ) == QMessageBox.Yes:
+                    self._sv_delete(sku)
+                return
+
+        site_selected = self.sv_site_list.selectedItems()
+        if site_selected:
+            parent_id, variation_id, _label, _sku = site_selected[0].data(Qt.UserRole)
+            matched_sku = find_erp_sku_for_site_variation(parent_id, variation_id)
+            if matched_sku:
+                if QMessageBox.question(
+                    self, "لغوِ تطبیق",
+                    f"تطبیقِ ساختاریِ این واریانت (به SKUِ «{matched_sku}») لغو بشه؟",
+                ) == QMessageBox.Yes:
+                    self._sv_delete(matched_sku)
+                return
+
+        QMessageBox.information(self, "توجه", "آیتمِ انتخاب‌شده تطبیقِ ساختاری‌ای ندارد که لغو شود.")
+
+    # -- پیشنهادِ خودکار ------------------------------------------------
+    def _sv_auto_suggest(self):
+        site_entries = getattr(self, "_sv_site_entries", [])
+        erp_entries = getattr(self, "_sv_erp_entries", [])
+        if not site_entries or not erp_entries:
+            QMessageBox.information(
+                self, "توجه",
+                "اول از هر دو طرف (سایت و ERP) جستجو کنید تا موردی برایِ پیشنهاد باشه.",
+            )
+            return
+
+        site_items = [
+            (site_data, site_data[3], label)
+            for label, site_data, state, _tooltip in site_entries
+            if state == _MATCH_NONE
+        ]
+        erp_label_by_sku: dict[str, str] = {}
+        erp_items = []
+        for label, sku, state, _tooltip in erp_entries:
+            # فقط SKUهایِ واقعاً بی‌لینک — نه STRUCTURAL (قبلاً از همین ابزار
+            # تطبیق شده) و نه RECONCILED (قبلاً از تطبیقِ عادی لینک شده).
+            if state != _MATCH_NONE:
+                continue
+            erp_items.append((sku, sku, label))
+            erp_label_by_sku[sku] = label
+
+        if not site_items or not erp_items:
+            QMessageBox.information(
+                self, "توجه", "موردِ لینک‌نشده‌ای برایِ پیشنهاد دادن در هر دو لیست پیدا نشد.",
+            )
+            return
+
+        matches = _suggest_matches(site_items, erp_items)
+        self.sv_suggestions = [
+            {
+                "site_data": site_data,
+                "erp_sku": erp_sku,
+                "erp_label": erp_label_by_sku.get(erp_sku, erp_sku),
+                "reason": reason,
+            }
+            for site_data, _erp_key, erp_sku, reason in matches
+        ]
+        self._render_sv_suggest_table()
+        if not self.sv_suggestions:
+            QMessageBox.information(
+                self, "نتیجه",
+                "هیچ پیشنهادِ قابل‌اطمینانی پیدا نشد — احتمالاً باید دستی تطبیق بدید.",
+            )
+        else:
+            self.sv_status_label.setText(
+                f"🤖 {len(self.sv_suggestions)} پیشنهادِ خودکار پیدا شد — پایینِ لیست‌ها را ببینید."
+            )
+
+    def _render_sv_suggest_table(self):
+        table = self.sv_suggest_table
+        table.setRowCount(0)
+        has_rows = bool(self.sv_suggestions)
+        self.sv_suggest_label.setVisible(has_rows)
+        table.setVisible(has_rows)
+        self.sv_apply_selected_btn.setVisible(has_rows)
+        self.sv_discard_suggestions_btn.setVisible(has_rows)
+        for idx, sug in enumerate(self.sv_suggestions):
+            row = table.rowCount()
+            table.insertRow(row)
+            cb_wrap = QWidget()
+            cb_layout = QHBoxLayout(cb_wrap)
+            cb_layout.setContentsMargins(0, 0, 0, 0)
+            cb_layout.setAlignment(Qt.AlignCenter)
+            cb = QCheckBox()
+            cb.setChecked(True)
+            cb_layout.addWidget(cb)
+            table.setCellWidget(row, 0, cb_wrap)
+            site_label = sug["site_data"][2]
+            table.setItem(row, 1, QTableWidgetItem(str(site_label)))
+            table.setItem(row, 2, QTableWidgetItem(f"{sug['erp_label']}  —  {sug['reason']}"))
+            apply_btn = QPushButton("🔗 تطبیقِ تکی")
+            apply_btn.clicked.connect(lambda _checked=False, i=idx: self._sv_apply_single_suggestion(i))
+            table.setCellWidget(row, 3, apply_btn)
+        table.resizeRowsToContents()
+
+    def _sv_apply_single_suggestion(self, idx: int):
+        if idx < 0 or idx >= len(self.sv_suggestions):
+            return
+        sug = self.sv_suggestions.pop(idx)
+        self._sv_apply_match(sug["site_data"], sug["erp_sku"], sug["erp_label"], silent=True)
+        self._refresh_sv_table()
+        self._render_sv_suggest_table()
+        self.sv_status_label.setText(f"✅ SKUِ «{sug['erp_sku']}» تطبیق داده شد.")
+
+    def _sv_apply_selected_suggestions(self):
+        table = self.sv_suggest_table
+        checked_rows = []
+        for row in range(table.rowCount()):
+            wrap = table.cellWidget(row, 0)
+            cb = wrap.findChild(QCheckBox) if wrap else None
+            if cb is not None and cb.isChecked():
+                checked_rows.append(row)
+        if not checked_rows:
+            QMessageBox.information(self, "توجه", "هیچ پیشنهادی تیک نخورده.")
+            return
+        applied = 0
+        for row in sorted(checked_rows, reverse=True):
+            if row >= len(self.sv_suggestions):
+                continue
+            sug = self.sv_suggestions.pop(row)
+            self._sv_apply_match(sug["site_data"], sug["erp_sku"], sug["erp_label"], silent=True)
+            applied += 1
+        self._refresh_sv_table()
+        self._render_sv_suggest_table()
+        QMessageBox.information(self, "انجام شد", f"{applied} تطبیق به‌صورتِ گروهی ثبت شد.")
+
+    def _sv_discard_suggestions(self):
+        self.sv_suggestions = []
+        self._render_sv_suggest_table()
+
+    def _sv_drop_suggestions_for(self, *, sku=None, site_data=None):
+        def _keep(sug):
+            if sku and sug.get("erp_sku") == sku:
+                return False
+            if site_data and sug.get("site_data") == site_data:
+                return False
+            return True
+
+        self.sv_suggestions = [s for s in self.sv_suggestions if _keep(s)]
+        self._render_sv_suggest_table()
 
     def _refresh_sv_table(self):
         from sync_app.core.structure_mismatch_override import list_site_variation_targets
@@ -685,6 +1142,28 @@ class StructureReconciliationTab(QWidget):
             save_product_woo_map(product_map)
         clear_product_link_meta(sku)
         self._refresh_sv_table()
+        self._demote_entry_state_by_sku(getattr(self, "_sv_erp_entries", None), sku)
+        self._render_sv_erp_list()
+        self._demote_entry_state_by_site_sku(getattr(self, "_sv_site_entries", None), sku)
+        self._render_sv_site_list()
+
+    def _demote_entry_state_by_sku(self, entries, sku: str):
+        """بعدِ لغوِ تطبیق، ورودیِ متناظر در لیستِ ERP رو به «لینک‌نشده»
+        برمی‌گردونه — بدونِ نیاز به جستجویِ دوباره."""
+        if not entries:
+            return
+        for i, (label, data, state, tooltip) in enumerate(entries):
+            if data == sku and state == _MATCH_STRUCTURAL:
+                entries[i] = (label, data, _MATCH_NONE, "")
+
+    def _demote_entry_state_by_site_sku(self, entries, sku: str):
+        """بعدِ لغوِ تطبیقِ یک SKU، اگه در لیستِ سایت هم قبلاً به همون SKU
+        نظیر شده بود (تولتیپ نشونش می‌داد)، حالتش به «لینک‌نشده» برمی‌گرده."""
+        if not entries:
+            return
+        for i, (label, data, state, tooltip) in enumerate(entries):
+            if state == _MATCH_STRUCTURAL and tooltip and sku in tooltip:
+                entries[i] = (label, data, _MATCH_NONE, "")
 
     # ------------------------------------------------------------------
     # حالتِ ۲: ERP متغیر می‌بینه، سایت ساده داره
@@ -712,6 +1191,16 @@ class StructureReconciliationTab(QWidget):
         filter_row.addWidget(QLabel("نمایش:"))
         self.fs_link_filter = self._build_link_filter_combo(self._on_fs_link_filter_changed)
         filter_row.addWidget(self.fs_link_filter)
+        filter_row.addWidget(QLabel(f"دسته‌بندیِ {self.erp_label}:"))
+        self.fs_category_filter = QComboBox()
+        self.fs_category_filter.setLayoutDirection(Qt.RightToLeft)
+        self.fs_category_filter.addItem("همه", "")
+        self.fs_category_filter.setMinimumWidth(160)
+        self.fs_category_filter.currentIndexChanged.connect(self._fs_search_erp)
+        filter_row.addWidget(self.fs_category_filter)
+        self.fs_auto_suggest_btn = QPushButton("🤖 پیشنهادِ خودکار")
+        self.fs_auto_suggest_btn.clicked.connect(self._fs_auto_suggest)
+        filter_row.addWidget(self.fs_auto_suggest_btn)
         filter_row.addStretch(1)
         v.addLayout(filter_row)
 
@@ -735,12 +1224,15 @@ class StructureReconciliationTab(QWidget):
         site_col.addWidget(self.fs_site_list, 1)
         columns.addLayout(site_col, 1)
 
-        # وسط: دکمه‌ی تطبیق
+        # وسط: دکمه‌هایِ تطبیق/لغوِ تطبیق
         mid_col = QVBoxLayout()
         mid_col.addStretch(1)
-        self.fs_match_btn = QPushButton("🔗 تطبیق")
+        self.fs_match_btn = QPushButton("🔗 تطبیقِ تکی")
         self.fs_match_btn.clicked.connect(self._fs_save)
         mid_col.addWidget(self.fs_match_btn)
+        self.fs_cancel_btn = QPushButton("❌ لغوِ تطبیق")
+        self.fs_cancel_btn.clicked.connect(self._fs_cancel_match)
+        mid_col.addWidget(self.fs_cancel_btn)
         mid_col.addStretch(1)
         columns.addLayout(mid_col)
 
@@ -768,6 +1260,35 @@ class StructureReconciliationTab(QWidget):
         self.fs_status_label.setStyleSheet("color:#64748b; font-size:12px;")
         v.addWidget(self.fs_status_label)
 
+        self.fs_suggest_label = QLabel("پیشنهادهایِ خودکار:")
+        self.fs_suggest_label.setVisible(False)
+        v.addWidget(self.fs_suggest_label)
+        self.fs_suggest_table = QTableWidget(0, 4)
+        self.fs_suggest_table.setLayoutDirection(Qt.RightToLeft)
+        self.fs_suggest_table.setHorizontalHeaderLabels(
+            ["✓", "محصولِ سایت", f"زیرواریانتِ {self.erp_label} (دلیل)", ""]
+        )
+        self.fs_suggest_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.fs_suggest_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.fs_suggest_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.fs_suggest_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.fs_suggest_table.verticalHeader().setVisible(False)
+        self.fs_suggest_table.setMaximumHeight(180)
+        self.fs_suggest_table.setVisible(False)
+        v.addWidget(self.fs_suggest_table)
+
+        fs_suggest_actions_row = QHBoxLayout()
+        self.fs_apply_selected_btn = QPushButton("✅ تطبیقِ چندتاییِ انتخاب‌شده‌ها")
+        self.fs_apply_selected_btn.clicked.connect(self._fs_apply_selected_suggestions)
+        self.fs_apply_selected_btn.setVisible(False)
+        fs_suggest_actions_row.addWidget(self.fs_apply_selected_btn)
+        self.fs_discard_suggestions_btn = QPushButton("🗑 نادیده‌گرفتنِ پیشنهادها")
+        self.fs_discard_suggestions_btn.clicked.connect(self._fs_discard_suggestions)
+        self.fs_discard_suggestions_btn.setVisible(False)
+        fs_suggest_actions_row.addWidget(self.fs_discard_suggestions_btn)
+        fs_suggest_actions_row.addStretch(1)
+        v.addLayout(fs_suggest_actions_row)
+
         v.addWidget(QLabel("تطبیق‌هایِ ثبت‌شده:"))
         self.fs_table = QTableWidget(0, 3)
         self.fs_table.setLayoutDirection(Qt.RightToLeft)
@@ -775,8 +1296,8 @@ class StructureReconciliationTab(QWidget):
         self.fs_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.fs_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.fs_table.verticalHeader().setVisible(False)
-        self.fs_table.setMinimumHeight(140)
-        self.fs_table.setMaximumHeight(220)
+        self.fs_table.setMinimumHeight(260)
+        self.fs_table.setMaximumHeight(480)
         v.addWidget(self.fs_table)
 
         self.fs_site_list.itemSelectionChanged.connect(self._on_fs_site_selection_changed)
@@ -785,6 +1306,7 @@ class StructureReconciliationTab(QWidget):
         return scroll
 
     def _fs_search_site(self):
+        self._reload_config()
         self.fs_status_label.setText("⏳ در حالِ جستجویِ محصولاتِ سایت...")
         loader = _SiteProductSearchLoader(self.config, self.fs_site_search.text())
         self._keep_loader(loader)
@@ -828,8 +1350,10 @@ class StructureReconciliationTab(QWidget):
         self._populate_list_with_matches(self.fs_site_list, getattr(self, "_fs_site_entries", []), filter_state)
 
     def _fs_search_erp(self):
+        self._reload_config()
         self.fs_status_label.setText(f"⏳ در حالِ جستجویِ زیرواریانت‌هایِ {self.erp_label}...")
-        loader = _ErpVariantSkuLoader(self.config, self.fs_erp_search.text())
+        category_code = self.fs_category_filter.currentData() or ""
+        loader = _ErpVariantSkuLoader(self.config, self.fs_erp_search.text(), category_code)
         self._keep_loader(loader)
         loader.done.connect(self._on_fs_erp_results)
         loader.start()
@@ -918,17 +1442,10 @@ class StructureReconciliationTab(QWidget):
         finally:
             self._syncing_selection = False
 
-    def _fs_save(self):
-        site_selected = self.fs_site_list.selectedItems()
-        erp_selected = self.fs_erp_list.selectedItems()
-        if not site_selected or not erp_selected:
-            QMessageBox.warning(self, "توجه", f"یک محصولِ سایت و یک زیرواریانتِ {self.erp_label} را از لیست‌ها انتخاب کنید.")
-            return
-        site_item = site_selected[0]
-        erp_item = erp_selected[0]
-        site_id, site_label, _site_sku = site_item.data(Qt.UserRole)
-        parent_sku, variant_sku = erp_item.data(Qt.UserRole)
-        erp_label = erp_item.text()
+    def _fs_apply_match(self, site_data, erp_data, erp_label: str, *, silent: bool = False) -> bool:
+        """ثبتِ یک تطبیقِ ساختاری (ERP متغیر ↔ سایت ساده)."""
+        site_id, site_label, _site_sku = site_data
+        parent_sku, variant_sku = erp_data
 
         from sync_app.core.structure_mismatch_override import set_force_simple_source
         from sync_app.core.product_woo_map_helper import load_product_woo_map, save_product_woo_map
@@ -943,12 +1460,194 @@ class StructureReconciliationTab(QWidget):
         product_map[parent_sku] = int(site_id)
         save_product_woo_map(product_map)
         register_product_link(parent_sku, int(site_id), wc_label=site_label, manual=True)
+        if not silent:
+            self._refresh_fs_table()
+        return True
 
-        self._refresh_fs_table()
+    def _fs_save(self):
+        site_selected = self.fs_site_list.selectedItems()
+        erp_selected = self.fs_erp_list.selectedItems()
+        if not site_selected or not erp_selected:
+            QMessageBox.warning(self, "توجه", f"یک محصولِ سایت و یک زیرواریانتِ {self.erp_label} را از لیست‌ها انتخاب کنید.")
+            return
+        site_item = site_selected[0]
+        erp_item = erp_selected[0]
+        site_data = site_item.data(Qt.UserRole)
+        erp_data = erp_item.data(Qt.UserRole)
+        parent_sku = erp_data[0]
+        erp_label = erp_item.text()
+
+        self._fs_apply_match(site_data, erp_data, erp_label)
+        self._fs_drop_suggestions_for(parent_sku=parent_sku, site_data=site_data)
         QMessageBox.information(
             self, "انجام شد",
             f"محصولِ «{parent_sku}» از این به بعد به‌عنوانِ محصولِ سادهٔ سایت (همین محصولِ انتخاب‌شده) سینک می‌شه.",
         )
+
+    def _fs_cancel_match(self):
+        """لغوِ تطبیقِ ساختاریِ آیتمِ انتخاب‌شده — از هرکدوم از دو لیست که
+        انتخاب شده باشه (سایت یا ERP)."""
+        from sync_app.core.structure_mismatch_override import get_force_simple_source
+        from sync_app.core.product_woo_map_helper import load_product_woo_map
+
+        erp_selected = self.fs_erp_list.selectedItems()
+        if erp_selected:
+            parent_sku, variant_sku = erp_selected[0].data(Qt.UserRole)
+            if get_force_simple_source(parent_sku) == variant_sku:
+                if QMessageBox.question(
+                    self, "لغوِ تطبیق", f"تطبیقِ ساختاریِ «{parent_sku}» لغو بشه؟",
+                ) == QMessageBox.Yes:
+                    self._fs_delete(parent_sku)
+                return
+
+        site_selected = self.fs_site_list.selectedItems()
+        if site_selected:
+            pid, _label, _sku = site_selected[0].data(Qt.UserRole)
+            from sync_app.core.structure_mismatch_override import list_force_simple_sources
+
+            product_map = load_product_woo_map()
+            match_sku = None
+            for parent_sku, entry in list_force_simple_sources().items():
+                mapped_id = product_map.get(parent_sku)
+                try:
+                    if mapped_id is not None and int(mapped_id) == int(pid):
+                        match_sku = parent_sku
+                        break
+                except (TypeError, ValueError):
+                    continue
+            if match_sku:
+                if QMessageBox.question(
+                    self, "لغوِ تطبیق", f"تطبیقِ ساختاریِ «{match_sku}» لغو بشه؟",
+                ) == QMessageBox.Yes:
+                    self._fs_delete(match_sku)
+                return
+
+        QMessageBox.information(self, "توجه", "آیتمِ انتخاب‌شده تطبیقِ ساختاری‌ای ندارد که لغو شود.")
+
+    # -- پیشنهادِ خودکار ------------------------------------------------
+    def _fs_auto_suggest(self):
+        site_entries = getattr(self, "_fs_site_entries", [])
+        erp_entries = getattr(self, "_fs_erp_entries", [])
+        if not site_entries or not erp_entries:
+            QMessageBox.information(
+                self, "توجه",
+                "اول از هر دو طرف (سایت و ERP) جستجو کنید تا موردی برایِ پیشنهاد باشه.",
+            )
+            return
+
+        site_items = [
+            (site_data, site_data[2], label)
+            for label, site_data, state, _tooltip in site_entries
+            if state == _MATCH_NONE
+        ]
+        erp_label_by_key: dict[tuple, str] = {}
+        erp_items = []
+        for label, erp_data, state, _tooltip in erp_entries:
+            if state != _MATCH_NONE:
+                continue
+            _parent_sku, variant_sku = erp_data
+            erp_items.append((erp_data, variant_sku, label))
+            erp_label_by_key[erp_data] = label
+
+        if not site_items or not erp_items:
+            QMessageBox.information(
+                self, "توجه", "موردِ لینک‌نشده‌ای برایِ پیشنهاد دادن در هر دو لیست پیدا نشد.",
+            )
+            return
+
+        matches = _suggest_matches(site_items, erp_items)
+        self.fs_suggestions = [
+            {
+                "site_data": site_data,
+                "erp_data": erp_key,
+                "erp_label": erp_label_by_key.get(erp_key, str(erp_key)),
+                "reason": reason,
+            }
+            for site_data, erp_key, _variant_sku, reason in matches
+        ]
+        self._render_fs_suggest_table()
+        if not self.fs_suggestions:
+            QMessageBox.information(
+                self, "نتیجه",
+                "هیچ پیشنهادِ قابل‌اطمینانی پیدا نشد — احتمالاً باید دستی تطبیق بدید.",
+            )
+        else:
+            self.fs_status_label.setText(
+                f"🤖 {len(self.fs_suggestions)} پیشنهادِ خودکار پیدا شد — پایینِ لیست‌ها را ببینید."
+            )
+
+    def _render_fs_suggest_table(self):
+        table = self.fs_suggest_table
+        table.setRowCount(0)
+        has_rows = bool(self.fs_suggestions)
+        self.fs_suggest_label.setVisible(has_rows)
+        table.setVisible(has_rows)
+        self.fs_apply_selected_btn.setVisible(has_rows)
+        self.fs_discard_suggestions_btn.setVisible(has_rows)
+        for idx, sug in enumerate(self.fs_suggestions):
+            row = table.rowCount()
+            table.insertRow(row)
+            cb_wrap = QWidget()
+            cb_layout = QHBoxLayout(cb_wrap)
+            cb_layout.setContentsMargins(0, 0, 0, 0)
+            cb_layout.setAlignment(Qt.AlignCenter)
+            cb = QCheckBox()
+            cb.setChecked(True)
+            cb_layout.addWidget(cb)
+            table.setCellWidget(row, 0, cb_wrap)
+            site_label = sug["site_data"][1]
+            table.setItem(row, 1, QTableWidgetItem(str(site_label)))
+            table.setItem(row, 2, QTableWidgetItem(f"{sug['erp_label']}  —  {sug['reason']}"))
+            apply_btn = QPushButton("🔗 تطبیقِ تکی")
+            apply_btn.clicked.connect(lambda _checked=False, i=idx: self._fs_apply_single_suggestion(i))
+            table.setCellWidget(row, 3, apply_btn)
+        table.resizeRowsToContents()
+
+    def _fs_apply_single_suggestion(self, idx: int):
+        if idx < 0 or idx >= len(self.fs_suggestions):
+            return
+        sug = self.fs_suggestions.pop(idx)
+        self._fs_apply_match(sug["site_data"], sug["erp_data"], sug["erp_label"], silent=True)
+        self._refresh_fs_table()
+        self._render_fs_suggest_table()
+        self.fs_status_label.setText(f"✅ «{sug['erp_data'][0]}» تطبیق داده شد.")
+
+    def _fs_apply_selected_suggestions(self):
+        table = self.fs_suggest_table
+        checked_rows = []
+        for row in range(table.rowCount()):
+            wrap = table.cellWidget(row, 0)
+            cb = wrap.findChild(QCheckBox) if wrap else None
+            if cb is not None and cb.isChecked():
+                checked_rows.append(row)
+        if not checked_rows:
+            QMessageBox.information(self, "توجه", "هیچ پیشنهادی تیک نخورده.")
+            return
+        applied = 0
+        for row in sorted(checked_rows, reverse=True):
+            if row >= len(self.fs_suggestions):
+                continue
+            sug = self.fs_suggestions.pop(row)
+            self._fs_apply_match(sug["site_data"], sug["erp_data"], sug["erp_label"], silent=True)
+            applied += 1
+        self._refresh_fs_table()
+        self._render_fs_suggest_table()
+        QMessageBox.information(self, "انجام شد", f"{applied} تطبیق به‌صورتِ گروهی ثبت شد.")
+
+    def _fs_discard_suggestions(self):
+        self.fs_suggestions = []
+        self._render_fs_suggest_table()
+
+    def _fs_drop_suggestions_for(self, *, parent_sku=None, site_data=None):
+        def _keep(sug):
+            if parent_sku and sug.get("erp_data", (None,))[0] == parent_sku:
+                return False
+            if site_data and sug.get("site_data") == site_data:
+                return False
+            return True
+
+        self.fs_suggestions = [s for s in self.fs_suggestions if _keep(s)]
+        self._render_fs_suggest_table()
 
     def _refresh_fs_table(self):
         from sync_app.core.structure_mismatch_override import list_force_simple_sources
@@ -976,13 +1675,37 @@ class StructureReconciliationTab(QWidget):
         from sync_app.core.product_woo_map_helper import load_product_woo_map, save_product_woo_map
         from sync_app.core.product_woo_map_meta import clear_product_link_meta
 
-        clear_force_simple_source(sku)
         product_map = load_product_woo_map()
+        previously_mapped_id = product_map.get(sku)
+        try:
+            previously_mapped_id = int(previously_mapped_id) if previously_mapped_id is not None else None
+        except (TypeError, ValueError):
+            previously_mapped_id = None
+
+        clear_force_simple_source(sku)
         if sku in product_map:
             product_map.pop(sku, None)
             save_product_woo_map(product_map)
         clear_product_link_meta(sku)
         self._refresh_fs_table()
+        self._demote_fs_erp_entry(getattr(self, "_fs_erp_entries", None), sku)
+        self._render_fs_erp_list()
+        self._demote_fs_site_entry(getattr(self, "_fs_site_entries", None), previously_mapped_id)
+        self._render_fs_site_list()
+
+    def _demote_fs_erp_entry(self, entries, parent_sku: str):
+        if not entries:
+            return
+        for i, (label, data, state, tooltip) in enumerate(entries):
+            if data[0] == parent_sku and state == _MATCH_STRUCTURAL:
+                entries[i] = (label, data, _MATCH_NONE, "")
+
+    def _demote_fs_site_entry(self, entries, mapped_id):
+        if not entries or mapped_id is None:
+            return
+        for i, (label, data, state, tooltip) in enumerate(entries):
+            if state == _MATCH_STRUCTURAL and int(data[0]) == mapped_id:
+                entries[i] = (label, data, _MATCH_NONE, "")
 
     # ------------------------------------------------------------------
     def ensure_tab_data_loaded(self):

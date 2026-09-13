@@ -386,6 +386,11 @@ class ProductTab(QWidget):
 
         return erp_provider_label(self.config)
 
+    def _platform_label(self) -> str:
+        from sync_app.core.integrations.commerce_provider import store_platform_label
+
+        return store_platform_label(self.config)
+
     def _tick_products_sync_ui(self):
         """آپدیت زنده‌ی درصد پیشرفت — با خواندن همون خط لاگ «محصول X/Y» که خودِ اسکریپت سینک می‌نویسه."""
         import re
@@ -863,6 +868,8 @@ class ProductTab(QWidget):
         # با کاتالوگِ بزرگ باعثِ کندیِ محسوسِ بارگذاریِ لیست می‌شد.
         from sync_app.core.product_category_override import load_category_overrides
         category_overrides = load_category_overrides()
+        erp_label = self._erp_label()
+        platform_label = self._platform_label()
 
         try:
             for row in rows or []:
@@ -876,9 +883,9 @@ class ProductTab(QWidget):
                 has_erp_image = erp_image_count > 0
                 image_url = self._image_url_cache.get(sku, "")
                 if has_erp_image:
-                    image_status = f"ERP ({erp_image_count})" if erp_image_count > 1 else "ERP"
+                    image_status = f"{erp_label} ({erp_image_count})" if erp_image_count > 1 else erp_label
                 elif image_url:
-                    image_status = "Woo"
+                    image_status = platform_label
                 else:
                     image_status = "ندارد"
 
@@ -1431,6 +1438,7 @@ class ProductTab(QWidget):
         rows_layout.addStretch(1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.button(QDialogButtonBox.Close).setText("بستن")
         buttons.rejected.connect(dlg.reject)
         outer.addWidget(buttons)
 
@@ -1608,6 +1616,8 @@ class ProductTab(QWidget):
         btn_row.addWidget(clear_btn)
         btn_row.addStretch(1)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Ok).setText("✅ ذخیره")
+        buttons.button(QDialogButtonBox.Cancel).setText("انصراف")
         btn_row.addWidget(buttons)
         layout.addLayout(btn_row)
 
@@ -1831,11 +1841,16 @@ class ProductTab(QWidget):
         checks = bundle["checks"]
         suggestions = bundle["suggestions"]
 
+        from sync_app.core.scrollable_dialog import build_scrollable_dialog_body, add_footer_widget
+
         dialog = QDialog(self)
         dialog.setWindowTitle(f"سئوی محصول — {sku}")
         dialog.setLayoutDirection(Qt.RightToLeft)
         dialog.resize(560, 680)
-        layout = QVBoxLayout(dialog)
+        # محتوا قابلِ‌اسکروله، ولی دکمه‌های تأیید/لغو (outer_layout) همیشه
+        # پایینِ دیالوگ ثابت و قابلِ‌دیدن می‌مونن — حتی رویِ صفحه‌نمایشِ
+        # کوچیک/رزولوشنِ پایین که قبلاً این دکمه‌ها از دید خارج می‌شدن.
+        layout, outer_layout = build_scrollable_dialog_body(dialog)
 
         score_label = QLabel(f"امتیاز فعلی (واقعی، از روی سایت): {bundle['current_score']}/100")
         score_label.setStyleSheet("font-weight:700; font-size:14px;")
@@ -1900,18 +1915,85 @@ class ProductTab(QWidget):
         if not checkbox_map:
             layout.addWidget(QLabel("✅ همه‌ی موارد سئوی قابل‌بررسی از قبل تکمیل است."))
             buttons = QDialogButtonBox(QDialogButtonBox.Close)
+            buttons.button(QDialogButtonBox.Close).setText("بستن")
             buttons.rejected.connect(dialog.reject)
             buttons.accepted.connect(dialog.accept)
-            layout.addWidget(buttons)
+            add_footer_widget(outer_layout, buttons)
             dialog.exec_()
             return
+
+        # بهبودِ متنِ فیلدها با هوشِ مصنوعی (Gemini) — اختیاری: فقط وقتی
+        # کلیدِ API در تنظیمات وارد شده باشه و اتصال برقرار باشه؛ وگرنه
+        # (بدونِ اینترنت/کلید/سهمیه) بی‌سروصدا از همون پیشنهادهایِ آفلاینِ
+        # فعلی (که از قبل تویِ کادرها هست) صرف‌نظر می‌شه — چیزی خراب نمی‌شه.
+        ai_row = QHBoxLayout()
+        ai_button = QPushButton("🤖 بهبودِ متن‌ها با هوشِ مصنوعی (Gemini)")
+        ai_row.addWidget(ai_button)
+        ai_status_label = QLabel("")
+        ai_status_label.setWordWrap(True)
+        ai_status_label.setStyleSheet("color:#64748b; font-size:11px;")
+        ai_row.addWidget(ai_status_label, 1)
+        layout.addLayout(ai_row)
+
+        def _run_ai_improve():
+            from sync_app.core.secure_config_loader import load_secure_config as _load_cfg
+
+            ai_cfg = _load_cfg(None) or {}
+            if not str(ai_cfg.get("AI_API_KEY") or "").strip():
+                ai_status_label.setText(
+                    "ℹ️ کلیدِ API هوشِ مصنوعی تنظیم نشده (تنظیمات ← هوشِ مصنوعی) — "
+                    "همینِ پیشنهادهایِ فعلی (روشِ آفلاین) دست‌نخورده می‌مونه."
+                )
+                return
+
+            ai_button.setEnabled(False)
+            ai_status_label.setText("⏳ در حالِ ارتباط با Gemini...")
+            product_for_ai = {
+                "name": bundle.get("name", ""),
+                "description": (
+                    edit_map["description"].toPlainText().strip()
+                    if "description" in edit_map
+                    else current_values.get("description", "")
+                ),
+                "category": bundle.get("category_name", ""),
+            }
+
+            def _worker():
+                from sync_app.core.ai_content_helper import generate_smart_seo_suggestions
+
+                return generate_smart_seo_suggestions(ai_cfg, product_for_ai)
+
+            def _done(result):
+                ai_button.setEnabled(True)
+                ai_suggestions, used_ai = result
+                for key in ("short_description", "meta_description", "seo_title", "meta_keywords"):
+                    if key in edit_map and ai_suggestions.get(key):
+                        edit_map[key].setPlainText(ai_suggestions[key])
+                        checkbox_map[key].setChecked(True)
+                if used_ai:
+                    ai_status_label.setText("✅ متن‌ها با هوشِ مصنوعی (Gemini) بهبود یافتن.")
+                else:
+                    ai_status_label.setText(
+                        "⚠️ اتصال به هوشِ مصنوعی برقرار نشد (اینترنت/سهمیه) — "
+                        "از همون روشِ معمولیِ آفلاین استفاده شد."
+                    )
+
+            def _fail(_msg):
+                ai_button.setEnabled(True)
+                ai_status_label.setText(
+                    "⚠️ خطا در ارتباط با هوشِ مصنوعی — از همون روشِ معمولیِ آفلاین استفاده شد."
+                )
+
+            run_in_thread(_worker, on_complete=_done, on_error=_fail)
+
+        ai_button.clicked.connect(_run_ai_improve)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.button(QDialogButtonBox.Ok).setText("📤 ارسال موارد تیک‌خورده به سایت")
         buttons.button(QDialogButtonBox.Cancel).setText("بستن")
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
-        layout.addWidget(buttons)
+        add_footer_widget(outer_layout, buttons)
 
         if dialog.exec_() != QDialog.Accepted:
             return
@@ -2137,11 +2219,16 @@ class ProductTab(QWidget):
         except Exception:
             short_link = ""
 
+        from sync_app.core.scrollable_dialog import build_scrollable_dialog_body, add_footer_widget
+
         dialog = QDialog(self)
         dialog.setWindowTitle(f"AI Content Studio — {sku}")
         dialog.setLayoutDirection(Qt.RightToLeft)
         dialog.resize(560, 620)
-        outer = QVBoxLayout(dialog)
+        # زیرتبِ «زمان‌بندیِ شبکه‌ی اجتماعی» (بله/تلگرام) محتوایِ زیادی داره —
+        # رویِ صفحه‌نمایشِ کوچیک، بدونِ اسکرول، دکمه‌ی «بستن» از دید خارج
+        # می‌شد. حالا کلِ تب‌ها قابلِ‌اسکرول‌ان و دکمه‌ی پایین همیشه ثابته.
+        outer, outer_footer_layout = build_scrollable_dialog_body(dialog)
 
         sub_tabs = QTabWidget()
         sub_tabs.setLayoutDirection(Qt.RightToLeft)
@@ -2563,9 +2650,10 @@ class ProductTab(QWidget):
         sub_tabs.addTab(schedule_tab, "📅 زمان‌بندی شبکه اجتماعی")
 
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.button(QDialogButtonBox.Close).setText("بستن")
         buttons.rejected.connect(dialog.reject)
         buttons.accepted.connect(dialog.accept)
-        outer.addWidget(buttons)
+        add_footer_widget(outer_footer_layout, buttons)
 
         dialog.exec_()
 

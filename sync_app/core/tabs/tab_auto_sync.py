@@ -110,7 +110,7 @@ AUTO_SYNC_JOBS: tuple[AutoSyncJob, ...] = (
         "Poshakproperties",
         "ویژگی‌ها",
         "🎯",
-        "سایز، رنگ و attributeهای محصول",
+        "سایز، رنگ و ویژگی‌هایِ محصول",
         Poshakproperties.main,
     ),
     AutoSyncJob(
@@ -124,7 +124,7 @@ AUTO_SYNC_JOBS: tuple[AutoSyncJob, ...] = (
         "update_variations",
         "متغیرها",
         "🎨",
-        "قیمت و موجودی variationها",
+        "قیمت و موجودیِ واریانت‌ها",
         update_variations.main,
     ),
     AutoSyncJob(
@@ -138,7 +138,7 @@ AUTO_SYNC_JOBS: tuple[AutoSyncJob, ...] = (
         "ordersync",
         "سفارشات",
         "🧾",
-        "انتقال سفارش‌های processing به ERP",
+        "انتقال سفارش‌هایِ «در حال انجام» به ERP",
         ordersync.main,
     ),
 )

@@ -448,6 +448,7 @@ class CustomerTab(SitePreviewLoaderMixin, SyncTab):
         _update_char_count()
 
         buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Cancel).setText("انصراف")
         send_btn = buttons.addButton("📤 ارسال", QDialogButtonBox.AcceptRole)
         layout.addWidget(buttons)
         buttons.rejected.connect(dlg.reject)

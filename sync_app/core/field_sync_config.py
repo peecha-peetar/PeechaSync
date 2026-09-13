@@ -5,9 +5,9 @@
 پیش‌فرض همه True است تا رفتار فعلی برنامه (ارسال همه‌ی فیلدها) حفظ شود
 و کسی که این نسخه را از قبل نصب کرده با آپدیت، رفتار غیرمنتظره نبیند.
 
-توجه: قیمت عادی (regular_price) و قیمت ویژه (sale_price) عمداً اینجا نیستند —
-قیمت عادی همیشه ارسال می‌شود و قیمت ویژه کلید تنظیمات جدای خودش را دارد
-(SALE_PRICE_LIST_ENABLED) که از قبل در تب تنظیمات وجود دارد.
+توجه: قیمت ویژه (sale_price) کلید تنظیمات جدای خودش را دارد
+(SALE_PRICE_LIST_ENABLED) که از قبل در تب تنظیمات وجود دارد؛ اینجا فقط
+قیمتِ عادی (regular_price) به‌عنوانِ یک فیلدِ قابل‌غیرفعال‌سازی اضافه شده.
 """
 
 # محصول
@@ -15,6 +15,7 @@ PRODUCT_FIELDS = [
     ("SYNC_FIELD_PRODUCT_NAME", "نام محصول", True),
     ("SYNC_FIELD_PRODUCT_DESCRIPTION", "توضیحات محصول", True),
     ("SYNC_FIELD_PRODUCT_CATEGORIES", "دسته‌بندی محصول", True),
+    ("SYNC_FIELD_PRODUCT_PRICE", "قیمتِ محصول", True),
     ("SYNC_FIELD_PRODUCT_STOCK", "موجودی محصول", True),
     ("SYNC_FIELD_PRODUCT_VISIBILITY", "وضعیت نمایش محصول (Visibility)", True),
 ]

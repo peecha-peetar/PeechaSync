@@ -173,6 +173,8 @@ class JalaliDatePicker(QWidget):
         form.addRow("روز:", day_box)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Ok).setText("تأیید")
+        buttons.button(QDialogButtonBox.Cancel).setText("انصراف")
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
@@ -241,9 +243,9 @@ class LogsTab(QWidget):
         self.level_combo = QComboBox()
         self.level_combo.setObjectName("logsLevelCombo")
         self.level_combo.addItem("همه سطوح", "all")
-        self.level_combo.addItem("INFO", "info")
-        self.level_combo.addItem("WARNING", "warning")
-        self.level_combo.addItem("ERROR", "error")
+        self.level_combo.addItem("اطلاعات", "info")
+        self.level_combo.addItem("هشدار", "warning")
+        self.level_combo.addItem("خطا", "error")
 
         self.search_input = QLineEdit()
         self.search_input.setObjectName("logsSearchInput")
