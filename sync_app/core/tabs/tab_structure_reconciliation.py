@@ -462,7 +462,6 @@ class _ErpVariantSkuLoader(QThread):
     def run(self):
         try:
             from sync_app.core.sql_connection_helper import open_sql_connection
-            from sync_app.core.variation_rules import product_is_variable
             from sync_app.core.scripts.update_variations import fetch_variations_from_db, _fetch_attribute_labels
             from sync_app.core.category_price_list import resolve_article_price_column
 
@@ -470,7 +469,15 @@ class _ErpVariantSkuLoader(QThread):
             conn, _, _ = open_sql_connection(self.cfg, timeout=10)
             try:
                 cursor = conn.cursor()
-                where_bits = ["LEN(A_Code) >= 4"]
+                # فیلترِ «واقعاً متغیره» (کدهایِ ItemArticle) رو مستقیم تویِ
+                # WHERE می‌بریم، نه بعد از TOP N پایتون‌ساید — وگرنه (باگی که
+                # پیدا شد) اگه ۳۰ ردیفِ اولِ کوئری (بدونِ این فیلتر) همه
+                # ساده بودن، خروجی همیشه کاملاً خالی می‌موند، انگار «هیچ
+                # کالایی پیدا نشد» — حتی وقتی کدهایِ متغیرِ زیادی وجود داشت.
+                where_bits = [
+                    "LEN(A_Code) >= 4",
+                    "A_Code IN (SELECT DISTINCT A_Code FROM ItemArticle)",
+                ]
                 params: list = []
                 if groups:
                     where_bits.append("(" + " OR ".join("A_Code LIKE ?" for _ in groups) + ")")
@@ -483,7 +490,10 @@ class _ErpVariantSkuLoader(QThread):
                 if category_code:
                     where_bits.append("A_Code LIKE ?")
                     params.append(f"{category_code}%")
-                sql = f"SELECT TOP 30 A_Code, A_Name, A_Code_C FROM Article WHERE {' AND '.join(where_bits)}"
+                sql = (
+                    f"SELECT TOP 30 A_Code, A_Name, A_Code_C FROM Article "
+                    f"WHERE {' AND '.join(where_bits)} ORDER BY A_Code"
+                )
                 cursor.execute(sql, params)
                 candidates = cursor.fetchall()
                 name_map = _fetch_group_name_map(conn)
@@ -492,8 +502,6 @@ class _ErpVariantSkuLoader(QThread):
                 size_label, color_label, dim3_label = _fetch_attribute_labels(conn)
                 for a_code, a_name, a_code_c in candidates:
                     a_code = str(a_code).strip()
-                    if not product_is_variable(cursor, a_code):
-                        continue
                     manual_code = str(a_code_c or "").strip()
                     cat_name = _category_name_for_code(name_map, a_code)
                     price_col = resolve_article_price_column(a_code, "", self.cfg)
