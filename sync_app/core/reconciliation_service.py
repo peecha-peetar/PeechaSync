@@ -147,15 +147,16 @@ def format_suggestion_tooltip(reason: str, erp: ReconRow, wc: ReconRow, config: 
     match_code = str(erp.match_key or wc.match_key or "").strip()
     if code == SUGGEST_REASON_MANUAL_CODE:
         manual_code = str((erp.extra or {}).get("a_code_c") or "").strip()
-        code_line = f"کدِ دستیِ «{manual_code}» در {erp_label} با کدِ محصول در فروشگاه یکسان است."
+        wc_sku = str(wc.match_key or "").strip()
+        code_line = f"کدِ دستیِ «{manual_code}» در {erp_label} با SKUِ «{wc_sku}» در فروشگاه یکسان است."
         return (
             f"پیشنهاد سیستم: {code_line}\n"
             "بالاترین اولویتِ تطبیق (کدِ دستی)؛ برای ثبت «پذیرش» بزنید، اگر اشتباه است «رد پیشنهاد»."
         )
     if code == SUGGEST_REASON_MATCH_KEY:
-        code_line = f"کد محصول «{match_code}» در {erp_label} و فروشگاه یکسان است."
+        code_line = f"SKUِ «{match_code}» در {erp_label} و فروشگاه یکسان است."
         if not match_code:
-            code_line = f"کد محصول در {erp_label} و فروشگاه یکسان است."
+            code_line = f"SKU در {erp_label} و فروشگاه یکسان است."
         return (
             f"پیشنهاد سیستم: {code_line}\n"
             "برای ثبت «پذیرش» بزنید؛ اگر اشتباه است «رد پیشنهاد»."
@@ -1803,8 +1804,10 @@ def suggest_auto_pairs(
     used_erp: set[str] = set()
     used_wc: set[str] = set()
 
-    # اولویتِ اول: کدِ دستیِ ERP (A_Code_C) در برابرِ کدِ محصولِ فروشگاه —
-    # چون فروشنده‌ها معمولاً همین کدِ دستی رو به‌عنوانِ SKU رویِ سایت هم
+    # اولویتِ اول: کدِ دستیِ ERP (A_Code_C) در برابرِ SKUِ محصولِ فروشگاه
+    # (نه شناسهٔ خودکارِ عددیِ ووکامرس/پرستاشاپ — wc_key_fn پایین از
+    # match_key که بر اساسِ فیلدِ sku ساخته شده استفاده می‌کنه) — چون
+    # فروشنده‌ها معمولاً همین کدِ دستی رو به‌عنوانِ SKU رویِ سایت هم
     # می‌ذارن، این دقیق‌ترین و مطمئن‌ترین تطبیقه؛ قبل از کدِ اتوماتیک بررسی می‌شه.
     if entity == ENTITY_PRODUCTS:
         for erp, wc in _pair_by_field(
@@ -1820,7 +1823,7 @@ def suggest_auto_pairs(
             used_wc.add(wc.key)
 
     # اولویتِ دوم: کدِ اتوماتیکِ ERP (A_Code — «کدِ کالایِ قبلی») در برابرِ
-    # کدِ محصولِ فروشگاه.
+    # همون SKUِ محصولِ فروشگاه.
     for erp, wc in _pair_by_match_key(
         erp_pool,
         wc_pool,
