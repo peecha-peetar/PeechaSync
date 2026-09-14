@@ -582,6 +582,44 @@ def _fetch_wc_categories(
     return rows
 
 
+def _fetch_category_name_map(conn) -> dict[str, str]:
+    """{کدِ گروه (۲ رقمی) یا زیرگروه (۴ رقمی): نامِ دسته‌بندی} — از رویِ
+    جدولِ M_Group/S_Group واقعیِ SQL."""
+    name_map: dict[str, str] = {}
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT M_Groupcode, M_GroupName FROM M_Group ORDER BY M_Groupcode")
+        main_names: dict[str, str] = {}
+        for m_code, m_name in cursor.fetchall():
+            m_code = str(m_code).strip()
+            m_name = str(m_name or "").strip()
+            main_names[m_code] = m_name
+            if m_name:
+                name_map[m_code] = m_name
+        cursor.execute(
+            "SELECT M_Groupcode, S_Groupcode, S_GroupName FROM S_Group ORDER BY M_Groupcode, S_Groupcode"
+        )
+        for m_code, s_code, s_name in cursor.fetchall():
+            m_code = str(m_code).strip()
+            full_code = f"{m_code}{str(s_code).strip()}"
+            s_name = str(s_name or "").strip()
+            m_name = main_names.get(m_code, "")
+            if s_name:
+                name_map[full_code] = f"{m_name} › {s_name}" if m_name else s_name
+    except Exception:
+        pass
+    return name_map
+
+
+def _category_name_for_code(name_map: dict, code: str) -> str:
+    code = str(code or "").strip()
+    if len(code) >= 4 and name_map.get(code[:4]):
+        return name_map[code[:4]]
+    if len(code) >= 2 and name_map.get(code[:2]):
+        return name_map[code[:2]]
+    return ""
+
+
 def _fetch_erp_products(config: dict) -> list[ReconRow]:
     """همه محصولات ERP — بدون فیلتر گروه انتخاب‌شده (برای نگاشت فروشگاه موجود)."""
     from sync_app.core.variation_query import load_variable_a_codes
@@ -590,6 +628,7 @@ def _fetch_erp_products(config: dict) -> list[ReconRow]:
     conn, _, _ = open_sql_connection(config, timeout=8)
     cursor = conn.cursor()
     variable_codes = load_variable_a_codes(cursor)
+    category_names = _fetch_category_name_map(conn)
     cursor.execute(
         """
         SELECT A_Code, A_Name, Sel_Price, Sel_Price2, Sel_Price3, Sel_Price4, Sel_Price5, Exist, A_Code_C
@@ -606,12 +645,16 @@ def _fetch_erp_products(config: dict) -> list[ReconRow]:
         sale_price = resolve_sale_article_price(row, config, price_start_index=2)
         manual_code = str(row[8] or "").strip() if len(row) > 8 else ""
         ptype_fa = "متغیر" if sku in variable_codes else "ساده"
+        cat_name = _category_name_for_code(category_names, sku)
 
         # ترتیبِ ثابت و کوتاه (وضعیتِ لینک جدا، بیرونِ این متن اضافه می‌شه):
-        # نوع | کدِ دستی | نام | قیمتِ اصلی — بدونِ کدِ اتوماتیک/قیمتِ ویژه/
-        # موجودی، چون طولانی و تکراری بودن (کدِ اتوماتیک همون‌جوری تویِ
-        # ستونِ راستِ لیست و تویِ خودِ عملیاتِ تطبیق در دسترسه).
-        label = " | ".join([ptype_fa, manual_code or "—", name, f"{price:,.0f}"])
+        # نوع | کدِ دستی | نام | قیمتِ اصلی | زیرگروه — بدونِ کدِ اتوماتیک/
+        # قیمتِ ویژه/موجودی، چون طولانی و تکراری بودن (کدِ اتوماتیک
+        # همون‌جوری تویِ ستونِ راستِ لیست و تویِ خودِ عملیاتِ تطبیق در دسترسه).
+        parts = [ptype_fa, manual_code or "—", name, f"{price:,.0f}"]
+        if cat_name:
+            parts.append(cat_name)
+        label = " | ".join(parts)
 
         rows.append(
             ReconRow(
@@ -627,6 +670,7 @@ def _fetch_erp_products(config: dict) -> list[ReconRow]:
                     "a_code_c": manual_code,
                     "sale_price": sale_price,
                     "type": "variable" if sku in variable_codes else "simple",
+                    "category_name": cat_name,
                 },
             )
         )

@@ -448,9 +448,13 @@ class _ErpSimpleSkuLoader(QThread):
                 name = str(r[1] or "").strip()
                 price = resolve_article_price(r, price_col, price_start_index=2)
                 manual_code = str(r[7] or "").strip() if len(r) > 7 else ""
-                # ترتیبِ ثابت — همون چیزی که تبِ «تطبیق» استفاده می‌کنه:
-                # نوع | کدِ دستی | نام | قیمتِ اصلی.
-                label = " | ".join(["ساده", manual_code or "—", name, f"{price:,.0f}"])
+                # ستونِ کد باید همون کدی باشه که واقعاً برایِ تطبیق استفاده
+                # می‌شه (code = A_Code) — نه فقط کدِ دستی؛ چون خیلی از
+                # کالاها کدِ دستی ندارن، اگه فقط کدِ دستی نشون داده بشه
+                # (یا «—» به‌جاش)، کاربر نمی‌تونه ردیف‌هایِ هم‌نام رو از هم
+                # تشخیص بده و ممکنه کالایِ اشتباه رو تطبیق بده.
+                code_field = f"{code} (دستی: {manual_code})" if manual_code else code
+                label = " | ".join(["ساده", code_field, name, f"{price:,.0f}"])
                 out.append((code, label))
             self.done.emit(out, "")
         except Exception as exc:
@@ -529,11 +533,12 @@ class _ErpVariantSkuLoader(QThread):
                         )
                         name_with_attrs = f"{a_name} — {attrs}" if attrs else a_name
                         variant_price = float(v.get("regular_price") or raw_price or 0)
-                        # ترتیبِ ثابت — همون چیزی که تبِ «تطبیق» استفاده می‌کنه:
-                        # نوع | کدِ دستی | نام (با ویژگی‌ها) | قیمتِ اصلی.
-                        label = " | ".join(
-                            ["متغیر", manual_code or "—", name_with_attrs, f"{variant_price:,.0f}"]
-                        )
+                        # ستونِ کد باید همون کدی باشه که واقعاً برایِ تطبیق
+                        # استفاده می‌شه (v_sku — مالِ همین زیرواریانتِ خاص،
+                        # نه کدِ دستیِ والد که بینِ همه‌یِ زیرواریانت‌هایِ
+                        # یک کالا مشترکه و نمی‌تونه اونا رو از هم جدا کنه).
+                        code_field = f"{v_sku} (دستی: {manual_code})" if manual_code else v_sku
+                        label = " | ".join(["متغیر", code_field, name_with_attrs, f"{variant_price:,.0f}"])
                         out.append((a_code, v_sku, label))
                 cursor.close()
             finally:
