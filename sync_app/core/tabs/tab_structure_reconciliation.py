@@ -90,8 +90,12 @@ def _suggest_matches(site_items, erp_items, *, min_name_ratio: float = _MIN_NAME
     """site_items/erp_items: [(key, sku, display_text), ...] — کلید هرچی
     باشه (فقط باید یکتا و hashable باشه). هر طرف حداکثر یک‌بار استفاده
     می‌شه (اولین/بهترین تطبیق برنده‌ست). اولویت: کدِ کاملاً یکسان → شباهتِ
-    زیررشته‌ایِ کد (حداقل ۴ کاراکتر) → شباهتِ متنیِ نام (SequenceMatcher).
+    زیررشته‌ایِ کد (حداقل ۴ کاراکتر) → شباهتِ متنیِ نام (SequenceMatcher) →
+    (فقط اگه هیچ‌کدومِ بالا جواب نداد) کدِ مشابه با نادیده‌گرفتنِ حرف/
+    خط‌تیره/صفرِ اضافه — مثلِ «S3001»/«003001»/«-3001» در برابرِ «3001».
     خروجی: [(site_key, erp_key, erp_sku, reason), ...]"""
+    from sync_app.core.reconciliation_service import _normalize_code_loose
+
     used_erp_keys = set()
 
     def _pick_by_sku(site_sku_norm):
@@ -132,6 +136,19 @@ def _suggest_matches(site_items, erp_items, *, min_name_ratio: float = _MIN_NAME
             return best[0], best[1], f"شباهتِ نام ({int(best_ratio * 100)}٪)"
         return None
 
+    def _pick_by_sku_loose(site_sku_loose):
+        if not site_sku_loose:
+            return None
+        candidates = [
+            (erp_key, erp_sku)
+            for erp_key, erp_sku, _erp_text in erp_items
+            if erp_key not in used_erp_keys and _normalize_code_loose(erp_sku) == site_sku_loose
+        ]
+        if len(candidates) != 1:
+            return None
+        erp_key, erp_sku = candidates[0]
+        return erp_key, erp_sku, "کدِ مشابه (نادیده‌گرفتنِ حرف/صفر)"
+
     results = []
     for site_key, site_sku, site_text in site_items:
         site_sku_norm = str(site_sku or "").strip().lower()
@@ -140,6 +157,8 @@ def _suggest_matches(site_items, erp_items, *, min_name_ratio: float = _MIN_NAME
             found = _pick_by_sku(site_sku_norm) or _pick_by_sku_substring(site_sku_norm)
         if not found:
             found = _pick_by_name(site_text)
+        if not found and site_sku_norm:
+            found = _pick_by_sku_loose(_normalize_code_loose(site_sku))
         if found:
             erp_key, erp_sku, reason = found
             used_erp_keys.add(erp_key)
@@ -152,7 +171,7 @@ def _suggest_matches(site_items, erp_items, *, min_name_ratio: float = _MIN_NAME
 # ----------------------------------------------------------------------
 def _search_site_products(cfg, query: str) -> list[dict]:
     """جستجویِ محصولاتِ سایت با نام/کد — شکلِ خروجی هم‌الگویِ WC:
-    [{"id", "sku", "name", "type"}, ...]."""
+    [{"id", "sku", "name", "type", "price"}, ...]."""
     from sync_app.core.integrations.commerce_provider import is_prestashop
 
     query = str(query or "").strip()
@@ -177,6 +196,7 @@ def _search_site_products(cfg, query: str) -> list[dict]:
             out.append({
                 "id": int(row["id"]), "sku": str(row.get("reference") or ""),
                 "name": str(name or ""), "type": "simple",
+                "price": str(row.get("price") or ""),
             })
         return out
 
@@ -198,6 +218,7 @@ def _search_site_products(cfg, query: str) -> list[dict]:
         out.append({
             "id": int(row["id"]), "sku": str(row.get("sku") or ""),
             "name": str(row.get("name") or ""), "type": str(row.get("type") or "simple"),
+            "price": str(row.get("price") or ""),
         })
     return out
 
@@ -233,7 +254,10 @@ def _list_site_variations_for_product(cfg, product: dict) -> list[dict]:
                 label = f"{variant_name} ({reference})"
             else:
                 label = variant_name or reference or f"ترکیب #{c['id']}"
-            out.append({"id": int(c["id"]), "label": label, "sku": reference})
+            # پرستاشاپ برایِ هر combination فقط اختلافِ قیمت نسبت به محصولِ
+            # پایه می‌ده، نه قیمتِ مطلق — بدونِ واکشیِ اضافیِ محصولِ والد
+            # نمی‌شه درست حسابش کرد، پس اینجا خالی می‌مونه (در لیبل «—» می‌شه).
+            out.append({"id": int(c["id"]), "label": label, "sku": reference, "price": ""})
         return out
 
     from sync_app.core.wc_sync_helper import apply_network_overrides, build_wcapi
@@ -254,8 +278,21 @@ def _list_site_variations_for_product(cfg, product: dict) -> list[dict]:
             label = f"{attrs} ({sku})"
         else:
             label = attrs or sku or f"واریانت #{v['id']}"
-        out.append({"id": int(v["id"]), "label": label, "sku": sku})
+        out.append({"id": int(v["id"]), "label": label, "sku": sku, "price": str(v.get("price") or "")})
     return out
+
+
+def _format_site_price(raw) -> str:
+    """قیمتِ خامِ رشته‌ای/عددیِ برگشته از ووکامرس/پرستاشاپ رو به فرمتِ
+    نمایشیِ سه‌رقم‌جدا تبدیل می‌کنه؛ اگه خالی/نامعتبر بود «—» برمی‌گردونه
+    (مثلاً combinationِ پرستاشاپ که قیمتِ مطلق نداره)."""
+    try:
+        value = float(raw or 0)
+    except (TypeError, ValueError):
+        return "—"
+    if value <= 0:
+        return "—"
+    return f"{value:,.0f}"
 
 
 class _SiteProductSearchLoader(QThread):
@@ -271,8 +308,14 @@ class _SiteProductSearchLoader(QThread):
     def run(self):
         try:
             products = _search_site_products(self.cfg, self.query)
+            # ترتیبِ ثابت — همون چیزی که تبِ «تطبیق» استفاده می‌کنه:
+            # نوع | کد | نام | قیمتِ اصلی.
             out = [
-                (p["id"], f"{p['name']} — {p['sku'] or 'بدونِ SKU'} (#{p['id']})", p["sku"])
+                (
+                    p["id"],
+                    " | ".join(["ساده", p["sku"] or "—", p["name"], _format_site_price(p.get("price"))]),
+                    p["sku"],
+                )
                 for p in products
             ]
             self.done.emit(out, "")
@@ -298,7 +341,12 @@ class _SiteVariationSearchLoader(QThread):
             for p in products:
                 variations = _list_site_variations_for_product(self.cfg, p)
                 for v in variations:
-                    label = f"{p['name']} — {v['label']} (#محصول {p['id']} / #واریانت {v['id']})"
+                    name_with_variant = f"{p['name']} — {v['label']}"
+                    # ترتیبِ ثابت — همون چیزی که تبِ «تطبیق» استفاده می‌کنه:
+                    # نوع | کد | نام (با ویژگیِ واریانت) | قیمتِ اصلی.
+                    label = " | ".join(
+                        ["متغیر", str(v.get("sku") or "") or "—", name_with_variant, _format_site_price(v.get("price"))]
+                    )
                     out.append((p["id"], v["id"], label, str(v.get("sku") or "")))
             self.done.emit(out, "")
         except Exception as exc:
@@ -308,45 +356,6 @@ class _SiteVariationSearchLoader(QThread):
 # ----------------------------------------------------------------------
 # Loaderهایِ پس‌زمینه — سمتِ ERP
 # ----------------------------------------------------------------------
-def _fetch_group_name_map(conn) -> dict[str, str]:
-    """{کدِ گروه (۲ رقمی) یا زیرگروه (۴ رقمی): نامِ دسته‌بندی} — از رویِ
-    جدولِ M_Group/S_Group واقعیِ SQL. دقیقاً هم‌الگویِ چیزی که تبِ «تطبیق»
-    برایِ فیلترِ دسته‌بندی استفاده می‌کنه."""
-    name_map: dict[str, str] = {}
-    try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT M_Groupcode, M_GroupName FROM M_Group ORDER BY M_Groupcode")
-        main_names: dict[str, str] = {}
-        for m_code, m_name in cursor.fetchall():
-            m_code = str(m_code).strip()
-            m_name = str(m_name or "").strip()
-            main_names[m_code] = m_name
-            if m_name:
-                name_map[m_code] = m_name
-        cursor.execute(
-            "SELECT M_Groupcode, S_Groupcode, S_GroupName FROM S_Group ORDER BY M_Groupcode, S_Groupcode"
-        )
-        for m_code, s_code, s_name in cursor.fetchall():
-            m_code = str(m_code).strip()
-            full_code = f"{m_code}{str(s_code).strip()}"
-            s_name = str(s_name or "").strip()
-            m_name = main_names.get(m_code, "")
-            if s_name:
-                name_map[full_code] = f"{m_name} › {s_name}" if m_name else s_name
-    except Exception:
-        pass
-    return name_map
-
-
-def _category_name_for_code(name_map: dict, code: str) -> str:
-    code = str(code or "").strip()
-    if len(code) >= 4 and name_map.get(code[:4]):
-        return name_map[code[:4]]
-    if len(code) >= 2 and name_map.get(code[:2]):
-        return name_map[code[:2]]
-    return ""
-
-
 class _CategoryOptionsLoader(QThread):
     """گزینه‌هایِ فیلترِ دسته‌بندی — از جدولِ M_Group/S_Group واقعیِ SQL،
     دقیقاً هم‌الگویِ فیلترِ دسته‌بندیِ تبِ «تطبیق»."""
@@ -404,8 +413,10 @@ class _ErpSimpleSkuLoader(QThread):
     def run(self):
         try:
             from sync_app.core.sql_connection_helper import open_sql_connection
+            from sync_app.core.article_price import resolve_article_price
 
             groups = [str(g).strip() for g in (self.cfg.get("SELECTED_SUB_GROUPS") or []) if str(g).strip()]
+            price_col = self.cfg.get("PRICE_LIST_COLUMN", "Sel_Price")
             conn, _, _ = open_sql_connection(self.cfg, timeout=10)
             try:
                 cursor = conn.cursor()
@@ -422,10 +433,12 @@ class _ErpSimpleSkuLoader(QThread):
                 if category_code:
                     where_bits.append("A_Code LIKE ?")
                     params.append(f"{category_code}%")
-                sql = f"SELECT TOP 200 A_Code, A_Name, A_Code_C FROM Article WHERE {' AND '.join(where_bits)}"
+                sql = (
+                    "SELECT TOP 200 A_Code, A_Name, Sel_Price, Sel_Price2, Sel_Price3, "
+                    f"Sel_Price4, Sel_Price5, A_Code_C FROM Article WHERE {' AND '.join(where_bits)}"
+                )
                 cursor.execute(sql, params)
                 rows = cursor.fetchall()
-                name_map = _fetch_group_name_map(conn)
                 cursor.close()
             finally:
                 conn.close()
@@ -433,14 +446,16 @@ class _ErpSimpleSkuLoader(QThread):
             for r in rows:
                 code = str(r[0]).strip()
                 name = str(r[1] or "").strip()
-                manual_code = str(r[2] or "").strip() if len(r) > 2 else ""
-                cat_name = _category_name_for_code(name_map, code)
-                parts = [code, name]
-                if manual_code:
-                    parts.append(f"کدِ دستی: {manual_code}")
-                if cat_name:
-                    parts.append(cat_name)
-                out.append((code, " — ".join(parts)))
+                price = resolve_article_price(r, price_col, price_start_index=2)
+                manual_code = str(r[7] or "").strip() if len(r) > 7 else ""
+                # ستونِ کد باید همون کدی باشه که واقعاً برایِ تطبیق استفاده
+                # می‌شه (code = A_Code) — نه فقط کدِ دستی؛ چون خیلی از
+                # کالاها کدِ دستی ندارن، اگه فقط کدِ دستی نشون داده بشه
+                # (یا «—» به‌جاش)، کاربر نمی‌تونه ردیف‌هایِ هم‌نام رو از هم
+                # تشخیص بده و ممکنه کالایِ اشتباه رو تطبیق بده.
+                code_field = f"{code} (دستی: {manual_code})" if manual_code else code
+                label = " | ".join(["ساده", code_field, name, f"{price:,.0f}"])
+                out.append((code, label))
             self.done.emit(out, "")
         except Exception as exc:
             self.done.emit([], str(exc))
@@ -496,14 +511,12 @@ class _ErpVariantSkuLoader(QThread):
                 )
                 cursor.execute(sql, params)
                 candidates = cursor.fetchall()
-                name_map = _fetch_group_name_map(conn)
 
                 out = []
                 size_label, color_label, dim3_label = _fetch_attribute_labels(conn)
                 for a_code, a_name, a_code_c in candidates:
                     a_code = str(a_code).strip()
                     manual_code = str(a_code_c or "").strip()
-                    cat_name = _category_name_for_code(name_map, a_code)
                     price_col = resolve_article_price_column(a_code, "", self.cfg)
                     cursor.execute(f"SELECT TOP 1 {price_col} FROM Article WHERE A_Code = ?", (a_code,))
                     price_row = cursor.fetchone()
@@ -518,10 +531,14 @@ class _ErpVariantSkuLoader(QThread):
                         attrs = "، ".join(
                             str(a.get("option") or "") for a in (v.get("attributes") or []) if a.get("option")
                         )
-                        code_part = f"{a_code} — کدِ دستی: {manual_code}" if manual_code else a_code
-                        label = f"{a_name} ({code_part}) — {attrs or v_sku}"
-                        if cat_name:
-                            label = f"{label} — {cat_name}"
+                        name_with_attrs = f"{a_name} — {attrs}" if attrs else a_name
+                        variant_price = float(v.get("regular_price") or raw_price or 0)
+                        # ستونِ کد باید همون کدی باشه که واقعاً برایِ تطبیق
+                        # استفاده می‌شه (v_sku — مالِ همین زیرواریانتِ خاص،
+                        # نه کدِ دستیِ والد که بینِ همه‌یِ زیرواریانت‌هایِ
+                        # یک کالا مشترکه و نمی‌تونه اونا رو از هم جدا کنه).
+                        code_field = f"{v_sku} (دستی: {manual_code})" if manual_code else v_sku
+                        label = " | ".join(["متغیر", code_field, name_with_attrs, f"{variant_price:,.0f}"])
                         out.append((a_code, v_sku, label))
                 cursor.close()
             finally:

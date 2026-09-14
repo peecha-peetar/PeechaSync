@@ -521,6 +521,15 @@ class ReconciliationTab(QWidget):
         )
         self.reject_auto_btn.setEnabled(False)
         review_layout.addWidget(self.reject_auto_btn)
+
+        self.reject_all_auto_btn = self._make_middle_button(
+            "🗑  لغو همه پیشنهادها",
+            self.reject_all_auto_pairs,
+            "همه پیشنهادهای بنفش را بدون ثبت حذف کن",
+            role="danger",
+        )
+        self.reject_all_auto_btn.setEnabled(False)
+        review_layout.addWidget(self.reject_all_auto_btn)
         auto_layout.addWidget(review_box)
         middle_col.addWidget(auto_group)
         middle_col.addWidget(self._make_middle_or_divider())
@@ -2043,21 +2052,26 @@ class ReconciliationTab(QWidget):
         linked_label: str = "",
     ):
         if section == SECTION_PENDING:
-            prefix = f"🔗{pair_index} "
+            prefix = f"🔗{pair_index}"
             bg = COLOR_PENDING
         elif section == SECTION_AUTO:
-            prefix = f"🤖{pair_index} "
+            prefix = f"🤖{pair_index}"
             bg = self._default_row_bg(row, section)
         elif section == SECTION_SYNCED or row.synced:
-            prefix = "✅ "
+            prefix = "✅"
             bg = COLOR_SYNCED
         else:
-            prefix = "⚠️ "
+            prefix = "⚠️"
             bg = COLOR_UNSYNCED
 
-        text = f"{prefix}{row.label}"
-        if linked_label:
-            text += f"  🔗 {linked_label}"
+        # وضعیتِ کالا (لینک‌شده/لینک‌نشده/پیشنهاد) هم مثلِ بقیهٔ اطلاعاتِ
+        # ردیف با همین علامتِ | جدا می‌شه — یک ترتیبِ یکدست از اول تا آخرِ متن.
+        # توجه: linked_label (اطلاعاتِ طرفِ مقابل) دیگه تویِ متنِ ردیف چاپ
+        # نمی‌شه — چون ستونِ ERP باید فقط اطلاعاتِ ERP و ستونِ سایت فقط
+        # اطلاعاتِ سایت رو نشون بده (نه هر دو تکراری تویِ یک ردیف). برایِ
+        # اینکه هنوز بشه فهمید این ردیف به کدوم موردِ طرفِ مقابل لینکه، فقط
+        # با نگه‌داشتنِ ماوس (tooltip) پایین نشون داده می‌شه.
+        text = f"{prefix} | {row.label}"
         item = QListWidgetItem(text)
         item.setData(Qt.UserRole, row)
         item.setData(ITEM_ROLE_SECTION, section)
@@ -2123,8 +2137,16 @@ class ReconciliationTab(QWidget):
                     self.wc_list, wc, section=SECTION_PENDING, pair_index=index
                 )
 
-        if self._auto_suggested_pairs:
-            auto_count = len(self._auto_suggested_pairs)
+        # جستجویِ زنده (search_input) باید رویِ پیشنهادها هم اثر بذاره، وگرنه
+        # با وجودِ چند ده پیشنهادِ فیلترنشده که بالایِ لیست می‌مونن، تایپ در
+        # جستجو انگار «هیچ اثری نداره» به نظر می‌رسه.
+        visible_auto_pairs = [
+            (erp, wc, reason)
+            for erp, wc, reason in self._auto_suggested_pairs
+            if self._row_passes_filter(erp) or self._row_passes_filter(wc)
+        ]
+        if visible_auto_pairs:
+            auto_count = len(visible_auto_pairs)
             self._add_section_header(
                 self.erp_list,
                 f"── 🤖 پیشنهاد سیستم — نیاز بررسی ({auto_count}) ──",
@@ -2133,7 +2155,7 @@ class ReconciliationTab(QWidget):
                 self.wc_list,
                 f"── 🤖 پیشنهاد سیستم — نیاز بررسی ({auto_count}) ──",
             )
-            for index, (erp, wc, reason) in enumerate(self._auto_suggested_pairs, start=1):
+            for index, (erp, wc, reason) in enumerate(visible_auto_pairs, start=1):
                 suggestion_tip = format_suggestion_tooltip(reason, erp, wc, self.config)
                 self._add_row_item(
                     self.erp_list,
@@ -2240,6 +2262,9 @@ class ReconciliationTab(QWidget):
             else "💾 ثبت نهایی تطبیق"
         )
         self.confirm_all_auto_btn.setEnabled(
+            auto_count > 0 and not self._loading and not self._is_attributes_view()
+        )
+        self.reject_all_auto_btn.setEnabled(
             auto_count > 0 and not self._loading and not self._is_attributes_view()
         )
 
@@ -2514,6 +2539,15 @@ class ReconciliationTab(QWidget):
         ]
         self._refresh_lists()
         self._set_status("info", "✗ پیشنهاد خودکار رد شد.")
+
+    def reject_all_auto_pairs(self):
+        if not self._auto_suggested_pairs:
+            return
+        count = len(self._auto_suggested_pairs)
+        self._auto_suggested_pairs = []
+        self._auto_highlight_keys = set()
+        self._refresh_lists()
+        self._set_status("info", f"✗ همه‌ی {count} پیشنهادِ خودکار بدون ثبت حذف شدند.")
 
     def pair_selected_rows(self):
         if not self._comparison:
@@ -2796,6 +2830,7 @@ class ReconciliationTab(QWidget):
         self.confirm_auto_btn.setEnabled(False)
         self.confirm_all_auto_btn.setEnabled(False)
         self.reject_auto_btn.setEnabled(False)
+        self.reject_all_auto_btn.setEnabled(False)
         self._set_status(
             "loading",
             f"⏳ در حال دریافت {ENTITY_LABELS.get(entity, entity)} از {self._erp_label()} و فروشگاه...",

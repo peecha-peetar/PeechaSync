@@ -121,6 +121,7 @@ class SuggestedPair:
 
 
 SUGGEST_REASON_MANUAL_CODE = "manual_code"
+SUGGEST_REASON_CODE_LOOSE = "code_loose"
 SUGGEST_REASON_MATCH_KEY = "match_key"
 SUGGEST_REASON_NAME_EXACT = "name_exact"
 SUGGEST_REASON_NAME_SIMILAR = "name_similar"
@@ -147,15 +148,22 @@ def format_suggestion_tooltip(reason: str, erp: ReconRow, wc: ReconRow, config: 
     match_code = str(erp.match_key or wc.match_key or "").strip()
     if code == SUGGEST_REASON_MANUAL_CODE:
         manual_code = str((erp.extra or {}).get("a_code_c") or "").strip()
-        code_line = f"کدِ دستیِ «{manual_code}» در {erp_label} با کدِ محصول در فروشگاه یکسان است."
+        wc_sku = str(wc.match_key or "").strip()
+        code_line = f"کدِ دستیِ «{manual_code}» در {erp_label} با SKUِ «{wc_sku}» در فروشگاه یکسان است."
         return (
             f"پیشنهاد سیستم: {code_line}\n"
             "بالاترین اولویتِ تطبیق (کدِ دستی)؛ برای ثبت «پذیرش» بزنید، اگر اشتباه است «رد پیشنهاد»."
         )
+    if code == SUGGEST_REASON_CODE_LOOSE:
+        return (
+            "پیشنهاد سیستم: کدهای این دو با نادیده‌گرفتنِ حرف/خط‌تیره/صفرِ "
+            f"اضافه (مثلِ S{match_code} یا 00{match_code}) یکسان به نظر می‌رسن.\n"
+            "این تطبیق کمتر از بقیه مطمئنه — حتماً قبل از پذیرش بررسی کنید."
+        )
     if code == SUGGEST_REASON_MATCH_KEY:
-        code_line = f"کد محصول «{match_code}» در {erp_label} و فروشگاه یکسان است."
+        code_line = f"SKUِ «{match_code}» در {erp_label} و فروشگاه یکسان است."
         if not match_code:
-            code_line = f"کد محصول در {erp_label} و فروشگاه یکسان است."
+            code_line = f"SKU در {erp_label} و فروشگاه یکسان است."
         return (
             f"پیشنهاد سیستم: {code_line}\n"
             "برای ثبت «پذیرش» بزنید؛ اگر اشتباه است «رد پیشنهاد»."
@@ -574,11 +582,53 @@ def _fetch_wc_categories(
     return rows
 
 
+def _fetch_category_name_map(conn) -> dict[str, str]:
+    """{کدِ گروه (۲ رقمی) یا زیرگروه (۴ رقمی): نامِ دسته‌بندی} — از رویِ
+    جدولِ M_Group/S_Group واقعیِ SQL."""
+    name_map: dict[str, str] = {}
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT M_Groupcode, M_GroupName FROM M_Group ORDER BY M_Groupcode")
+        main_names: dict[str, str] = {}
+        for m_code, m_name in cursor.fetchall():
+            m_code = str(m_code).strip()
+            m_name = str(m_name or "").strip()
+            main_names[m_code] = m_name
+            if m_name:
+                name_map[m_code] = m_name
+        cursor.execute(
+            "SELECT M_Groupcode, S_Groupcode, S_GroupName FROM S_Group ORDER BY M_Groupcode, S_Groupcode"
+        )
+        for m_code, s_code, s_name in cursor.fetchall():
+            m_code = str(m_code).strip()
+            full_code = f"{m_code}{str(s_code).strip()}"
+            s_name = str(s_name or "").strip()
+            m_name = main_names.get(m_code, "")
+            if s_name:
+                name_map[full_code] = f"{m_name} › {s_name}" if m_name else s_name
+    except Exception:
+        pass
+    return name_map
+
+
+def _category_name_for_code(name_map: dict, code: str) -> str:
+    code = str(code or "").strip()
+    if len(code) >= 4 and name_map.get(code[:4]):
+        return name_map[code[:4]]
+    if len(code) >= 2 and name_map.get(code[:2]):
+        return name_map[code[:2]]
+    return ""
+
+
 def _fetch_erp_products(config: dict) -> list[ReconRow]:
     """همه محصولات ERP — بدون فیلتر گروه انتخاب‌شده (برای نگاشت فروشگاه موجود)."""
+    from sync_app.core.variation_query import load_variable_a_codes
+
     price_col = config.get("PRICE_LIST_COLUMN", "Sel_Price")
     conn, _, _ = open_sql_connection(config, timeout=8)
     cursor = conn.cursor()
+    variable_codes = load_variable_a_codes(cursor)
+    category_names = _fetch_category_name_map(conn)
     cursor.execute(
         """
         SELECT A_Code, A_Name, Sel_Price, Sel_Price2, Sel_Price3, Sel_Price4, Sel_Price5, Exist, A_Code_C
@@ -593,18 +643,18 @@ def _fetch_erp_products(config: dict) -> list[ReconRow]:
         name = str(row[1]).strip()
         price = resolve_article_price(row, price_col, price_start_index=2)
         sale_price = resolve_sale_article_price(row, config, price_start_index=2)
-        stock = int(row[7] or 0)
         manual_code = str(row[8] or "").strip() if len(row) > 8 else ""
+        ptype_fa = "متغیر" if sku in variable_codes else "ساده"
+        cat_name = _category_name_for_code(category_names, sku)
 
-        # ترتیب راست‌به‌چپ: نام - کد اتوماتیک - کد دستی (برچسب‌دار) - قیمت عادی - قیمت ویژه - موجودی
-        parts = [name, sku]
-        if manual_code:
-            parts.append(f"کدِ دستی: {manual_code}")
-        parts.append(f"{price:,.0f}")
-        if sale_price > 0:
-            parts.append(f"{sale_price:,.0f}")
-        parts.append(str(stock))
-        label = " - ".join(parts)
+        # ترتیبِ ثابت و کوتاه (وضعیتِ لینک جدا، بیرونِ این متن اضافه می‌شه):
+        # نوع | کدِ دستی | نام | قیمتِ اصلی | زیرگروه — بدونِ کدِ اتوماتیک/
+        # قیمتِ ویژه/موجودی، چون طولانی و تکراری بودن (کدِ اتوماتیک
+        # همون‌جوری تویِ ستونِ راستِ لیست و تویِ خودِ عملیاتِ تطبیق در دسترسه).
+        parts = [ptype_fa, manual_code or "—", name, f"{price:,.0f}"]
+        if cat_name:
+            parts.append(cat_name)
+        label = " | ".join(parts)
 
         rows.append(
             ReconRow(
@@ -614,7 +664,14 @@ def _fetch_erp_products(config: dict) -> list[ReconRow]:
                 synced=False,
                 side="erp",
                 match_key=sku.lower(),
-                extra={"sku": sku, "name": name, "a_code_c": manual_code, "sale_price": sale_price},
+                extra={
+                    "sku": sku,
+                    "name": name,
+                    "a_code_c": manual_code,
+                    "sale_price": sale_price,
+                    "type": "variable" if sku in variable_codes else "simple",
+                    "category_name": cat_name,
+                },
             )
         )
     conn.close()
@@ -662,10 +719,15 @@ def _fetch_ps_products(
         # پرستاشاپ زباله‌دان نداره — هر محصولی که برگرده یعنی هنوز روی
         # فروشگاهه (فیلتر _ACTIVE_WC_STATUSES معادلی نداره).
         ptype = "variable" if grouped.get(wc_id) else "simple"
-        label = f"{name} — #{wc_id}"
-        if sku:
-            label += f" — کد {sku}"
-        label += f" — {ptype}"
+        ptype_fa = "متغیر" if ptype == "variable" else "ساده"
+        try:
+            price_num = float(item.get("regular_price") or 0)
+        except (TypeError, ValueError):
+            price_num = 0.0
+        # ترتیبِ ثابت و کوتاه (وضعیتِ لینک جدا، بیرونِ این متن اضافه می‌شه):
+        # نوع | SKU | نام | قیمتِ اصلی. شناسهٔ خودکارِ عددیِ سایت (#wc_id)
+        # نمایش داده نمی‌شه چون تطبیق و جستجو بر اساسِ SKU انجام می‌شه.
+        label = " | ".join([ptype_fa, sku or "—", name, f"{price_num:,.0f}"])
         categories = [
             {"id": int(c["id"]), "name": cat_name_by_id.get(int(c["id"]), "")}
             for c in (item.get("categories") or [])
@@ -702,7 +764,7 @@ def _fetch_wc_products(
         "products",
         params={
             "status": "any",
-            "_fields": "id,sku,name,status,type,categories",
+            "_fields": "id,sku,name,status,type,price,categories",
         },
         cancel_check=cancel_check,
     )
@@ -719,10 +781,15 @@ def _fetch_wc_products(
         sku = str(item.get("sku") or "").strip()
         name = str(item.get("name") or "").strip()
         ptype = str(item.get("type") or "simple").strip()
-        label = f"{name} — #{wc_id}"
-        if sku:
-            label += f" — کد {sku}"
-        label += f" — {ptype}"
+        ptype_fa = "متغیر" if ptype == "variable" else "ساده"
+        try:
+            price_num = float(item.get("price") or 0)
+        except (TypeError, ValueError):
+            price_num = 0.0
+        # ترتیبِ ثابت و کوتاه (وضعیتِ لینک جدا، بیرونِ این متن اضافه می‌شه):
+        # نوع | SKU | نام | قیمتِ اصلی. شناسهٔ خودکارِ عددیِ سایت (#wc_id)
+        # نمایش داده نمی‌شه چون تطبیق و جستجو بر اساسِ SKU انجام می‌شه.
+        label = " | ".join([ptype_fa, sku or "—", name, f"{price_num:,.0f}"])
         categories = [
             {"id": int(c["id"]), "name": str(c.get("name") or "").strip()}
             for c in (item.get("categories") or [])
@@ -1749,6 +1816,29 @@ def _pair_by_match_key(
     return pairs
 
 
+def _normalize_code_for_match(value: str) -> str:
+    """کدهایی که کاملاً عددی‌اند رو با حذفِ صفرهای ابتداییِ رشته یکسان‌سازی
+    می‌کنه — مثلاً کدِ دستیِ «000020012» تویِ ERP و SKUِ «20012» تویِ
+    فروشگاه باید یک کد در نظر گرفته بشن (رایج وقتی یکی از دو سیستم
+    صفرهای ابتداییِ کد رو نگه نمی‌داره)."""
+    text = str(value or "").strip().casefold()
+    if text and text.isdigit():
+        return text.lstrip("0") or "0"
+    return text
+
+
+def _normalize_code_loose(value: str) -> str:
+    """نرمال‌سازیِ سخت‌گیرانه‌ترِ کد — هر کاراکترِ غیرعددی (حرف، خط‌تیره،
+    فاصله، زیرخط، ...) حذف می‌شه و بعد صفرهایِ ابتداییِ عددِ باقی‌مونده هم
+    حذف می‌شن؛ برایِ وقتی سایت جلویِ کدِ ERP یک حرف/خط‌تیرهٔ اضافه گذاشته
+    (مثلِ «S3001» یا «-3001») یا برعکس صفر اضافه کرده («003001»)."""
+    text = str(value or "").strip().casefold()
+    digits = "".join(ch for ch in text if ch.isdigit())
+    if digits:
+        return digits.lstrip("0") or "0"
+    return text
+
+
 def _pair_by_field(
     erp_rows: list[ReconRow],
     wc_rows: list[ReconRow],
@@ -1803,15 +1893,17 @@ def suggest_auto_pairs(
     used_erp: set[str] = set()
     used_wc: set[str] = set()
 
-    # اولویتِ اول: کدِ دستیِ ERP (A_Code_C) در برابرِ کدِ محصولِ فروشگاه —
-    # چون فروشنده‌ها معمولاً همین کدِ دستی رو به‌عنوانِ SKU رویِ سایت هم
+    # اولویتِ اول: کدِ دستیِ ERP (A_Code_C) در برابرِ SKUِ محصولِ فروشگاه
+    # (نه شناسهٔ خودکارِ عددیِ ووکامرس/پرستاشاپ — wc_key_fn پایین از
+    # match_key که بر اساسِ فیلدِ sku ساخته شده استفاده می‌کنه) — چون
+    # فروشنده‌ها معمولاً همین کدِ دستی رو به‌عنوانِ SKU رویِ سایت هم
     # می‌ذارن، این دقیق‌ترین و مطمئن‌ترین تطبیقه؛ قبل از کدِ اتوماتیک بررسی می‌شه.
     if entity == ENTITY_PRODUCTS:
         for erp, wc in _pair_by_field(
             erp_pool,
             wc_pool,
-            erp_key_fn=lambda r: str((r.extra or {}).get("a_code_c") or "").strip().casefold(),
-            wc_key_fn=lambda r: str(r.match_key or "").strip().casefold(),
+            erp_key_fn=lambda r: _normalize_code_for_match((r.extra or {}).get("a_code_c") or ""),
+            wc_key_fn=lambda r: _normalize_code_for_match(r.match_key or ""),
         ):
             if erp.key in used_erp or wc.key in used_wc:
                 continue
@@ -1820,7 +1912,7 @@ def suggest_auto_pairs(
             used_wc.add(wc.key)
 
     # اولویتِ دوم: کدِ اتوماتیکِ ERP (A_Code — «کدِ کالایِ قبلی») در برابرِ
-    # کدِ محصولِ فروشگاه.
+    # همون SKUِ محصولِ فروشگاه.
     for erp, wc in _pair_by_match_key(
         erp_pool,
         wc_pool,
@@ -1892,6 +1984,36 @@ def suggest_auto_pairs(
         suggestions.append(SuggestedPair(erp, wc, SUGGEST_REASON_NAME_SIMILAR))
         used_erp.add(erp.key)
         used_wc.add(wc.key)
+
+    # اولویتِ آخر (fallback): اگه با کدِ دقیق (دستی/اتوماتیک) و نام هیچی
+    # پیدا نشد، دوباره از کدِ دستی و بعد کدِ اتوماتیک شروع می‌کنیم — این‌بار
+    # با نرمال‌سازیِ سخت‌گیرانه‌تر (حذفِ هر حرف/خط‌تیره/فاصله + صفرهایِ
+    # ابتدایی) تا کدهایی مثلِ «S3001»، «003001» یا «-3001» هم معادلِ «3001»
+    # تشخیص داده بشن. چون این نوع تطبیق کمتر مطمئنه، اولویتش از همه پایین‌تره.
+    if entity == ENTITY_PRODUCTS:
+        for erp, wc in _pair_by_field(
+            erp_pool,
+            wc_pool,
+            erp_key_fn=lambda r: _normalize_code_loose((r.extra or {}).get("a_code_c") or ""),
+            wc_key_fn=lambda r: _normalize_code_loose(r.match_key or ""),
+        ):
+            if erp.key in used_erp or wc.key in used_wc:
+                continue
+            suggestions.append(SuggestedPair(erp, wc, SUGGEST_REASON_CODE_LOOSE))
+            used_erp.add(erp.key)
+            used_wc.add(wc.key)
+
+        for erp, wc in _pair_by_field(
+            erp_pool,
+            wc_pool,
+            erp_key_fn=lambda r: _normalize_code_loose(r.erp_key or ""),
+            wc_key_fn=lambda r: _normalize_code_loose(r.match_key or ""),
+        ):
+            if erp.key in used_erp or wc.key in used_wc:
+                continue
+            suggestions.append(SuggestedPair(erp, wc, SUGGEST_REASON_CODE_LOOSE))
+            used_erp.add(erp.key)
+            used_wc.add(wc.key)
 
     return suggestions
 
