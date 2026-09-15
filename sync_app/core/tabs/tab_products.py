@@ -868,6 +868,17 @@ class ProductTab(QWidget):
         # با کاتالوگِ بزرگ باعثِ کندیِ محسوسِ بارگذاریِ لیست می‌شد.
         from sync_app.core.product_category_override import load_category_overrides
         category_overrides = load_category_overrides()
+        # کالاهایی که فقط از طریقِ «تطبیقِ ساختاری» لینک شدن (نه تطبیقِ
+        # معمولی) رو مستقیماً از همین دو فایل چک می‌کنیم — نه صرفاً با
+        # تکیه به این‌که موقعِ ثبتِ تطبیقِ ساختاری، product_woo_map هم
+        # نوشته شده باشه؛ این‌جوری حتی اگه به هر دلیلی (مثلاً تطبیقی که
+        # قبل از اضافه‌شدنِ اون write-through ثبت شده) ناهماهنگ باشن،
+        # نمایشِ تبِ محصولات همیشه درسته.
+        from sync_app.core.structure_mismatch_override import (
+            list_site_variation_targets,
+            list_force_simple_sources,
+        )
+        structural_skus = set(list_site_variation_targets().keys()) | set(list_force_simple_sources().keys())
         erp_label = self._erp_label()
         platform_label = self._platform_label()
 
@@ -889,8 +900,14 @@ class ProductTab(QWidget):
                 else:
                     image_status = "ندارد"
 
-                is_linked = sku in product_map
-                link_status = "✅ لینک" if is_linked else "⭕ لینک‌نشده"
+                is_structural_link = sku in structural_skus
+                is_linked = sku in product_map or is_structural_link
+                if is_structural_link:
+                    link_status = "🧩 لینکِ ساختاری"
+                elif is_linked:
+                    link_status = "✅ لینک"
+                else:
+                    link_status = "⭕ لینک‌نشده"
                 is_variant = bool(row.get("is_variant"))
                 type_badge = "🎨 متغیر" if is_variant else "⬜ ساده"
 

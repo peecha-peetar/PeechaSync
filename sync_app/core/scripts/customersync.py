@@ -83,39 +83,6 @@ def get_db_connection():
         return None, None
 
 
-# کد جدید
-def get_next_customer_code():
-    conn, cursor = get_db_connection()
-    if not conn:
-        return "00001"
-    try:
-        cursor.execute("SELECT MAX(CAST(C_Code_C AS INT)) FROM Customer")
-        max_code = cursor.fetchone()[0]
-        return str((max_code or 0) + 1).zfill(5)
-    except:
-        return "00001"
-    finally:
-        conn.close()
-
-
-def get_last_moien_code():
-    conn, cursor = get_db_connection()
-    if not conn:
-        return "0001"
-    try:
-        cursor.execute("""
-            SELECT MAX(CAST(Moien_Code AS INT))
-            FROM SARFASL
-            WHERE Col_Code = '103'
-        """)
-        max_moien = cursor.fetchone()[0]
-        return str((max_moien or 0) + 1).zfill(4)
-    except:
-        return "0001"
-    finally:
-        conn.close()
-
-
 # مشتریان Woo (با سفارش)
 def get_customer_ids_from_orders():
     """ customer idهای با سفارش """
@@ -393,68 +360,34 @@ def customer_exists(email):
 
 
 # insert
-def sync_customer(customer_data, new_moien):
+def sync_customer(customer_data, config=None):
+    """ثبتِ مشتریِ جدید — منطقِ واقعیِ ساخت (هر سه روشِ دژاوو، از تنظیماتِ
+    CUSTOMER_CREATION_METHOD + Parent-linking) در customer_creation.py
+    است؛ این‌جا فقط شکلِ آبجکتِ مشتریِ ووکامرس/پرستاشاپ (که فیلدهایِ
+    نام/ایمیل بالاسری هستن و آدرس/تلفن زیرِ billing) رو به همون قالبِ
+    مسطحی که create_customer_record می‌خواد تبدیل می‌کنه."""
+    from sync_app.core.customer_creation import create_customer_record
+
     conn, cursor = get_db_connection()
     if not conn:
         return
 
+    email_value = customer_data.get("email", "")
+    billing = dict(customer_data.get("billing") or {})
+    billing["first_name"] = customer_data.get("first_name", "") or billing.get("first_name", "")
+    billing["last_name"] = customer_data.get("last_name", "") or billing.get("last_name", "")
+    billing["email"] = email_value or billing.get("email", "")
+    billing["username"] = customer_data.get("username", "")
+
     try:
-        customer_code = get_next_customer_code()
-
-        first = customer_data.get("first_name", "")
-        last = customer_data.get("last_name", "")
-        customer_name = (first + " " + last).strip() or customer_data.get("username", "مشتری ناشناس")
-
-        billing = customer_data.get("billing", {})
-        phone_parts = billing.get("phone", "").split("/")
-        tel = phone_parts[0].strip() if phone_parts else ""
-        mobile = phone_parts[1].strip() if len(phone_parts) > 1 else ""
-
-        email_value = customer_data.get("email", "")
-        national_code = billing.get("national_code", "0000000000")
-
-        sarfasl_code = f"103{new_moien}"
-
-        # insert SARFASL
-        cursor.execute("""
-            INSERT INTO SARFASL
-            (SarFasl_Name, Common, Col_Code, Moien_Code, Tafzili_Code, SarFasl_Code, [Group], Mahiat, Can_Delete, Type)
-            VALUES (?, ?, '103', ?, '', ?, 1, 1, 0, 5)
-        """, (customer_name, customer_code, new_moien, sarfasl_code))
-
-        # Customersarfasl
-        cursor.execute("""
-            INSERT INTO Customersarfasl (CustCode, SarBed, SarBes)
-            VALUES (?, ?, '401')
-        """, (customer_code, sarfasl_code))
-
-        # Customer
-        cursor.execute("""
-            INSERT INTO Customer (
-                C_Code, C_Name, C_Code_C, C_Address, C_Tel, C_Mobile,
-                Email_Address, Economic_Code, Col_Code_Bed, Moien_Code_Bed,
-                Kharid, Forosh, Cust_City, Cust_Mantagheh, Cust_Ostan,
-                Zip_Code, National_Code
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            customer_code, customer_name, customer_code,
-            f"{billing.get('state','')},{billing.get('city','')},{billing.get('address_1','')},",
-            tel, mobile, email_value,
-            billing.get("company", "123456789"),
-            "103", new_moien,
-            1, 1,
-            billing.get("city", ""), "منطقه",
-            billing.get("state", ""), billing.get("postcode", "0000000000"),
-            national_code
-        ))
-
-        conn.commit()
-        log.info(f"🆕 مشتری جدید ثبت شد: {customer_name}")
-
+        customer_code = create_customer_record(cursor, billing, config)
+        if customer_code:
+            conn.commit()
+        else:
+            conn.rollback()
     except Exception as e:
+        conn.rollback()
         log.error(f"❌ خطا در درج مشتری {email_value}: {e}")
-
     finally:
         conn.close()
 
@@ -539,12 +472,6 @@ def main():
         log.warning("⚠️ هیچ مشتری‌ای یافت نشد.")
         return
 
-    try:
-        last_moien = int(get_last_moien_code()) - 1
-    except:
-        log.error("❌ خطا در تعیین کد معین.")
-        return
-
     for customer in customers:
         email = customer.get("email", "")
         if not email:
@@ -557,9 +484,7 @@ def main():
             customer_code, moien_code = exists
             update_customer(customer, customer_code, moien_code)
         else:
-            last_moien += 1
-            new_moien = str(last_moien).zfill(4)
-            sync_customer(customer, new_moien)
+            sync_customer(customer, config)
 
     log.info("🎉 همگام‌سازی مشتریان با موفقیت پایان یافت.")
 

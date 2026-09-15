@@ -2088,9 +2088,57 @@ class SettingsTab(QWidget):
 
         customer_form.addRow(QLabel("حالت مشتری پیش‌فرض:"), self.default_customer_mode_combo)
         customer_form.addRow(self.default_customer_code_label, self.default_customer_code_input)
+
+        # ── روشِ ایجادِ مشتریِ جدید در ERP (سه روشِ واقعیِ دژاوو) ──────
+        self.customer_creation_method_combo = QComboBox()
+        self.customer_creation_method_combo.addItem("خودکار (کدِ کلِ ثابتِ ۱۰۳، بدونِ انتخاب)", "auto")
+        self.customer_creation_method_combo.addItem("انتخابِ کدِ کل", "kol")
+        self.customer_creation_method_combo.addItem("انتخابِ کدِ کل و معین", "tafzili")
+        self.customer_creation_method_combo.setToolTip(
+            "دژاوو سه روشِ متفاوت برایِ تعریفِ یک مشتریِ جدید داره — این‌جا "
+            "مشخص می‌کنید موقعِ ثبتِ خودکارِ مشتریانِ سایت کدومش استفاده بشه."
+        )
+        saved_creation_method = self.config.get("CUSTOMER_CREATION_METHOD", "auto")
+        creation_method_idx = self.customer_creation_method_combo.findData(saved_creation_method)
+        if creation_method_idx >= 0:
+            self.customer_creation_method_combo.setCurrentIndex(creation_method_idx)
+        self.customer_creation_method_combo.currentIndexChanged.connect(
+            self._on_customer_creation_method_changed
+        )
+        customer_form.addRow(QLabel("روشِ ایجادِ مشتریِ جدید:"), self.customer_creation_method_combo)
+
+        self.customer_kol_combo = QComboBox()
+        self.customer_kol_combo.setMinimumWidth(220)
+        self.customer_kol_combo.setToolTip("کدِ کلِ (سرفصلِ سطحِ بالا) زیرمجموعهٔ بدهکاران که مشتریِ جدید زیرش ثبت بشه.")
+        saved_kol_code = str(self.config.get("CUSTOMER_KOL_CODE") or "").strip()
+        if saved_kol_code:
+            self.customer_kol_combo.addItem(f"{saved_kol_code} (ذخیره‌شده)", saved_kol_code)
+        self.customer_kol_combo.currentIndexChanged.connect(self._on_customer_kol_changed)
+        self.customer_kol_refresh_btn = QPushButton("🔄")
+        self.customer_kol_refresh_btn.setFixedWidth(36)
+        self.customer_kol_refresh_btn.setToolTip("بارگذاریِ کدهایِ کلِ زیرمجموعهٔ بدهکاران از دیتابیس")
+        self.customer_kol_refresh_btn.clicked.connect(self._load_customer_kol_options)
+        kol_row = QHBoxLayout()
+        kol_row.addWidget(self.customer_kol_combo, 1)
+        kol_row.addWidget(self.customer_kol_refresh_btn)
+        kol_row_widget = QWidget()
+        kol_row_widget.setLayout(kol_row)
+        self.customer_kol_label = QLabel("کدِ کل:")
+        customer_form.addRow(self.customer_kol_label, kol_row_widget)
+
+        self.customer_moien_combo = QComboBox()
+        self.customer_moien_combo.setMinimumWidth(220)
+        self.customer_moien_combo.setToolTip("معینِ (سرفصلِ سطحِ وسط) موجود زیرِ کدِ کلِ انتخاب‌شده — مشتریِ جدید یک ردیفِ تفضیلیِ تازه زیرش می‌سازه.")
+        saved_moien_code = str(self.config.get("CUSTOMER_MOIEN_CODE") or "").strip()
+        if saved_moien_code:
+            self.customer_moien_combo.addItem(f"{saved_moien_code} (ذخیره‌شده)", saved_moien_code)
+        self.customer_moien_label = QLabel("معین:")
+        customer_form.addRow(self.customer_moien_label, self.customer_moien_combo)
+
         customer_group.setLayout(customer_form)
         self.customer_group = customer_group
         self._on_default_customer_mode_changed()  # نمایش/مخفی کردن بر اساس مقدار اولیه
+        self._on_customer_creation_method_changed()  # نمایش/مخفی کردن کل/معین بر اساس مقدار اولیه
 
         # ── گروه فیلدهای قابل‌انتخاب همگام‌سازی (محصول/دسته/ویژگی/متغیر) ──
         fields_group = QGroupBox("فیلدهای همگام‌سازی (SQL → فروشگاه)")
@@ -2278,6 +2326,7 @@ class SettingsTab(QWidget):
             self.font_size_combo, self.erp_provider_combo, self.currency_combo,
             self.default_customer_mode_combo, self.login_screen_enabled_checkbox,
             self.auto_update_enabled_checkbox,
+            self.customer_creation_method_combo, self.customer_kol_combo, self.customer_moien_combo,
             self.ps_url_input, self.ps_api_key_input, self.ps_site_combo, self.ps_site_name_input,
             self.telegram_bot_token_input, self.telegram_chat_id_input, self.telegram_proxy_url_input,
             self.bale_bot_token_input, self.bale_chat_id_input,
@@ -2307,6 +2356,7 @@ class SettingsTab(QWidget):
             self.driver_input, self.price_combo, self.sale_price_combo,
             self.theme_combo, self.font_size_combo, self.erp_provider_combo,
             self.currency_combo, self.default_customer_mode_combo,
+            self.customer_creation_method_combo, self.customer_kol_combo, self.customer_moien_combo,
         ]
         for w in _combo_inputs:
             w.currentIndexChanged.connect(self._on_settings_field_changed)
@@ -4300,6 +4350,104 @@ class SettingsTab(QWidget):
         self.default_customer_code_input.setVisible(is_fixed)
         self.default_customer_code_label.setVisible(is_fixed)
 
+    def _on_customer_creation_method_changed(self):
+        """نمایش/مخفی‌کردنِ کمبویِ کل/معین بر اساسِ روشِ انتخاب‌شده — و
+        بارگذاریِ خودکارِ کدهایِ کل وقتی برایِ اولین بار به یکی از دو
+        روشِ دستی سوییچ می‌شه و کمبو هنوز خالیه."""
+        method = self.customer_creation_method_combo.currentData()
+        needs_kol = method in ("kol", "tafzili")
+        needs_moien = method == "tafzili"
+        self.customer_kol_label.setVisible(needs_kol)
+        self.customer_kol_combo.setVisible(needs_kol)
+        self.customer_kol_refresh_btn.setVisible(needs_kol)
+        self.customer_moien_label.setVisible(needs_moien)
+        self.customer_moien_combo.setVisible(needs_moien)
+        if needs_kol and self.customer_kol_combo.count() <= 1:
+            self._load_customer_kol_options(silent=True)
+
+    def _load_customer_kol_options(self, *, silent: bool = False):
+        from sync_app.core.threading_helper import run_in_thread
+
+        cfg = self.config or {}
+        current_code = self.customer_kol_combo.currentData()
+        self.customer_kol_refresh_btn.setEnabled(False)
+        self.customer_kol_refresh_btn.setText("⏳")
+
+        def _worker():
+            from sync_app.core.sql_connection_helper import open_sql_connection
+            from sync_app.core.customer_creation import list_debtor_kol_codes
+
+            conn, _, _ = open_sql_connection(cfg, timeout=8)
+            try:
+                cursor = conn.cursor()
+                return list_debtor_kol_codes(cursor)
+            finally:
+                conn.close()
+
+        def _done(options):
+            self.customer_kol_refresh_btn.setEnabled(True)
+            self.customer_kol_refresh_btn.setText("🔄")
+            self.customer_kol_combo.blockSignals(True)
+            self.customer_kol_combo.clear()
+            for code, name in options:
+                self.customer_kol_combo.addItem(f"{code} — {name}" if name else code, code)
+            idx = self.customer_kol_combo.findData(current_code)
+            if idx < 0 and current_code:
+                self.customer_kol_combo.addItem(f"{current_code} (ذخیره‌شده)", current_code)
+                idx = self.customer_kol_combo.findData(current_code)
+            if idx >= 0:
+                self.customer_kol_combo.setCurrentIndex(idx)
+            self.customer_kol_combo.blockSignals(False)
+            self._on_customer_kol_changed()
+
+        def _fail(msg):
+            self.customer_kol_refresh_btn.setEnabled(True)
+            self.customer_kol_refresh_btn.setText("🔄")
+            if not silent:
+                QMessageBox.critical(self, "خطا در بارگذاری", f"دریافتِ کدهایِ کل از دیتابیس ناموفق بود:\n{msg}")
+
+        run_in_thread(_worker, on_complete=_done, on_error=_fail)
+
+    def _on_customer_kol_changed(self):
+        """معینِ سطحِ بالا (کاسکید) — فقط وقتی روشِ «انتخابِ کل و معین» فعاله."""
+        if self.customer_creation_method_combo.currentData() != "tafzili":
+            return
+        col_code = self.customer_kol_combo.currentData()
+        if col_code:
+            self._load_customer_moien_options(col_code)
+
+    def _load_customer_moien_options(self, col_code: str):
+        from sync_app.core.threading_helper import run_in_thread
+
+        cfg = self.config or {}
+        current_moien = self.customer_moien_combo.currentData()
+
+        def _worker():
+            from sync_app.core.sql_connection_helper import open_sql_connection
+            from sync_app.core.customer_creation import list_moien_codes_for_kol
+
+            conn, _, _ = open_sql_connection(cfg, timeout=8)
+            try:
+                cursor = conn.cursor()
+                return list_moien_codes_for_kol(cursor, col_code)
+            finally:
+                conn.close()
+
+        def _done(options):
+            self.customer_moien_combo.blockSignals(True)
+            self.customer_moien_combo.clear()
+            for code, name in options:
+                self.customer_moien_combo.addItem(f"{code} — {name}" if name else code, code)
+            idx = self.customer_moien_combo.findData(current_moien)
+            if idx >= 0:
+                self.customer_moien_combo.setCurrentIndex(idx)
+            self.customer_moien_combo.blockSignals(False)
+
+        def _fail(_msg):
+            pass  # اگه نشد، کمبوی معین فقط خالی می‌مونه — با دکمه‌ی رفرشِ کل می‌شه دوباره امتحان کرد
+
+        run_in_thread(_worker, on_complete=_done, on_error=_fail)
+
     def _project_root_dir(self):
         return os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
@@ -5196,6 +5344,9 @@ class SettingsTab(QWidget):
                 "LICENSE_API_KEY": license_api_key,
                 "DEFAULT_CUSTOMER_MODE": self.default_customer_mode_combo.currentData() or "website",
                 "DEFAULT_CUSTOMER_CODE": (self.default_customer_code_input.text() or "").strip(),
+                "CUSTOMER_CREATION_METHOD": self.customer_creation_method_combo.currentData() or "auto",
+                "CUSTOMER_KOL_CODE": (self.customer_kol_combo.currentData() or "").strip(),
+                "CUSTOMER_MOIEN_CODE": (self.customer_moien_combo.currentData() or "").strip(),
                 "STORE_PLATFORM": self.store_platform_combo.currentData() or "woocommerce",
                 "PS_URL": self.ps_url_input.text().strip(),
                 "PS_API_KEY": self.ps_api_key_input.text().strip(),
