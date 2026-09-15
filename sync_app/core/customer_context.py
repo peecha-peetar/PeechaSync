@@ -14,19 +14,13 @@ def get_fixed_customer_code(config):
 
 
 def _extract_mobile(billing: dict) -> str:
-    """موبایلِ مشتری از فیلدِ phone بیرون می‌کشه — قراردادِ مشترکِ کلِ
-    برنامه (هم ووکامرس هم پرستاشاپ، دقیقاً هم‌شکلِ sync_customer در
-    customersync.py و _address_to_billing در ps_customer_helper.py):
-    اگه phone به شکلِ «تلفن/موبایل» باشه، بخشِ دومی موبایله؛ اگه فقط
-    یک شماره داده شده (بدونِ «/»)، همون رو موبایل حساب می‌کنیم — چون
-    امروز اغلب چک‌اوت‌ها فقط یک شماره (که معمولاً موبایله) می‌گیرن."""
-    raw = str(billing.get("phone") or "").strip()
-    if not raw:
-        return ""
-    parts = [p.strip() for p in raw.split("/") if p.strip()]
-    if not parts:
-        return ""
-    return parts[1] if len(parts) > 1 else parts[0]
+    """موبایلِ مشتری از فیلدِ phone — قراردادِ مشترکِ کلِ برنامه (هم
+    ووکامرس هم پرستاشاپ). پیاده‌سازیِ واقعی حالا در customer_creation.py
+    است (چون آنجا هم برایِ ساختِ مشتری لازمه)؛ این‌جا فقط برایِ سازگاریِ
+    کدهایِ قدیمی‌تر که این نام را صدا می‌زنند نگه داشته شده."""
+    from sync_app.core.customer_creation import extract_mobile
+
+    return extract_mobile(billing)
 
 
 def _find_customer_by_contact(cursor, email: str, mobile: str) -> str | None:
@@ -54,87 +48,14 @@ def _find_customer_by_contact(cursor, email: str, mobile: str) -> str | None:
     return None
 
 
-def _next_customer_code(cursor) -> str | None:
-    try:
-        cursor.execute("SELECT MAX(CAST(C_Code_C AS INT)) FROM Customer")
-        max_code = cursor.fetchone()[0]
-        return str((max_code or 0) + 1).zfill(5)
-    except Exception:
-        return None
+def _create_customer_from_billing(cursor, billing: dict, config: dict | None = None) -> str | None:
+    """ثبتِ مشتریِ جدید — رویِ همون کِرسِر/تراکنشِ مشترکِ درجِ سفارش (نه
+    یک اتصالِ جدا) تا اگه ثبتِ سفارش شکست خورد، مشتریِ نصفه‌ساخته هم
+    رول‌بک بشه. منطقِ واقعیِ ساخت (هر سه روشِ دژاوو + Parent-linking) در
+    customer_creation.py است — این‌جا فقط delegate می‌کنه."""
+    from sync_app.core.customer_creation import create_customer_record
 
-
-def _next_moien_code(cursor) -> str | None:
-    try:
-        cursor.execute("SELECT MAX(CAST(Moien_Code AS INT)) FROM SARFASL WHERE Col_Code = '103'")
-        max_moien = cursor.fetchone()[0]
-        return str((max_moien or 0) + 1).zfill(4)
-    except Exception:
-        return None
-
-
-def _create_customer_from_billing(cursor, billing: dict) -> str | None:
-    """ثبتِ مشتریِ جدید — دقیقاً هم‌ساختارِ sync_customer در
-    customersync.py (SARFASL + Customersarfasl + Customer)، فقط رویِ
-    همون کِرسِر/تراکنشِ مشترکِ درجِ سفارش (نه یک اتصالِ جدا) تا اگه
-    ثبتِ سفارش شکست خورد، مشتریِ نصفه‌ساخته هم رول‌بک بشه."""
-    from sync_app.core.sync_utils import log
-
-    customer_code = _next_customer_code(cursor)
-    new_moien = _next_moien_code(cursor)
-    if not customer_code or not new_moien:
-        log.warning("⚠️ کدِ مشتریِ جدید یا کدِ معین قابلِ‌محاسبه نبود — ثبتِ مشتریِ جدید لغو شد.")
-        return None
-
-    first = str(billing.get("first_name") or "").strip()
-    last = str(billing.get("last_name") or "").strip()
-    customer_name = f"{first} {last}".strip() or "مشتری ناشناس"
-
-    email = str(billing.get("email") or "").strip()
-    mobile = _extract_mobile(billing)
-    tel = str(billing.get("phone") or "").split("/")[0].strip()
-    sarfasl_code = f"103{new_moien}"
-
-    try:
-        cursor.execute(
-            """
-            INSERT INTO SARFASL
-            (SarFasl_Name, Common, Col_Code, Moien_Code, Tafzili_Code, SarFasl_Code, [Group], Mahiat, Can_Delete, Type)
-            VALUES (?, ?, '103', ?, '', ?, 1, 1, 0, 5)
-            """,
-            (customer_name, customer_code, new_moien, sarfasl_code),
-        )
-        cursor.execute(
-            "INSERT INTO Customersarfasl (CustCode, SarBed, SarBes) VALUES (?, ?, '401')",
-            (customer_code, sarfasl_code),
-        )
-        cursor.execute(
-            """
-            INSERT INTO Customer (
-                C_Code, C_Name, C_Code_C, C_Address, C_Tel, C_Mobile,
-                Email_Address, Economic_Code, Col_Code_Bed, Moien_Code_Bed,
-                Kharid, Forosh, Cust_City, Cust_Mantagheh, Cust_Ostan,
-                Zip_Code, National_Code
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                customer_code, customer_name, customer_code,
-                f"{billing.get('state', '')},{billing.get('city', '')},{billing.get('address_1', '')},",
-                tel, mobile, email,
-                billing.get("company", "123456789"),
-                "103", new_moien,
-                1, 1,
-                billing.get("city", ""), "منطقه",
-                billing.get("state", ""), billing.get("postcode", "0000000000"),
-                billing.get("national_code", "0000000000"),
-            ),
-        )
-    except Exception as exc:
-        log.error(f"❌ خطا در ثبتِ مشتریِ جدید ({email or mobile or '—'}): {exc}")
-        return None
-
-    log.info(f"🆕 مشتریِ جدید از رویِ سفارش ثبت شد: {customer_name} (کد {customer_code})")
-    return customer_code
+    return create_customer_record(cursor, billing, config)
 
 
 def resolve_order_customer_code(order, config, cursor):
@@ -165,5 +86,5 @@ def resolve_order_customer_code(order, config, cursor):
     if existing_code:
         return existing_code
 
-    new_code = _create_customer_from_billing(cursor, billing)
+    new_code = _create_customer_from_billing(cursor, billing, config)
     return new_code or fixed_code

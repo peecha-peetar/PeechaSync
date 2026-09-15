@@ -41,6 +41,9 @@ SETTINGS_KEYS = {
   # مشتری
   "DEFAULT_CUSTOMER_MODE": {"group": "customer", "used_by": ["customer_context", "customersync", "ordersync"]},
   "DEFAULT_CUSTOMER_CODE": {"group": "customer", "used_by": ["customer_context", "tab_customers"]},
+  "CUSTOMER_CREATION_METHOD": {"group": "customer", "used_by": ["customer_creation", "customer_context", "customersync"]},
+  "CUSTOMER_KOL_CODE": {"group": "customer", "used_by": ["customer_creation"]},
+  "CUSTOMER_MOIEN_CODE": {"group": "customer", "used_by": ["customer_creation"]},
   # ظاهر / ورود
   "APP_THEME": {"group": "ui", "used_by": ["app_theme", "peecha_launcher"]},
   "APP_FONT_SIZE": {"group": "ui", "used_by": ["launcher", "license tab"]},
