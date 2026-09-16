@@ -44,6 +44,10 @@ SETTINGS_KEYS = {
   "CUSTOMER_CREATION_METHOD": {"group": "customer", "used_by": ["customer_creation", "customer_context", "customersync"]},
   "CUSTOMER_KOL_CODE": {"group": "customer", "used_by": ["customer_creation"]},
   "CUSTOMER_MOIEN_CODE": {"group": "customer", "used_by": ["customer_creation"]},
+  # سپیدار/دشت
+  "SEPIDAR_STOCK_REF": {"group": "catalog", "used_by": ["sepidar_common", "sepidar_productsync", "sepidar_ordersync"]},
+  "SEPIDAR_FISCAL_PERIOD_REF": {"group": "catalog", "used_by": ["sepidar_common", "sepidar_productsync", "sepidar_ordersync"]},
+  "SEPIDAR_DEFAULT_LOCATION_REF": {"group": "catalog", "used_by": ["sepidar_common", "sepidar_customersync"]},
   # ظاهر / ورود
   "APP_THEME": {"group": "ui", "used_by": ["app_theme", "peecha_launcher"]},
   "APP_FONT_SIZE": {"group": "ui", "used_by": ["launcher", "license tab"]},

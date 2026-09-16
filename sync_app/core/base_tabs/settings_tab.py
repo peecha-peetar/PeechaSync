@@ -1249,6 +1249,7 @@ class SettingsTab(QWidget):
         provider_idx = self.erp_provider_combo.findData(current_provider)
         self.erp_provider_combo.setCurrentIndex(provider_idx if provider_idx >= 0 else 0)
         self.erp_provider_combo.currentIndexChanged.connect(self.update_provider_hint)
+        self.erp_provider_combo.currentIndexChanged.connect(self._on_erp_provider_changed)
 
         self.provider_hint_label = QLabel("")
         self.provider_hint_label.setWordWrap(True)
@@ -2140,6 +2141,41 @@ class SettingsTab(QWidget):
         self._on_default_customer_mode_changed()  # نمایش/مخفی کردن بر اساس مقدار اولیه
         self._on_customer_creation_method_changed()  # نمایش/مخفی کردن کل/معین بر اساس مقدار اولیه
 
+        # ── گروه تنظیماتِ سپیدار/دشت — فقط وقتی providerِ ERP رویِ یکی از
+        # این دو باشه نمایش داده می‌شه (_on_erp_provider_changed) ──────
+        sepidar_group = QGroupBox("تنظیماتِ سپیدار/دشت")
+        sepidar_form = QFormLayout()
+        sepidar_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        sepidar_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        sepidar_form.setHorizontalSpacing(14)
+        sepidar_form.setVerticalSpacing(10)
+
+        self.sepidar_stock_ref_input = QLineEdit(str(self.config.get("SEPIDAR_STOCK_REF") or "1"))
+        self.sepidar_stock_ref_input.setPlaceholderText("StockRef (پیش‌فرض 1)")
+        self.sepidar_fiscal_period_ref_input = QLineEdit(str(self.config.get("SEPIDAR_FISCAL_PERIOD_REF") or "1"))
+        self.sepidar_fiscal_period_ref_input.setPlaceholderText("FiscalPeriodRef (پیش‌فرض 1)")
+        self.sepidar_location_ref_input = QLineEdit(str(self.config.get("SEPIDAR_DEFAULT_LOCATION_REF") or ""))
+        self.sepidar_location_ref_input.setPlaceholderText("LocationRef — خالی یعنی آدرس ذخیره نشود")
+        for _w in (self.sepidar_stock_ref_input, self.sepidar_fiscal_period_ref_input, self.sepidar_location_ref_input):
+            _w.setLayoutDirection(Qt.LeftToRight)
+            _w.setAlignment(Qt.AlignLeft)
+            _w.setMinimumHeight(32)
+
+        sepidar_form.addRow(QLabel("کدِ انبار (StockRef):"), self.sepidar_stock_ref_input)
+        sepidar_form.addRow(QLabel("کدِ دورهٔ مالی (FiscalPeriodRef):"), self.sepidar_fiscal_period_ref_input)
+        sepidar_form.addRow(QLabel("کدِ محل/آدرسِ پیش‌فرض (LocationRef):"), self.sepidar_location_ref_input)
+        sepidar_hint = QLabel(
+            "این کدها از خودِ سپیدار/دشت (جدولِ انبار، دورهٔ مالی، محل) خونده می‌شن. "
+            "اگر LocationRef خالی بماند، آدرسِ مشتری در سپیدار ذخیره نمی‌شود (فقط نام/موبایل)."
+        )
+        sepidar_hint.setWordWrap(True)
+        sepidar_hint.setStyleSheet("color:#64748b; font-size:10px;")
+        sepidar_form.addRow(sepidar_hint)
+
+        sepidar_group.setLayout(sepidar_form)
+        self.sepidar_group = sepidar_group
+        self._on_erp_provider_changed()  # نمایش/مخفی کردن بر اساس providerِ ERPِ فعلی
+
         # ── گروه فیلدهای قابل‌انتخاب همگام‌سازی (محصول/دسته/ویژگی/متغیر) ──
         fields_group = QGroupBox("فیلدهای همگام‌سازی (SQL → فروشگاه)")
         fields_layout = QVBoxLayout()
@@ -2241,7 +2277,7 @@ class SettingsTab(QWidget):
         self.settings_sub_tabs.addTab(wc_page_scroll, "🛒 فروشگاه")
         self.settings_sub_tabs.addTab(self._build_settings_page([self.app_group]), "⚙️ عمومی")
         self.settings_sub_tabs.addTab(
-            self._build_settings_page([self.fields_group, self.customer_group]),
+            self._build_settings_page([self.fields_group, self.customer_group, self.sepidar_group]),
             "🔄 همگام‌سازی و مشتری",
         )
         self.settings_sub_tabs.addTab(
@@ -2333,6 +2369,7 @@ class SettingsTab(QWidget):
             self.sms_provider_url_input, self.sms_username_input, self.sms_password_input, self.sms_sender_number_input,
             self.contact_phone_input, self.site_address_display_input,
             self.social_instagram_input, self.social_telegram_input, self.social_whatsapp_input,
+            self.sepidar_stock_ref_input, self.sepidar_fiscal_period_ref_input, self.sepidar_location_ref_input,
         ] + list(self._field_sync_checkboxes.values()) + list(self._force_full_sync_checkboxes.values())
 
         _text_inputs = [
@@ -2348,6 +2385,7 @@ class SettingsTab(QWidget):
             self.sms_provider_url_input, self.sms_username_input, self.sms_password_input, self.sms_sender_number_input,
             self.contact_phone_input, self.site_address_display_input,
             self.social_instagram_input, self.social_telegram_input, self.social_whatsapp_input,
+            self.sepidar_stock_ref_input, self.sepidar_fiscal_period_ref_input, self.sepidar_location_ref_input,
         ]
         for w in _text_inputs:
             w.textChanged.connect(self._on_settings_field_changed)
@@ -4350,6 +4388,14 @@ class SettingsTab(QWidget):
         self.default_customer_code_input.setVisible(is_fixed)
         self.default_customer_code_label.setVisible(is_fixed)
 
+    def _on_erp_provider_changed(self):
+        """نمایش/مخفی‌کردنِ گروهِ تنظیماتِ سپیدار/دشت — فقط وقتی providerِ
+        ERPِ انتخاب‌شده یکی از این دو باشه."""
+        if not hasattr(self, "sepidar_group"):
+            return
+        provider_key = self.erp_provider_combo.currentData()
+        self.sepidar_group.setVisible(provider_key in ("sepidar", "dasht"))
+
     def _on_customer_creation_method_changed(self):
         """نمایش/مخفی‌کردنِ کمبویِ کل/معین بر اساسِ روشِ انتخاب‌شده — و
         بارگذاریِ خودکارِ کدهایِ کل وقتی برایِ اولین بار به یکی از دو
@@ -5347,6 +5393,9 @@ class SettingsTab(QWidget):
                 "CUSTOMER_CREATION_METHOD": self.customer_creation_method_combo.currentData() or "auto",
                 "CUSTOMER_KOL_CODE": (self.customer_kol_combo.currentData() or "").strip(),
                 "CUSTOMER_MOIEN_CODE": (self.customer_moien_combo.currentData() or "").strip(),
+                "SEPIDAR_STOCK_REF": (self.sepidar_stock_ref_input.text() or "1").strip(),
+                "SEPIDAR_FISCAL_PERIOD_REF": (self.sepidar_fiscal_period_ref_input.text() or "1").strip(),
+                "SEPIDAR_DEFAULT_LOCATION_REF": (self.sepidar_location_ref_input.text() or "").strip(),
                 "STORE_PLATFORM": self.store_platform_combo.currentData() or "woocommerce",
                 "PS_URL": self.ps_url_input.text().strip(),
                 "PS_API_KEY": self.ps_api_key_input.text().strip(),
