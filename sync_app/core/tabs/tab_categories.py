@@ -814,6 +814,28 @@ class CategoryTab(QWidget):
         generation = self._groups_load_generation
         self.tree.blockSignals(True)
         self.config = load_secure_config(None)
+
+        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+
+        if is_sepidar_provider(self.config):
+            from sync_app.core.integrations.erp_provider import erp_provider_label
+
+            self.tree.clear()
+            self.selected_list.clear()
+            self.tree.blockSignals(False)
+            self._set_categories_status(
+                "info",
+                f"ℹ️ این تب مخصوصِ دژاوو/هلوعه — دسته‌بندی‌هایِ سایت به‌صورتِ خودکار به {erp_provider_label(self.config)} منتقل می‌شوند (تبِ «همگام‌سازیِ خودکار»).",
+            )
+            if manual:
+                QMessageBox.information(
+                    self,
+                    "غیرقابل‌استفاده برایِ این provider",
+                    f"این تب مخصوصِ دژاوو/هلوعه (جدولِ M_Group/S_Group). برایِ {erp_provider_label(self.config)}، "
+                    "دسته‌بندی‌هایِ سایت به‌صورتِ خودکار به آن منتقل می‌شوند — از تبِ «همگام‌سازیِ خودکار» استفاده کنید.",
+                )
+            return
+
         previously_selected_sub_groups = set(self.config.get("SELECTED_SUB_GROUPS", []))
         self._begin_groups_load(manual=manual)
 
@@ -1768,6 +1790,19 @@ class CategoryTab(QWidget):
     def sync_categories(self):
         """همگام‌سازی فقط گروه‌های تیک‌خورده (و نمایان — طبق فیلتر) — پس‌زمینه"""
         self.config = load_secure_config(None) or {}
+        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+
+        if is_sepidar_provider(self.config):
+            from sync_app.core.integrations.erp_provider import erp_provider_label
+
+            QMessageBox.information(
+                self,
+                "غیرقابل‌استفاده برایِ این provider",
+                f"این تب مخصوصِ دژاوو/هلوعه (انتخابِ دستیِ گروه‌ها). برایِ {erp_provider_label(self.config)}، "
+                "دسته‌بندی‌هایِ سایت به‌صورتِ خودکار به آن منتقل می‌شوند — از تبِ «همگام‌سازیِ خودکار» "
+                "استفاده کنید.",
+            )
+            return
         if bool(self.config.get("DISABLE_ERP_CATEGORY_SYNC", False)):
             from sync_app.core.integrations.erp_provider import erp_provider_label
 
