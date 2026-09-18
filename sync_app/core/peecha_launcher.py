@@ -2776,6 +2776,14 @@ class PeechaLauncher(QWidget):
             cfg = load_secure_config(None) or {}
         except Exception:
             return
+
+        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+
+        if is_sepidar_provider(cfg):
+            # M_Group/S_Group/Article مخصوصِ دژاوو/هلوعن — این هشدار برایِ
+            # سپیدار/دشت هنوز معادل نداره (بک‌لاگِ فازِ بعدی).
+            self.link_warning_badge.setVisible(False)
+            return
         if not cfg.get("SELECTED_SUB_GROUPS"):
             self.link_warning_badge.setVisible(False)
             return

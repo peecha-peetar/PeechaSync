@@ -49,7 +49,7 @@ def fetch_site_products(config: dict | None = None) -> list[dict]:
             "products",
             params={
                 "status": "publish", "per_page": 100, "page": page,
-                "_fields": "id,sku,name,regular_price,price,categories,type,status",
+                "_fields": "id,sku,name,regular_price,price,categories,type,status,stock_quantity",
             },
         )
         data = wc_parse_json(resp, "دریافتِ محصولاتِ سایت (سپیدار)")
@@ -71,6 +71,47 @@ def _extract_price(row: dict) -> float:
         except (TypeError, ValueError):
             continue
     return 0.0
+
+
+def fetch_products_for_display(config: dict | None = None) -> list[dict]:
+    """لیستِ محصولاتِ سایت به‌شکلِ ردیف‌هایِ موردِ انتظارِ تبِ محصولات
+    (`tab_products.py`’s `_apply_products_rows`) — برایِ سپیدار/دشت، جهتِ
+    نمایش برعکسِ دژاووعه: محصولاتِ سایت خونده می‌شن (نه Article)، و وضعیتِ
+    لینک یعنی «این SKU از قبل در سپیدار به‌عنوانِ Item ساخته شده یا نه»
+    (از `sepidar_product_map.json`، نه product_woo_map.json)."""
+    from sync_app.core.currency_helper import wc_total_to_erp_amount
+
+    config = config or {}
+    site_products = fetch_site_products(config)
+    rows: list[dict] = []
+    for row in site_products:
+        if str(row.get("type") or "simple") != "simple":
+            continue
+        sku = str(row.get("sku") or "").strip()
+        if not sku:
+            continue
+        stock_raw = row.get("stock_quantity")
+        try:
+            stock = int(stock_raw) if stock_raw is not None else 0
+        except (TypeError, ValueError):
+            stock = 0
+        # tab_products.py’s _apply_products_rows همیشه انتظار داره price در
+        # واحدِ ریال/ERP باشه (بعداً خودش موقعِ نمایش، اگه پرچمِ تومان روشن
+        # باشه، تقسیم بر ۱۰ می‌کنه) — چون این‌جا قیمت مستقیماً از سایت
+        # میاد (نه از ERP)، با wc_total_to_erp_amount به همون قرارداد
+        # تبدیلش می‌کنیم تا نمایشِ نهایی درست بمونه.
+        rows.append({
+            "sku": sku,
+            "name": str(row.get("name") or sku).strip(),
+            "price": wc_total_to_erp_amount(_extract_price(row), config),
+            "stock": stock,
+            "picture_blob": b"",
+            "picture_path": "",
+            "erp_images": [],
+            "erp_image_count": 0,
+            "is_variant": False,
+        })
+    return rows
 
 
 def _item_group_hierarchy_code(cursor, item_group_id: int) -> str:

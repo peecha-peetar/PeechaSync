@@ -568,6 +568,15 @@ class StructureReconciliationTab(QWidget):
         self._load_category_options()
 
     def _load_category_options(self):
+        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+
+        if is_sepidar_provider(self.config):
+            # سپیدار/دشت جدولِ M_Group/S_Group نداره — تطبیقِ ساختاری برایِ
+            # این providerها هنوز پیاده‌سازی نشده (بک‌لاگِ فازِ بعدی)،
+            # پس فقط لیستِ دسته‌ها رو خالی می‌ذاریم، بدونِ کوئریِ دژاوو.
+            self._on_category_options_loaded([], None)
+            return
+
         loader = _CategoryOptionsLoader(self.config)
         self._keep_loader(loader)
         loader.done.connect(self._on_category_options_loaded)

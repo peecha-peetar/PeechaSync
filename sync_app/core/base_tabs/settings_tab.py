@@ -646,9 +646,22 @@ class SettingsTab(QWidget):
         from sync_app.core.threading_helper import run_in_thread
         from sync_app.core.product_mode import detect_product_mode_from_db, MODE_SIMPLE_ONLY
 
+        cfg = self.config or {}
+        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+
+        if is_sepidar_provider(cfg):
+            idx = self.product_mode_combo.findData(MODE_SIMPLE_ONLY)
+            if idx >= 0:
+                self.product_mode_combo.setCurrentIndex(idx)
+            QMessageBox.information(
+                self, "نیازی به تشخیص نیست",
+                "سپیدار/دشت اصلاً ویژگی/متغیر (رنگ/سایز) نداره — همیشه «فقط محصولاتِ ساده»ست، "
+                "نیازی به کوئری از دیتابیس نیست.",
+            )
+            return
+
         self.product_mode_detect_btn.setEnabled(False)
         self.product_mode_detect_btn.setText("⏳ در حال بررسی دیتابیس...")
-        cfg = self.config or {}
 
         def _worker():
             return detect_product_mode_from_db(cfg)
