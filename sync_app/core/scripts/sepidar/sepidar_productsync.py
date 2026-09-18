@@ -233,6 +233,58 @@ def sync_products(config: dict | None = None) -> dict:
             product_map[sku] = item_id
             created += 1
 
+        # تطبیقِ ساختاری («سایت متغیر / سپیدار ساده») — واریانت‌هایی که
+        # کاربر از تبِ «تطبیقِ ساختاری» دستی به یک SKU لینک کرده، اینجا هم
+        # مثلِ محصولِ ساده به سپیدار سینک می‌شن (فقط منبعِ sku/price از خودِ
+        # واریانت میاد، نه از محصولِ چندگانه‌ی سایت که در حلقه‌ی بالا رد شد).
+        from sync_app.core.structure_mismatch_override import list_site_variation_targets
+
+        overrides = list_site_variation_targets()
+        if overrides:
+            from sync_app.core.tabs.tab_structure_reconciliation import _list_site_variations_for_product
+
+            products_by_id = {int(p["id"]): p for p in site_products if p.get("id")}
+            for sku, target in overrides.items():
+                sku = str(sku or "").strip()
+                if not sku or sku in product_map:
+                    continue
+                parent_id = int(target.get("parent_product_id") or 0)
+                variation_id = int(target.get("variation_id") or 0)
+                if not parent_id or not variation_id:
+                    continue
+                parent_row = products_by_id.get(parent_id)
+                if parent_row is None:
+                    skipped.append(sku)
+                    log.warning(f"⚠️ [{sku}] محصولِ والدِ این تطبیقِ ساختاری در سایت پیدا نشد — رد شد.")
+                    continue
+                category_ids = [
+                    int(c["id"]) for c in (parent_row.get("categories") or [])
+                    if isinstance(c, dict) and c.get("id")
+                ]
+                item_group_id = resolve_mapped_item_group_from_index(category_ids, category_map, by_id)
+                if item_group_id is None:
+                    skipped.append(sku)
+                    log.warning(f"⚠️ [{sku}] گروهِ کالایِ محصولِ والد در سپیدار سینک نشده — این تطبیقِ ساختاری رد شد.")
+                    continue
+                try:
+                    variations = _list_site_variations_for_product(config, {"id": parent_id})
+                except Exception as exc:
+                    skipped.append(sku)
+                    log.warning(f"⚠️ [{sku}] دریافتِ واریانت‌هایِ سایت ناموفق بود: {exc}")
+                    continue
+                variation = next((v for v in variations if int(v.get("id") or 0) == variation_id), None)
+                if variation is None:
+                    skipped.append(sku)
+                    log.warning(f"⚠️ [{sku}] واریانتِ تطبیق‌شده دیگه در سایت پیدا نشد — رد شد.")
+                    continue
+
+                group_hierarchy_code = _item_group_hierarchy_code(cursor, item_group_id)
+                price = _extract_price({"price": variation.get("price")})
+                title = str(parent_row.get("name") or sku).strip()
+                item_id = _create_item(cursor, config, sku, title, item_group_id, group_hierarchy_code, price)
+                product_map[sku] = item_id
+                created += 1
+
         conn.commit()
     except Exception as exc:
         conn.rollback()
@@ -246,6 +298,30 @@ def sync_products(config: dict | None = None) -> dict:
     if skipped:
         log.warning(f"⚠️ محصولاتِ ردشده: {', '.join(skipped)}")
     return {"created": created, "skipped": len(skipped), "total": len(product_map)}
+
+
+def fetch_sepidar_items(config: dict | None = None) -> list[dict]:
+    """[{id, code, title, price}] — کالاهایِ موجود در POS.Item (+ DefaultPrice
+    از POS.ItemSalePrice) — برایِ نمایشِ سمتِ سپیدار در تبِ «تطبیق»."""
+    conn = get_sepidar_connection(config or {})
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT i.ItemID, i.Code, i.Title, sp.DefaultPrice "
+            "FROM POS.Item i LEFT JOIN POS.ItemSalePrice sp ON sp.ItemRef = i.ItemID"
+        )
+        rows = cursor.fetchall()
+    finally:
+        conn.close()
+    return [
+        {
+            "id": int(r[0]),
+            "code": str(r[1] or "").strip(),
+            "title": str(r[2] or "").strip(),
+            "price": float(r[3]) if r[3] is not None else 0.0,
+        }
+        for r in rows
+    ]
 
 
 def main(config: dict | None = None) -> dict:

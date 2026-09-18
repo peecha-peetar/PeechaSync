@@ -148,6 +148,30 @@ def resolve_mapped_item_group_from_index(category_ids: list[int], category_map: 
     return None
 
 
+def fetch_sepidar_item_groups(config: dict | None = None) -> list[dict]:
+    """[{id, code, title, parent_ref}] — گروه/زیرگروه‌هایِ موجود در
+    POS.ItemGroup — برایِ نمایشِ سمتِ سپیدار در تبِ «تطبیق» (تبِ محصولات/
+    sync_products فقط INSERT دارن، این تابع اولین SELECT از این جدوله)."""
+    from sync_app.core.scripts.sepidar.sepidar_common import get_sepidar_connection
+
+    conn = get_sepidar_connection(config or {})
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT ItemGroupID, Code, Title, ParentGroupRef FROM POS.ItemGroup")
+        rows = cursor.fetchall()
+    finally:
+        conn.close()
+    return [
+        {
+            "id": int(r[0]),
+            "code": str(r[1] or "").strip(),
+            "title": str(r[2] or "").strip(),
+            "parent_ref": int(r[3]) if r[3] is not None else None,
+        }
+        for r in rows
+    ]
+
+
 def main(config: dict | None = None) -> dict:
     from sync_app.core.secure_config_loader import load_secure_config
 

@@ -1723,6 +1723,152 @@ def _mark_variation_sync_by_sku(erp_rows: list[ReconRow], wc_rows: list[ReconRow
             erp.extra = extra
 
 
+# ── سپیدار/دشت — schemaِ کاملاً متفاوته، جهتِ سینک هم برعکسه (سایت→ERP) ──
+# توابعِ زیر موازیِ _fetch_erp_categories/_fetch_erp_products/
+# _mark_category_sync_by_map/_mark_product_sync_by_map بالان، بدونِ لمسِ
+# اون‌ها — فقط در load_comparison/save_link_pairs شاخه می‌خورن.
+
+def _fetch_sepidar_categories(config: dict) -> list[ReconRow]:
+    from sync_app.core.scripts.sepidar.sepidar_categorysync import fetch_sepidar_item_groups
+
+    groups = fetch_sepidar_item_groups(config)
+    rows: list[ReconRow] = []
+    for g in groups:
+        item_group_id = str(g["id"])
+        rows.append(
+            ReconRow(
+                key=f"sepidar:{item_group_id}",
+                erp_key=item_group_id,
+                label=f"{g['title']} — کد {g['code']}",
+                synced=False,
+                side="erp",
+                match_key=item_group_id,
+                extra={"code": g["code"]},
+            )
+        )
+    return rows
+
+
+def _fetch_sepidar_wc_categories(config: dict) -> list[ReconRow]:
+    from sync_app.core.scripts.sepidar.sepidar_categorysync import fetch_site_categories
+
+    cats = fetch_site_categories(config)
+    rows: list[ReconRow] = []
+    for c in cats:
+        site_id = str(c["id"])
+        rows.append(
+            ReconRow(
+                key=f"wc:{site_id}",
+                wc_id=c["id"],
+                label=f"{c['name']} — #{site_id}",
+                synced=False,
+                side="wc",
+                match_key=site_id,
+                extra={},
+            )
+        )
+    return rows
+
+
+def _fetch_sepidar_products(config: dict) -> list[ReconRow]:
+    from sync_app.core.scripts.sepidar.sepidar_productsync import fetch_sepidar_items
+
+    items = fetch_sepidar_items(config)
+    rows: list[ReconRow] = []
+    for it in items:
+        item_id = str(it["id"])
+        rows.append(
+            ReconRow(
+                key=f"sepidar:{item_id}",
+                erp_key=item_id,
+                label=f"{it['title']} — کد {it['code']} — {it['price']:,.0f}",
+                synced=False,
+                side="erp",
+                match_key=it["code"],
+                extra={"sku": it["code"]},
+            )
+        )
+    return rows
+
+
+def _fetch_sepidar_wc_products(config: dict) -> list[ReconRow]:
+    from sync_app.core.scripts.sepidar.sepidar_productsync import fetch_site_products
+
+    products = fetch_site_products(config)
+    rows: list[ReconRow] = []
+    for p in products:
+        sku = str(p.get("sku") or "").strip()
+        if not sku:
+            continue
+        rows.append(
+            ReconRow(
+                key=f"wc:{p['id']}",
+                wc_id=p["id"],
+                label=f"{p.get('name') or sku} — SKU {sku}",
+                synced=False,
+                side="wc",
+                # نکته‌ی حیاتی: sepidar_product_map.json دقیقاً با همین SKUِ
+                # خام (بدونِ lower) کلیدگذاری شده — برخلافِ قراردادِ دژاووِ
+                # match_key=sku.lower() که چند خط پایین‌ترِ همین فایل
+                # (_fetch_wc_products) استفاده می‌شه.
+                match_key=sku,
+                extra={"sku": sku},
+            )
+        )
+    return rows
+
+
+def _mark_sepidar_sync_by_map(erp_rows: list[ReconRow], wc_rows: list[ReconRow], sepidar_map: dict) -> None:
+    """علامت‌زدنِ synced بر اساسِ نگاشتِ واقعیِ سپیدار — برخلافِ
+    _mark_category_sync_by_map/_mark_product_sync_by_map دژاوو که فازی/
+    غیرمستقیمه، این نگاشت (site_key→erp_internal_id) دقیقاً همونیه که
+    sepidar_categorysync/sepidar_productsync موقعِ سینک نوشتن، پس تطبیق
+    قطعیه، نه حدسی."""
+    erp_by_key = {row.erp_key: row for row in erp_rows}
+    for wc_row in wc_rows:
+        mapped_id = sepidar_map.get(wc_row.match_key)
+        if mapped_id is None:
+            continue
+        erp_row = erp_by_key.get(str(mapped_id))
+        if erp_row is not None:
+            wc_row.synced = True
+            erp_row.synced = True
+
+
+def _save_sepidar_category_links(pairs: list[tuple[ReconRow, ReconRow]]) -> int:
+    from sync_app.core.scripts.sepidar.sepidar_common import load_sepidar_map, save_sepidar_map
+
+    sepidar_map = load_sepidar_map("sepidar_category_map.json")
+    saved = 0
+    for erp, wc in pairs:
+        site_id = str(wc.match_key or wc.wc_id or "").strip()
+        item_group_id = str(erp.erp_key or "").strip()
+        if not site_id or not item_group_id:
+            continue
+        sepidar_map[site_id] = int(item_group_id)
+        saved += 1
+    if saved:
+        save_sepidar_map("sepidar_category_map.json", sepidar_map)
+    return saved
+
+
+def _save_sepidar_product_links(pairs: list[tuple[ReconRow, ReconRow]]) -> int:
+    from sync_app.core.scripts.sepidar.sepidar_common import load_sepidar_map, save_sepidar_map
+
+    sepidar_map = load_sepidar_map("sepidar_product_map.json")
+    saved = 0
+    for erp, wc in pairs:
+        sku = str(wc.match_key or (wc.extra or {}).get("sku") or "").strip()
+        item_id = str(erp.erp_key or "").strip()
+        if not sku or not item_id:
+            continue
+        sepidar_map[sku] = int(item_id)
+        saved += 1
+    if saved:
+        save_sepidar_map("sepidar_product_map.json", sepidar_map)
+    return saved
+
+
 def load_comparison(
     config: dict,
     entity: str,
@@ -1737,16 +1883,36 @@ def load_comparison(
         cached = _COMPARISON_CACHE.get(cache_key)
         if cached and (time.monotonic() - cached[0]) < _COMPARISON_CACHE_TTL_SEC:
             return cached[1]
+    from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+
+    sepidar = is_sepidar_provider(config)
+
     if entity == ENTITY_CATEGORIES:
-        erp_rows = _fetch_erp_categories(config)
-        _check_recon_cancel(cancel_check)
-        wc_rows = _fetch_wc_categories(config, cancel_check=cancel_check)
-        _mark_category_sync_by_map(erp_rows, wc_rows)
+        if sepidar:
+            from sync_app.core.scripts.sepidar.sepidar_common import load_sepidar_map
+
+            erp_rows = _fetch_sepidar_categories(config)
+            _check_recon_cancel(cancel_check)
+            wc_rows = _fetch_sepidar_wc_categories(config)
+            _mark_sepidar_sync_by_map(erp_rows, wc_rows, load_sepidar_map("sepidar_category_map.json"))
+        else:
+            erp_rows = _fetch_erp_categories(config)
+            _check_recon_cancel(cancel_check)
+            wc_rows = _fetch_wc_categories(config, cancel_check=cancel_check)
+            _mark_category_sync_by_map(erp_rows, wc_rows)
     elif entity == ENTITY_PRODUCTS:
-        erp_rows = _fetch_erp_products(config)
-        _check_recon_cancel(cancel_check)
-        wc_rows = _fetch_wc_products(config, cancel_check=cancel_check)
-        _mark_product_sync_by_map(erp_rows, wc_rows)
+        if sepidar:
+            from sync_app.core.scripts.sepidar.sepidar_common import load_sepidar_map
+
+            erp_rows = _fetch_sepidar_products(config)
+            _check_recon_cancel(cancel_check)
+            wc_rows = _fetch_sepidar_wc_products(config)
+            _mark_sepidar_sync_by_map(erp_rows, wc_rows, load_sepidar_map("sepidar_product_map.json"))
+        else:
+            erp_rows = _fetch_erp_products(config)
+            _check_recon_cancel(cancel_check)
+            wc_rows = _fetch_wc_products(config, cancel_check=cancel_check)
+            _mark_product_sync_by_map(erp_rows, wc_rows)
     elif entity == ENTITY_VARIATIONS:
         erp_rows = _fetch_erp_variations(config)
         _check_recon_cancel(cancel_check)
@@ -2116,8 +2282,15 @@ def save_link_pairs(
     pairs: list[tuple[ReconRow, ReconRow]],
     *,
     wc_rows: list[ReconRow] | None = None,
+    config: dict | None = None,
 ) -> int:
-    if entity == ENTITY_CATEGORIES:
+    from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+
+    if is_sepidar_provider(config) and entity == ENTITY_CATEGORIES:
+        count = _save_sepidar_category_links(pairs)
+    elif is_sepidar_provider(config) and entity == ENTITY_PRODUCTS:
+        count = _save_sepidar_product_links(pairs)
+    elif entity == ENTITY_CATEGORIES:
         count = _save_category_links(pairs)
     elif entity == ENTITY_PRODUCTS:
         count = _save_product_links(pairs, wc_rows=wc_rows)
@@ -2326,17 +2499,11 @@ def auto_link_all(config: dict, entity: str) -> tuple[int, str]:
     if not pairs:
         return 0, "مورد جدیدی برای تطبیق خودکار یافت نشد."
 
-    if entity == ENTITY_CATEGORIES:
-        count = _save_category_links(pairs)
-    elif entity == ENTITY_PRODUCTS:
-        count = _save_product_links(pairs, wc_rows=comparison.wc_rows)
-    elif entity == ENTITY_VARIATIONS:
-        count = _save_variation_links(pairs)
-    else:
+    if entity not in (ENTITY_CATEGORIES, ENTITY_PRODUCTS, ENTITY_VARIATIONS):
         return 0, "نوع نامعتبر."
+    count = save_link_pairs(entity, pairs, wc_rows=comparison.wc_rows, config=config)
 
     if count:
-        invalidate_comparison_cache(entity)
         log.info(f"🔗 تطبیق خودکار {ENTITY_LABELS.get(entity, entity)}: {count} مورد")
         return count, f"{count} مورد با کد یکسان به‌صورت خودکار تطبیق شد."
     return 0, "تطبیق خودکار انجام نشد."

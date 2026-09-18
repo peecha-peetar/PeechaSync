@@ -461,6 +461,45 @@ class _ErpSimpleSkuLoader(QThread):
             self.done.emit([], str(exc))
 
 
+class _SepidarSyncedSkuLoader(QThread):
+    """معادلِ _ErpSimpleSkuLoader برایِ سپیدار/دشت — چون سپیدار جدولِ
+    Article نداره و sepidar_categorysync/sepidar_productsync فقط INSERT
+    دارن (نه SELECTِ آماده برایِ فهرست)، این‌جا مستقیم از رویِ
+    sepidar_product_map.json (SKUِ سایت → ItemID سپیدار) + محصولاتِ سایت
+    می‌سازدش — بدونِ هیچ کوئریِ SQL."""
+
+    done = pyqtSignal(list, str)  # [(sku, label), ...], error
+
+    def __init__(self, cfg, query: str):
+        super().__init__()
+        self.cfg = cfg
+        self.query = query
+
+    def run(self):
+        try:
+            from sync_app.core.scripts.sepidar.sepidar_common import load_sepidar_map
+            from sync_app.core.scripts.sepidar.sepidar_productsync import fetch_site_products
+
+            sepidar_map = load_sepidar_map("sepidar_product_map.json")
+            products = fetch_site_products(self.cfg)
+            by_sku = {str(p.get("sku") or "").strip(): p for p in products}
+            needle = str(self.query or "").strip().lower()
+
+            out = []
+            for sku in sepidar_map:
+                product = by_sku.get(sku) or {}
+                name = str(product.get("name") or "").strip()
+                if needle and needle not in sku.lower() and needle not in name.lower():
+                    continue
+                price_raw = product.get("regular_price") or product.get("price") or ""
+                label = " | ".join(["ساده", sku, name or "—", str(price_raw) or "—"])
+                out.append((sku, label))
+            out.sort(key=lambda pair: pair[1])
+            self.done.emit(out[:200], "")
+        except Exception as exc:
+            self.done.emit([], str(exc))
+
+
 class _ErpVariantSkuLoader(QThread):
     """لیستِ زیرواریانت‌هایِ کدهایِ متغیرِ ERP که با نام/کد جستجو تطبیق
     دارن — برایِ حالتِ «ERP متغیر / سایت ساده». هر ردیفِ خروجی یک
@@ -609,7 +648,15 @@ class StructureReconciliationTab(QWidget):
         # زیرتب‌هایِ «همگام‌سازی»/«دستیار هوشمند» با همین objectName رفع شد.
         sub_tabs.tabBar().setObjectName("hubSubTabBar")
         sub_tabs.addTab(self._build_site_variation_section(), f"🧩 سایت متغیر / {self.erp_label} ساده")
-        sub_tabs.addTab(self._build_force_simple_section(), f"📦 {self.erp_label} متغیر / سایت ساده")
+
+        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+
+        force_simple_widget = self._build_force_simple_section()
+        if not is_sepidar_provider(self.config):
+            # سپیدار/دشت هیچ‌وقت کالایِ متغیر نداره — این حالت («ERP متغیر /
+            # سایت ساده») براش اصلاً ممکن نیست. خودِ widget ساخته می‌شه
+            # (سازگاری با ارجاعاتِ داخلی)، فقط به تب اضافه نمی‌شه.
+            sub_tabs.addTab(force_simple_widget, f"📦 {self.erp_label} متغیر / سایت ساده")
         root.addWidget(sub_tabs)
 
     def _keep_loader(self, loader: QThread):
@@ -871,8 +918,14 @@ class StructureReconciliationTab(QWidget):
     def _sv_search_erp(self):
         self._reload_config()
         self.sv_status_label.setText(f"⏳ در حالِ جستجویِ کالاهایِ {self.erp_label}...")
-        category_code = self.sv_category_filter.currentData() or ""
-        loader = _ErpSimpleSkuLoader(self.config, self.sv_erp_search.text(), category_code)
+
+        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+
+        if is_sepidar_provider(self.config):
+            loader = _SepidarSyncedSkuLoader(self.config, self.sv_erp_search.text())
+        else:
+            category_code = self.sv_category_filter.currentData() or ""
+            loader = _ErpSimpleSkuLoader(self.config, self.sv_erp_search.text(), category_code)
         self._keep_loader(loader)
         loader.done.connect(self._on_sv_erp_results)
         loader.start()
@@ -971,19 +1024,27 @@ class StructureReconciliationTab(QWidget):
             return False
 
         from sync_app.core.structure_mismatch_override import set_site_variation_target
-        from sync_app.core.product_woo_map_helper import load_product_woo_map, save_product_woo_map
-        from sync_app.core.product_woo_map_meta import register_product_link
 
         set_site_variation_target(sku, parent_id, variation_id, label=label, erp_label=erp_label)
-        # همین SKU رو در product_woo_map هم به محصولِ والدِ سایت وصل می‌کنیم —
-        # نه برایِ اینکه سینکِ عادی ازش استفاده کنه (سینک برایِ این SKU زودتر
-        # از این طریق رد می‌شه: get_site_variation_target)، بلکه فقط برایِ
-        # اینکه تبِ «محصولات» این SKU رو «لینک‌شده» نشون بده، نه «لینک‌نشده» —
-        # وگرنه کاربر گمون می‌کنه هنوز تطبیق نشده.
-        product_map = load_product_woo_map()
-        product_map[sku] = int(parent_id)
-        save_product_woo_map(product_map)
-        register_product_link(sku, int(parent_id), wc_label=label, manual=True)
+
+        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+
+        if not is_sepidar_provider(self.config):
+            # همین SKU رو در product_woo_map هم به محصولِ والدِ سایت وصل
+            # می‌کنیم — نه برایِ اینکه سینکِ عادی ازش استفاده کنه (سینک برایِ
+            # این SKU زودتر از این طریق رد می‌شه: get_site_variation_target)،
+            # بلکه فقط برایِ اینکه تبِ «محصولات» این SKU رو «لینک‌شده» نشون
+            # بده، نه «لینک‌نشده» — وگرنه کاربر گمون می‌کنه هنوز تطبیق نشده.
+            # برایِ سپیدار این بخش بی‌ربطه (product_woo_map مالِ دژاوو/هلوعه)
+            # — همون sepidar_product_map کافیه، ساختِ واقعیِ Item هم دفعه‌ی
+            # بعدِ اجرایِ sync_products خودکار انجام می‌شه.
+            from sync_app.core.product_woo_map_helper import load_product_woo_map, save_product_woo_map
+            from sync_app.core.product_woo_map_meta import register_product_link
+
+            product_map = load_product_woo_map()
+            product_map[sku] = int(parent_id)
+            save_product_woo_map(product_map)
+            register_product_link(sku, int(parent_id), wc_label=label, manual=True)
         if not silent:
             self._refresh_sv_table()
         return True

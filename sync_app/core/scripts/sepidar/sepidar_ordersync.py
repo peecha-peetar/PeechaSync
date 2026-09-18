@@ -103,6 +103,22 @@ def insert_invoice(order: dict, config: dict) -> None:
             sku = str(item.get("sku") or "").strip()
             item_ref = product_map.get(sku)
             if not item_ref:
+                # تطبیقِ ساختاری («سایت متغیر / سپیدار ساده»): اگه این خط
+                # مستقیم با SKUِ خودش پیدا نشد، شاید این واریانت با SKUِ
+                # دیگه‌ای در سپیدار تطبیق داده شده باشه — دقیقاً مثلِ
+                # ordersync.py دژاوو (resolve_line_item_variant).
+                try:
+                    site_parent_id = int(item.get("product_id") or 0)
+                    site_variation_id = int(item.get("variation_id") or 0)
+                except (TypeError, ValueError):
+                    site_parent_id = site_variation_id = 0
+                if site_parent_id and site_variation_id:
+                    from sync_app.core.structure_mismatch_override import find_erp_sku_for_site_variation
+
+                    overridden_sku = find_erp_sku_for_site_variation(site_parent_id, site_variation_id)
+                    if overridden_sku:
+                        item_ref = product_map.get(overridden_sku)
+            if not item_ref:
                 log.warning(f"⚠️ سفارش {order_id}: کالایِ '{sku}' در سپیدار سینک نشده — این خط رد شد.")
                 continue
             unit_price = _line_unit_price(item, config)

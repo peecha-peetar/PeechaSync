@@ -1331,6 +1331,14 @@ class ReconciliationTab(QWidget):
         def _worker():
             from sync_app.core.sql_connection_helper import open_sql_connection
             config = load_secure_config(None) or {}
+
+            from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+
+            if is_sepidar_provider(config):
+                # M_Group/S_Group مخصوصِ دژاووعن — سپیدار/دشت هنوز فیلترِ
+                # دسته‌بندی نداره، فقط «همه دسته‌بندی‌ها» می‌مونه.
+                return []
+
             conn, _, _ = open_sql_connection(config, timeout=5)
             try:
                 cursor = conn.cursor()
@@ -2722,7 +2730,7 @@ class ReconciliationTab(QWidget):
             self, entity, pairs, wc_rows=self._wc_rows_for_guard()
         ):
             return
-        count = save_link_pairs(entity, pairs, wc_rows=self._wc_rows_for_guard())
+        count = save_link_pairs(entity, pairs, wc_rows=self._wc_rows_for_guard(), config=self.config)
         if count:
             log.info(f"✅ تطبیق {ENTITY_LABELS.get(entity, entity)}: {count} مورد ثبت شد.")
             QMessageBox.information(
