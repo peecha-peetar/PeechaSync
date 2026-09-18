@@ -3,7 +3,7 @@
 import os
 import sys
 
-_BUILTIN_VERSION = "2.30.132"
+_BUILTIN_VERSION = "2.30.133"
 
 
 def _install_root() -> str:

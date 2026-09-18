@@ -49,7 +49,10 @@ def fetch_site_products(config: dict | None = None) -> list[dict]:
             "products",
             params={
                 "status": "publish", "per_page": 100, "page": page,
-                "_fields": "id,sku,name,regular_price,price,categories,type,status,stock_quantity",
+                "_fields": (
+                    "id,sku,name,regular_price,price,categories,type,status,stock_quantity,"
+                    "images,description,short_description"
+                ),
             },
         )
         data = wc_parse_json(resp, "دریافتِ محصولاتِ سایت (سپیدار)")
@@ -111,6 +114,48 @@ def fetch_products_for_display(config: dict | None = None) -> list[dict]:
             "erp_image_count": 0,
             "is_variant": False,
         })
+    return rows
+
+
+def fetch_readiness_rows(config: dict | None = None) -> list[tuple]:
+    """ردیف‌هایِ «آمادگیِ انتشار محصول» برایِ سپیدار/دشت (`tab_media_center.py`’s
+    بخشِ ۵ و `tab_peecha_advisor.py`’s `_readiness_summary`) — برخلافِ دژاوو،
+    منبعِ عکس/دسته‌بندی/توضیحات مستقیماً خودِ محصولِ سایته (چون سپیدار اصلاً
+    عکس/توضیحات ذخیره نمی‌کنه)، و «همگام با ووکامرس» یعنی این SKU از قبل
+    به‌عنوانِ POS.Item در سپیدار ساخته شده (`sepidar_product_map.json`)."""
+    from sync_app.core.media_center import product_readiness
+
+    config = config or {}
+    product_map = load_sepidar_map(_MAP_FILE)
+    site_products = fetch_site_products(config)
+
+    rows: list[tuple] = []
+    for row in site_products:
+        if str(row.get("type") or "simple") != "simple":
+            continue
+        sku = str(row.get("sku") or "").strip()
+        if not sku:
+            continue
+        name = str(row.get("name") or sku).strip()
+        stock_raw = row.get("stock_quantity")
+        try:
+            stock = int(stock_raw) if stock_raw is not None else 0
+        except (TypeError, ValueError):
+            stock = 0
+        description = str(row.get("description") or row.get("short_description") or "").strip()
+
+        product = {
+            "has_image": bool(row.get("images")),
+            "has_category": bool(row.get("categories")),
+            "price": _extract_price(row),
+            "stock": stock,
+            "description": description,
+            "synced_to_woo": sku in product_map,
+        }
+        result = product_readiness(product)
+        missing = [c.missing_label for c in result.checks if not c.ok]
+        rows.append((sku, name, result.score, missing))
+    rows.sort(key=lambda r: r[2])
     return rows
 
 
