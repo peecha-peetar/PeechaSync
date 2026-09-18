@@ -111,6 +111,24 @@ def get_provider(provider_name):
     return _PROVIDER_CLASSES[key]()
 
 
+def erp_schema_family(config) -> str:
+    """خانواده‌یِ schemaیِ ERP — برایِ namespace کردنِ فایل‌هایِ وضعیتِ سینکِ
+    SKU-محور (نگاشتِ دسته‌بندی/محصول، override هایِ ساختاری و مانندِ آن).
+    دژاوو/هلو جدولِ Article/M_Group مشترک دارن (پس کدِ کالاشون معنایِ
+    یکسانی داره) — یک خانواده‌ن. سپیدار/دشت هم POS.Item/POS.ItemGroup
+    مشترک دارن — خانواده‌یِ دیگه‌ای‌ن. هر ERPِ دیگه‌ای که بعداً اضافه بشه
+    و schemaیِ کاملاً متفاوتی داره، باید این‌جا در خانواده‌یِ خودش
+    (یا خانواده‌یِ جدید) قرار بگیره، وگرنه کدهایِ کالاش با یک ERPِ
+    schema-متفاوتِ دیگه (که به‌طورِ تصادفی همون رشته‌کدها رو داره) قاطی
+    می‌شه."""
+    key = normalize_erp_provider_key((config or {}).get("ERP_PROVIDER"))
+    if key in ("dejavu", "holoo"):
+        return "dejavu"
+    if key in ("sepidar", "dasht"):
+        return "sepidar"
+    return key
+
+
 def erp_provider_label(config) -> str:
     """نامِ نمایشیِ Providerِ ERP انتخاب‌شده (تو تنظیمات) — به‌جای کلمه‌ی
     ژنریکِ «ERP» یا «SQL» تو کلِ برنامه استفاده می‌شه، تا همه‌جا اسمِ
