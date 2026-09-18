@@ -146,3 +146,24 @@ def save_sepidar_map(filename: str, data: dict) -> None:
         from sync_app.core.sync_utils import log
 
         log.warning(f"⚠️ ذخیره {filename}: {exc}")
+
+
+def compute_sepidar_unlinked_counts(config: dict) -> dict:
+    """معادلِ auto_sync_scope.compute_unlinked_counts برایِ سپیدار/دشت —
+    چون آن تابع به SELECTED_SUB_GROUPS وابسته‌ست (مفهومی که سپیدار اصلاً
+    نداره)، این‌جا کلِ دسته‌بندی/محصولِ سایت رو مستقیم با نگاشتِ
+    sepidar_*_map.json مقایسه می‌کنه."""
+    from sync_app.core.scripts.sepidar.sepidar_categorysync import fetch_site_categories
+    from sync_app.core.scripts.sepidar.sepidar_productsync import fetch_site_products
+
+    category_map = load_sepidar_map("sepidar_category_map.json")
+    categories = fetch_site_categories(config)
+    categories_unlinked = sum(1 for c in categories if str(c["id"]) not in category_map)
+
+    product_map = load_sepidar_map("sepidar_product_map.json")
+    products = fetch_site_products(config)
+    products_unlinked = sum(
+        1 for p in products
+        if str(p.get("type") or "simple") == "simple" and str(p.get("sku") or "").strip() not in product_map
+    )
+    return {"products": products_unlinked, "categories": categories_unlinked}

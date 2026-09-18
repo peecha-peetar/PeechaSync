@@ -206,6 +206,31 @@ class DashboardWorker(QObject):
                 "user": meta[2] if meta and len(meta) > 2 else "—",
             })
 
+            from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+
+            if is_sepidar_provider(self.config):
+                from sync_app.core.scripts.sepidar.sepidar_categorysync import fetch_sepidar_item_groups
+                from sync_app.core.scripts.sepidar.sepidar_productsync import fetch_sepidar_items
+
+                groups = fetch_sepidar_item_groups(self.config)
+                items = fetch_sepidar_items(self.config)
+                # هر گروهِ ریشه (ParentGroupRef == -5) دقیقاً معادلِ سطحِ
+                # M_Group و بقیه معادلِ S_Groupه (طبقِ خودِ sepidar_categorysync)
+                # — همون دو لیبلِ موجودِ UI بدونِ هیچ تغییرِ رابطِ کاربری درست می‌مونن.
+                sql["main_groups"] = sum(1 for g in groups if g["parent_ref"] == -5)
+                sql["sub_groups"] = len(groups) - sql["main_groups"]
+                sql["articles"] = len(items)
+                sql["selected_groups"] = len(groups)  # سپیدار «انتخابِ زیرگروه» نداره — دامنه = همه
+                sql["filtered_articles"] = sql["articles"]
+                try:
+                    cur.execute("SELECT SUM(CAST(ISNULL(Quantity, 0) AS BIGINT)) FROM POS.ItemOpening")
+                    sql["total_stock"] = int(cur.fetchone()[0] or 0)
+                except Exception:
+                    sql["total_stock"] = 0
+                conn.close()
+                payload["sql"] = sql
+                return
+
             queries = {
                 "articles": "SELECT COUNT(*) FROM Article",
                 "main_groups": "SELECT COUNT(*) FROM M_Group",
@@ -451,8 +476,14 @@ class DashboardWorker(QObject):
             self._load_sql(payload)
             self._load_woo(payload)
             try:
-                from sync_app.core.auto_sync_scope import compute_unlinked_counts
-                payload["link_health"] = compute_unlinked_counts(self.config)
+                from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+
+                if is_sepidar_provider(self.config):
+                    from sync_app.core.scripts.sepidar.sepidar_common import compute_sepidar_unlinked_counts
+                    payload["link_health"] = compute_sepidar_unlinked_counts(self.config)
+                else:
+                    from sync_app.core.auto_sync_scope import compute_unlinked_counts
+                    payload["link_health"] = compute_unlinked_counts(self.config)
             except Exception:
                 payload["link_health"] = None
             self.finished.emit(payload)

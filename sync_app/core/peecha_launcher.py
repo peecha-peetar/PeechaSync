@@ -2779,12 +2779,11 @@ class PeechaLauncher(QWidget):
 
         from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
 
-        if is_sepidar_provider(cfg):
-            # M_Group/S_Group/Article مخصوصِ دژاوو/هلوعن — این هشدار برایِ
-            # سپیدار/دشت هنوز معادل نداره (بک‌لاگِ فازِ بعدی).
-            self.link_warning_badge.setVisible(False)
-            return
-        if not cfg.get("SELECTED_SUB_GROUPS"):
+        sepidar = is_sepidar_provider(cfg)
+        if not sepidar and not cfg.get("SELECTED_SUB_GROUPS"):
+            # M_Group/S_Group/Article مخصوصِ دژاوو/هلوعن و به SELECTED_SUB_GROUPS
+            # وابسته‌ن — سپیدار/دشت این مفهوم رو نداره، پس این گاردِ خاصِ دژاوو
+            # روش اعمال نمی‌شه (پایین‌تر compute_sepidar_unlinked_counts صدا زده می‌شه).
             self.link_warning_badge.setVisible(False)
             return
 
@@ -2794,6 +2793,9 @@ class PeechaLauncher(QWidget):
         self.link_warning_badge.setVisible(True)
 
         def _worker():
+            if sepidar:
+                from sync_app.core.scripts.sepidar.sepidar_common import compute_sepidar_unlinked_counts
+                return compute_sepidar_unlinked_counts(cfg)
             from sync_app.core.auto_sync_scope import compute_unlinked_counts
             return compute_unlinked_counts(cfg)
 
