@@ -3552,6 +3552,37 @@ def _present_startup_window(window, label: str) -> None:
     if app is not None:
         app.processEvents()
 
+    # نکته‌ی مهمِ دوم (تاییدشده با تستِ واقعیِ کاربر): showNormal() از نظرِ
+    # خودِ Qt کار می‌کنه (isVisible/isMinimized/isActiveWindow همه درستن)،
+    # ولی وقتی پروسه از طریقِ launch-gui.cmd’s `start "" /MIN pythonw.exe`
+    # اجرا بشه (نه مستقیم از کنسول)، پنجره همچنان رویِ صفحه دیده نمی‌شه —
+    # نه تویِ تسک‌بار، نه Alt+Tab. این یعنی مشکل بعدِ لایه‌ی Qt و تویِ خودِ
+    # ویندوزه (احتمالاً محدودیتِ foreground-lock که SetForegroundWindow رو
+    # برایِ پروسه‌هایِ تازه‌اسپاون‌شده/بدونِ ورودیِ کاربر بی‌صدا رد می‌کنه،
+    # بدونِ اینکه Qt متوجه بشه). این‌جا مستقیم با WinAPI (نه windowFlagsِ
+    # Qt — پس هیچ ریسکِ بازسازیِ handleِ نیتیو نداره) یه‌بار دیگه به‌زور
+    # پنجره رو جلو می‌آریم: toggleِ HWND_TOPMOST/HWND_NOTOPMOST دقیقاً همون
+    # ترفندِ شناخته‌شده‌ست که ویندوز رو مجبور می‌کنه صرف‌نظر از
+    # foreground-lock، پنجره رو واقعاً رویِ صفحه بیاره.
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            hwnd = int(window.winId())
+            user32 = ctypes.windll.user32
+            SW_SHOW, SW_RESTORE = 5, 9
+            HWND_TOPMOST, HWND_NOTOPMOST = -1, -2
+            SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW = 0x0002, 0x0001, 0x0040
+            user32.ShowWindow(hwnd, SW_RESTORE)
+            user32.ShowWindow(hwnd, SW_SHOW)
+            fg_ok = bool(user32.SetForegroundWindow(hwnd))
+            user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)
+            user32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)
+            user32.BringWindowToTop(hwnd)
+            _boot_log(f"{label}: win32 force-show applied (SetForegroundWindow ok={fg_ok})")
+        except Exception as exc:
+            _boot_log(f"{label}: win32 force-show failed: {exc}")
+
     _startup_log.info("%s opened", label)
     _boot_log(
         f"{label}: post-show state — visible={window.isVisible()} "
