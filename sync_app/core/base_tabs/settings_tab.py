@@ -915,7 +915,8 @@ class SettingsTab(QWidget):
         confirm = QMessageBox.question(
             self, "تأیید بازیابی",
             "تنظیمات فعلی با این نسخه‌ی پشتیبان جایگزین می‌شود "
-            "(خودِ حالت فعلی هم قبلش پشتیبان گرفته می‌شود). ادامه می‌دهید؟",
+            "(خودِ حالت فعلی هم قبلش پشتیبان گرفته می‌شود). بلافاصله بعدِ بازیابی، "
+            "برنامه خودکار بسته و دوباره باز می‌شود تا مقادیرِ جدید بارگذاری شوند. ادامه می‌دهید؟",
             QMessageBox.Yes | QMessageBox.No,
         )
         if confirm != QMessageBox.Yes:
@@ -924,13 +925,20 @@ class SettingsTab(QWidget):
         try:
             _, config_file = _candidate_pairs()[0]
             restore_config_backup(backup_path, config_file)
-            QMessageBox.information(
-                self, "انجام شد",
-                "تنظیمات بازیابی شد. لطفاً برنامه را ببندید و دوباره باز کنید تا مقادیر جدید بارگذاری شوند.",
-            )
-            self._refresh_backup_list()
         except Exception as exc:
             QMessageBox.critical(self, "خطا در بازیابی", str(exc))
+            return
+
+        # قبلاً این‌جا فقط یه پیامِ اطلاع‌رسانی نشون داده می‌شد و از کاربر
+        # می‌خواستیم دستی برنامه رو ببنده/باز کنه — چون تنظیماتِ درحافظه
+        # (خودِ این تب و بقیه‌ی تب‌هایِ باز) هنوز نسخه‌ی قبل از بازیابی رو
+        # نگه می‌دارن، خیلی وقتا کاربر این مرحله رو نادیده می‌گرفت و به نظر
+        # می‌رسید بازیابی «هیچ اثری نداشته». حالا دقیقاً مثلِ تعویضِ پروفایل
+        # (که از همین restart_application استفاده می‌کنه)، خودکار ریستارت
+        # می‌کنیم تا نسخه‌یِ بازیابی‌شده قطعاً بارگذاری بشه.
+        from sync_app.core.app_restart import restart_application
+
+        restart_application()
 
     def _resolve_sql_auth_mode_for_save(self, existing_config):
         auth_mode = self._last_success_sql_auth_mode
@@ -2259,7 +2267,8 @@ class SettingsTab(QWidget):
         backup_layout = QVBoxLayout()
         backup_hint = QLabel(
             "قبل از هر ذخیره، یک نسخه از تنظیمات قبلی خودکار نگه داشته می‌شود "
-            "(آخرین ۱۵ نسخه). اگر تنظیمات به‌اشتباه تغییر کرد، از اینجا برگردانید."
+            "(۲۰ نسخه‌ی اخیر + حداقل یک نسخه در روز تا ۳۰ روزِ گذشته). "
+            "اگر تنظیمات به‌اشتباه تغییر کرد، از اینجا برگردانید — بعدِ بازیابی، برنامه خودکار ریستارت می‌شود."
         )
         backup_hint.setWordWrap(True)
         backup_hint.setStyleSheet("color:#64748b; font-size:10px;")
