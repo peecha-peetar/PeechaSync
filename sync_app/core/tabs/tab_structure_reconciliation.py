@@ -496,40 +496,47 @@ class _SepidarSyncedSkuLoader(QThread):
 
     def run(self):
         try:
-            from sync_app.core.scripts.sepidar.sepidar_common import load_sepidar_map
-            from sync_app.core.scripts.sepidar.sepidar_productsync import fetch_site_products
+            # نکته‌یِ مهم (رفعِ باگِ گزارش‌شده): قبلاً این‌جا فقط SKUهایِ
+            # از قبل سینک‌شده (کلیدهایِ sepidar_product_map.json) رو
+            # می‌گشت — یعنی اگه کاربر هنوز محصولی رو سینک نکرده بود (یا
+            # اصلاً هدفِ تطبیقِ ساختاری همینه: پیداکردنِ کالاهایِ هنوز
+            # سینک‌نشده)، لیست کاملاً خالی می‌موند. حالا عیناً مثلِ
+            # _ErpSimpleSkuLoaderِ دژاوو (که مستقیم از Article می‌خونه)،
+            # مستقیم از خودِ دیتابیسِ سپیدار (POS.Item، از طریقِ همون
+            # fetch_sepidar_products_for_syncِ استفاده‌شده در سینکِ واقعی)
+            # می‌خونه — صرف‌نظر از اینکه قبلاً سینک شده یا نه.
+            from sync_app.core.scripts.sepidar.sepidar_productsync import (
+                fetch_sepidar_products_for_sync, _expand_sepidar_groups_with_descendants,
+            )
 
-            sepidar_map = load_sepidar_map("sepidar_product_map.json")
-            products = fetch_site_products(self.cfg)
-            by_sku = {str(p.get("sku") or "").strip(): p for p in products}
-            needle = str(self.query or "").strip().lower()
-
+            selected = [str(g).strip() for g in (self.cfg.get("SEPIDAR_SELECTED_GROUPS") or []) if str(g).strip()]
             category_code = str(self.category_code or "").strip()
+
             scope_ids = None
-            group_by_sku: dict = {}
-            if category_code:
+            if selected or category_code:
                 from sync_app.core.scripts.sepidar.sepidar_categorysync import fetch_sepidar_item_groups
-                from sync_app.core.scripts.sepidar.sepidar_productsync import (
-                    fetch_sepidar_products_for_sync, _expand_sepidar_groups_with_descendants,
-                )
 
                 groups = fetch_sepidar_item_groups(self.cfg)
-                scope_ids = _expand_sepidar_groups_with_descendants([category_code], groups)
-                erp_items = fetch_sepidar_products_for_sync(self.cfg)
-                group_by_sku = {it["sku"]: it.get("_item_group_id") for it in erp_items if it.get("sku")}
+                base_ids = _expand_sepidar_groups_with_descendants(selected, groups) if selected else None
+                cat_ids = _expand_sepidar_groups_with_descendants([category_code], groups) if category_code else None
+                if base_ids is not None and cat_ids is not None:
+                    scope_ids = base_ids & cat_ids
+                else:
+                    scope_ids = base_ids if base_ids is not None else cat_ids
+
+            items = fetch_sepidar_products_for_sync(self.cfg, selected_group_ids=scope_ids)
+            needle = str(self.query or "").strip().lower()
 
             out = []
-            for sku in sepidar_map:
-                if scope_ids is not None:
-                    gid = group_by_sku.get(sku)
-                    if gid is None or str(gid) not in scope_ids:
-                        continue
-                product = by_sku.get(sku) or {}
-                name = str(product.get("name") or "").strip()
+            for it in items:
+                sku = str(it.get("sku") or "").strip()
+                if not sku:
+                    continue
+                name = str(it.get("name") or "").strip()
                 if needle and needle not in sku.lower() and needle not in name.lower():
                     continue
-                price_raw = product.get("regular_price") or product.get("price") or ""
-                label = " | ".join(["ساده", sku, name or "—", str(price_raw) or "—"])
+                price = it.get("price") or 0
+                label = " | ".join(["ساده", sku, name or "—", f"{price:,.0f}" if price else "—"])
                 out.append((sku, label))
             out.sort(key=lambda pair: pair[1])
             self.done.emit(out[:200], "")
