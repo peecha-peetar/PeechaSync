@@ -149,21 +149,43 @@ def save_sepidar_map(filename: str, data: dict) -> None:
 
 
 def compute_sepidar_unlinked_counts(config: dict) -> dict:
-    """معادلِ auto_sync_scope.compute_unlinked_counts برایِ سپیدار/دشت —
-    چون آن تابع به SELECTED_SUB_GROUPS وابسته‌ست (مفهومی که سپیدار اصلاً
-    نداره)، این‌جا کلِ دسته‌بندی/محصولِ سایت رو مستقیم با نگاشتِ
-    sepidar_*_map.json مقایسه می‌کنه."""
-    from sync_app.core.scripts.sepidar.sepidar_categorysync import fetch_site_categories
-    from sync_app.core.scripts.sepidar.sepidar_productsync import fetch_site_products
+    """معادلِ auto_sync_scope.compute_unlinked_counts برایِ سپیدار/دشت.
 
-    category_map = load_sepidar_map("sepidar_category_map.json")
-    categories = fetch_site_categories(config)
-    categories_unlinked = sum(1 for c in categories if str(c["id"]) not in category_map)
-
-    product_map = load_sepidar_map("sepidar_product_map.json")
-    products = fetch_site_products(config)
-    products_unlinked = sum(
-        1 for p in products
-        if str(p.get("type") or "simple") == "simple" and str(p.get("sku") or "").strip() not in product_map
+    نسخه‌یِ قبلی از دوره‌یِ site→ERP (قبل از بازگشتِ جهتِ سینک) مونده
+    بود: محصولات/دسته‌بندیِ *سایت* رو در برابرِ نگاشت چک می‌کرد — که
+    جهتش برعکسِ سینکِ واقعیِ فعلی (ERP→سایت) بود و برایِ سایتی که هنوز
+    محصولاتِ سپیدار روش پوش نشدن، همیشه عددِ کاذبِ نزدیکِ صفر نشون
+    می‌داد (نه تعدادِ واقعیِ کالاهایِ سپیداری که هنوز لینک نشدن). حالا
+    دقیقاً همون دامنه‌ای رو چک می‌کنه که خودِ sync_categories_from_erp/
+    sync_products_from_erp واقعاً پوش می‌کنن (SEPIDAR_SELECTED_GROUPS +
+    گسترشِ لازم)، در برابرِ همون نگاشت‌ها — هم‌الگویِ
+    auto_sync_scope.compute_unlinked_countsِ دژاوو."""
+    from sync_app.core.scripts.sepidar.sepidar_categorysync import (
+        fetch_sepidar_item_groups,
+        _sepidar_group_sync_plan,
     )
+    from sync_app.core.scripts.sepidar.sepidar_productsync import (
+        fetch_sepidar_products_for_sync,
+        _expand_sepidar_groups_with_descendants,
+    )
+
+    selected = [str(g).strip() for g in (config.get("SEPIDAR_SELECTED_GROUPS") or []) if str(g).strip()]
+    if not selected:
+        return {"products": 0, "categories": 0}
+
+    groups = fetch_sepidar_item_groups(config)
+
+    category_map = load_sepidar_map("sepidar_category_map.json")  # {wc_id_str: item_group_id}
+    linked_group_ids = {str(v) for v in category_map.values()}
+    ordered, _broken = _sepidar_group_sync_plan(config, groups)
+    categories_unlinked = sum(1 for gid in ordered if gid not in linked_group_ids)
+
+    scope_ids = _expand_sepidar_groups_with_descendants(selected, groups)
+    items = fetch_sepidar_products_for_sync(config, selected_group_ids=scope_ids)
+    product_map = load_sepidar_map("sepidar_product_map.json")  # {sku: wc_product_id}
+    products_unlinked = sum(
+        1 for it in items
+        if str(it.get("sku") or "").strip() and str(it["sku"]).strip() not in product_map
+    )
+
     return {"products": products_unlinked, "categories": categories_unlinked}
