@@ -1264,7 +1264,7 @@ class SettingsTab(QWidget):
 
         self.erp_provider_combo = QComboBox()
         for _key, _label in ERP_PROVIDER_CHOICES:
-            suffix = " (فعلی)" if _key == "dejavu" else " (پیش‌نمایش آینده)"
+            suffix = " (پیش‌نمایش آینده)" if _key == "ghiaas" else ""
             self.erp_provider_combo.addItem(f"{_label}{suffix}", _key)
         current_provider = normalize_erp_provider_key(self.config.get("ERP_PROVIDER"))
         provider_idx = self.erp_provider_combo.findData(current_provider)
@@ -1372,10 +1372,10 @@ class SettingsTab(QWidget):
         app_layout.addRow(QLabel("قیمت ویژه:"), self.sale_price_enabled_cb)
         app_layout.addRow(QLabel("لیست قیمت ویژه:"), self.sale_price_combo)
         app_layout.addRow(QLabel("درصد افزایش قیمت ویژه:"), self.sale_price_markup_spin)
-        app_layout.addRow(QLabel("پوشه تصاویر ERP:"), self.erp_picture_root_input)
+        app_layout.addRow(QLabel("پوشه تصاویر برنامه حسابداری:"), self.erp_picture_root_input)
         app_layout.addRow(QLabel("تم نرم‌افزار:"), self.theme_combo)
         app_layout.addRow(QLabel("سایز فونت:"), self.font_size_combo)
-        app_layout.addRow(QLabel("نوعِ ERP:"), self.erp_provider_combo)
+        app_layout.addRow(QLabel("نوعِ برنامه حسابداری:"), self.erp_provider_combo)
         app_layout.addRow(QLabel("نام کاربری ورود:"), self.app_login_username_input)
         app_layout.addRow(QLabel("رمز عبور ورود:"), self.app_login_password_input)
         app_layout.addRow(QLabel("صفحه لاگین:"), self.login_screen_enabled_checkbox)
