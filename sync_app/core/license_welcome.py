@@ -36,7 +36,7 @@ class LicenseWelcomeWindow(QWidget):
     def __init__(self, on_activated=None):
         super().__init__()
         self._on_activated = on_activated
-        self.hwid = LicenseTab.get_hwid()
+        self.hwid = ""
         self._cfg = load_secure_config(None) or {}
         self._site_url = license_server_url(self._cfg)
         self._support_url = license_support_url(self._cfg)
@@ -45,8 +45,35 @@ class LicenseWelcomeWindow(QWidget):
         self.setLayoutDirection(Qt.RightToLeft)
         self._apply_theme()
         self._build_ui()
+        self.btn_activate.setEnabled(False)
         self._apply_status_copy()
+        self._fetch_hwid_async()
         QTimer.singleShot(600, self._try_refresh_existing_license)
+
+    def _fetch_hwid_async(self) -> None:
+        """LicenseTab.get_hwid() رویِ ویندوز با subprocess (PowerShell/wmic)
+        شناسه‌یِ سخت‌افزار رو می‌خونه — رویِ بعضی سیستم‌ها (مثلاً به‌خاطرِ
+        آنتی‌ویروس/EDR که رویِ ساختِ پردازش‌هایِ جدید تأخیر می‌اندازه) این
+        می‌تونه چند ثانیه یا بیشتر طول بکشه، و چون timeoutِ subprocess.run
+        فقط رویِ اجرایِ خودِ پردازش اثر داره (نه رویِ لحظه‌ی ساختش)، ممکنه
+        این تأخیر از timeoutِ تنظیم‌شده هم بیشتر بشه. قبلاً این‌جا (تویِ
+        __init__، قبل از نمایشِ خودِ پنجره) به‌صورتِ سینک صدا زده می‌شد —
+        یعنی کلِ پنجره تا رسیدنِ نتیجه اصلاً ظاهر نمی‌شد (باگِ «فرمِ لایسنس
+        اصلاً باز نمی‌شه»). حالا در پس‌زمینه اجرا می‌شه تا پنجره همیشه فوراً
+        ظاهر بشه، حتی اگه شناسه‌ی دستگاه چند ثانیه بعد برسه."""
+        from sync_app.core.threading_helper import run_in_thread
+
+        def _apply_hwid(hwid: str) -> None:
+            self.hwid = hwid or "GENERIC_HWID"
+            self.hwid_display.setText(self.hwid)
+            self.btn_activate.setEnabled(True)
+            self._apply_status_copy()
+
+        run_in_thread(
+            LicenseTab.get_hwid,
+            on_complete=_apply_hwid,
+            on_error=lambda _err: _apply_hwid("GENERIC_HWID"),
+        )
 
     def _try_refresh_existing_license(self) -> None:
         key = LicenseTab._load_license_key()
@@ -170,6 +197,7 @@ class LicenseWelcomeWindow(QWidget):
         self.hwid_display = QLineEdit(self.hwid)
         self.hwid_display.setObjectName("licenseWelcomeHwid")
         self.hwid_display.setReadOnly(True)
+        self.hwid_display.setPlaceholderText("در حال دریافت شناسه‌ی دستگاه...")
         hwid_row.addWidget(self.hwid_display, 1)
 
         copy_btn = QPushButton("کپی")
@@ -258,7 +286,11 @@ class LicenseWelcomeWindow(QWidget):
         return row
 
     def _apply_status_copy(self) -> None:
-        details = LicenseTab.get_license_details(self.hwid)
+        # get_license_details یه hwidِ خالی رو falsy می‌بینه و خودش دوباره
+        # LicenseTab.get_hwid() (همون subprocessِ کندِ ویندوزی) رو صدا
+        # می‌زنه — این‌جا (قبل از رسیدنِ نتیجه‌ی _fetch_hwid_async) باید
+        # جلوشو بگیریم، وگرنه همون بلاک‌شدنِ قبلی دوباره اتفاق می‌افته.
+        details = LicenseTab.get_license_details(self.hwid or "GENERIC_HWID")
         status = details.get("status") or "missing"
         hero = self.findChild(QFrame, "licenseWelcomeHero")
 
@@ -300,6 +332,9 @@ class LicenseWelcomeWindow(QWidget):
             hero.style().polish(hero)
 
     def _copy_hwid(self) -> None:
+        if not self.hwid:
+            QMessageBox.information(self, "لطفاً صبر کنید", "شناسه‌ی دستگاه هنوز در حال دریافت است — چند لحظه دیگر دوباره امتحان کنید.")
+            return
         QApplication.clipboard().setText(self.hwid)
         QMessageBox.information(self, "کپی شد", "شناسه دستگاه در کلیپ‌بورد کپی شد.\nمی‌توانید در تیکت سایت پیچا بچسبانید.")
 
