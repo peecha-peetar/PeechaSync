@@ -3533,13 +3533,30 @@ def _present_startup_window(window, label: str) -> None:
     # پنجره‌های بی‌فریم اصلاح شده بود (با toggle کردنِ WindowStaysOnTopHint)؛
     # حالا برای همه‌ی پنجره‌ها یکسان شده: فقط یک بار show/raise/activate،
     # بدونِ دست‌زدن به WindowStaysOnTopHint.
-    window.show()
+    #
+    # نکته‌ی مهمِ ویندوز: launch-gui.cmd پروسه رو با `start "" /MIN` اجرا
+    # می‌کنه (برایِ جلوگیری از فلَشِ یه کنسول/پنجره‌ی خام حینِ بالا اومدنِ
+    # پایتون) — یعنی STARTUPINFOِ خودِ پروسه SW_SHOWMINNOACTIVE رو
+    # درخواست کرده. ویندوز این درخواست رو رویِ **اولین** پنجره‌ای که این
+    # پروسه نشون می‌ده اعمال می‌کنه، حتی اگه Qt صریحاً show() رو صدا زده
+    # باشه — یعنی اولین فرم (چه لاگین، چه فعال‌سازیِ لایسنس، بسته به اینکه
+    # کدوم اول باز بشه) ممکنه Minimized/نامرئی بمونه بدونِ هیچ خطا یا
+    # نشونه‌ای تویِ لاگ (باگِ گزارش‌شده‌یِ «فرمِ لایسنس اصلاً دیده نمی‌شه»،
+    # حتی تویِ Alt+Tab). showNormal() این حالتِ به‌ارث‌رسیده رو صریحاً پاک
+    # می‌کنه — برخلافِ تغییرِ windowFlags، فقط windowState رو عوض می‌کنه و
+    # نیازی به بازساختِ handleِ نیتیو نداره، پس با نکته‌ی بالا تداخلی نداره.
+    window.setWindowState(window.windowState() & ~Qt.WindowMinimized)
+    window.showNormal()
     window.raise_()
     window.activateWindow()
     if app is not None:
         app.processEvents()
 
     _startup_log.info("%s opened", label)
+    _boot_log(
+        f"{label}: post-show state — visible={window.isVisible()} "
+        f"minimized={window.isMinimized()} active={window.isActiveWindow()}"
+    )
     if os.environ.get("PEECHA_DEBUG_CONSOLE", "").strip().lower() in ("1", "true", "yes"):
         print(f"[INFO] {label} opened - check taskbar or Alt+Tab", flush=True)
 
