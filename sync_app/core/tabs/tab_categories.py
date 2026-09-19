@@ -549,6 +549,14 @@ class CategoryTab(QWidget):
         self.subgroups_only_checkbox.toggled.connect(self._on_subgroups_only_toggled)
         layout.addWidget(self.subgroups_only_checkbox)
 
+        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+
+        if is_sepidar_provider(self.config):
+            # POS.ItemGroupِ سپیدار/دشت تقسیمِ ثابتِ «گروهِ اصلی/زیرگروه» رو
+            # نداره (یک درختِ عمقِ دلخواهه) — این چک‌باکس فقط برایِ مدلِ
+            # ۲سطحیِ دژاوو معنا داره.
+            self.subgroups_only_checkbox.setVisible(False)
+
         from sync_app.core.integrations.erp_provider import erp_provider_label
 
         erp_label = erp_provider_label(self.config)
@@ -818,22 +826,8 @@ class CategoryTab(QWidget):
         from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
 
         if is_sepidar_provider(self.config):
-            from sync_app.core.integrations.erp_provider import erp_provider_label
-
-            self.tree.clear()
-            self.selected_list.clear()
             self.tree.blockSignals(False)
-            self._set_categories_status(
-                "info",
-                f"ℹ️ این تب مخصوصِ دژاوو/هلوعه — دسته‌بندی‌هایِ سایت به‌صورتِ خودکار به {erp_provider_label(self.config)} منتقل می‌شوند (تبِ «همگام‌سازیِ خودکار»).",
-            )
-            if manual:
-                QMessageBox.information(
-                    self,
-                    "غیرقابل‌استفاده برایِ این provider",
-                    f"این تب مخصوصِ دژاوو/هلوعه (جدولِ M_Group/S_Group). برایِ {erp_provider_label(self.config)}، "
-                    "دسته‌بندی‌هایِ سایت به‌صورتِ خودکار به آن منتقل می‌شوند — از تبِ «همگام‌سازیِ خودکار» استفاده کنید.",
-                )
+            self._load_groups_sepidar(manual=manual)
             return
 
         previously_selected_sub_groups = set(self.config.get("SELECTED_SUB_GROUPS", []))
@@ -968,6 +962,397 @@ class CategoryTab(QWidget):
         if self._wc_slug_map:
             self._apply_wc_status_to_tree()
 
+    # ------------------------------------------------------------------
+    # سپیدار/دشت — درختِ POS.ItemGroup (عمقِ دلخواه، برخلافِ ۲سطحِ ثابتِ
+    # M_Group/S_Group دژاوو). این بخش کاملاً مستقل از منطقِ بالا/پایینِ
+    # دژاووعه — فقط self.tree/self.selected_list مشترکن؛ ورودی‌هایِ
+    # مشترکِ سیگنال (_handle_item_changed، _select_all/_none_tree_groups،
+    # _filter_tree، load_groups، sync_categories) بالاتر شاخه می‌زنن و
+    # همه‌یِ منطقِ زیر رو صدا می‌زنن — هیچ مسیرِ دژاوو دست‌نخورده نمی‌مونه.
+    # ------------------------------------------------------------------
+    def _load_groups_sepidar(self, manual=False):
+        if self._loading_groups or self._ops_busy():
+            return
+        if manual and not ensure_connectivity(self, need_sql=True, need_wc=False):
+            return
+
+        self._groups_load_generation += 1
+        generation = self._groups_load_generation
+        self._begin_groups_load(manual=manual)
+
+        def _worker():
+            from sync_app.core.scripts.sepidar.sepidar_categorysync import fetch_sepidar_item_groups
+
+            return fetch_sepidar_item_groups(self.config)
+
+        def _done(groups):
+            if generation != self._groups_load_generation:
+                return
+            try:
+                groups = groups or []
+                self._apply_sepidar_groups_payload(groups)
+                selected_count = len(
+                    [g for g in self.config.get("SEPIDAR_SELECTED_GROUPS", []) if str(g).strip()]
+                )
+                self._set_categories_status("success", f"✅ {len(groups)} گروهِ کالا ({selected_count} انتخاب‌شده)")
+                log.info(f"✅ بروزرسانیِ گروه‌هایِ سپیدار: {len(groups)} گروه، {selected_count} انتخاب‌شده")
+                self._end_groups_load()
+                if manual:
+                    QMessageBox.information(
+                        self, "بروزرسانی موفق",
+                        f"{len(groups)} گروهِ کالا از سپیدار/دشت بارگذاری شد.\nتعدادِ انتخاب‌شده: {selected_count}",
+                    )
+            except Exception as e:
+                err = format_db_error(e)
+                self._set_categories_status("error", f"❌ خطا در بارگذاری: {err[:120]}")
+                log.error(f"❌ خطا در بارگذاریِ گروه‌هایِ سپیدار: {err}")
+                self._end_groups_load()
+                if manual:
+                    QMessageBox.critical(self, "خطا در بارگذاریِ گروه‌ها", err)
+
+        def _fail(error_msg):
+            if generation != self._groups_load_generation:
+                return
+            err = format_db_error(Exception(str(error_msg)))
+            append_system_log("categories", f"خطا در بارگذاری گروه‌ها: {err}", level="ERROR")
+            self._set_categories_status("error", f"❌ خطا در بارگذاری گروه‌ها: {err[:120]}")
+            log.error(f"❌ خطا در بارگذاریِ گروه‌هایِ سپیدار: {err}")
+            self._end_groups_load()
+            if manual:
+                QMessageBox.critical(self, "خطا در بارگذاری گروه‌ها", err)
+
+        run_in_thread(_worker, on_complete=_done, on_error=_fail)
+
+    def _apply_sepidar_groups_payload(self, groups):
+        from sync_app.core.scripts.sepidar.sepidar_categorysync import _ROOT_PARENT_REF
+
+        self.config = load_secure_config(None) or {}
+        selected = {str(g).strip() for g in self.config.get("SEPIDAR_SELECTED_GROUPS", []) if str(g).strip()}
+
+        by_id = {str(g["id"]): g for g in groups}
+        self._sepidar_groups_by_id = by_id
+
+        self.tree.blockSignals(True)
+        try:
+            self.tree.clear()
+            self.selected_list.clear()
+
+            children_map: dict[str, list[str]] = {}
+            true_roots: list[str] = []
+            for gid, g in by_id.items():
+                parent_ref = g.get("parent_ref")
+                parent_key = str(parent_ref) if parent_ref is not None else None
+                if parent_key and parent_key != str(_ROOT_PARENT_REF) and parent_key in by_id and parent_key != gid:
+                    children_map.setdefault(parent_key, []).append(gid)
+                else:
+                    true_roots.append(gid)
+
+            # اگه یک زنجیره‌یِ کاملاً چرخه‌ای هیچ ریشه‌یِ واقعی‌یی نداره (نه
+            # مستقیم، نه از طریقِ زنجیره‌یِ والدها)، هیچ‌کدوم از گره‌هاش از
+            # ریشه‌ها قابلِ رسیدن نمی‌شن — بدونِ این فالبک، از درخت کلاً حذف
+            # می‌شدن، بی‌سروصدا. برایِ اینکه هیچ گروهی از دیدِ کاربر گم نشه،
+            # این‌جور گره‌هایی که از ریشه‌یِ واقعی نمی‌رسیم بهشون، خودشون هم
+            # به‌عنوانِ ریشه‌یِ (یتیمِ) جداگانه نمایش داده می‌شن.
+            reached: set[str] = set()
+            stack = list(true_roots)
+            while stack:
+                node = stack.pop()
+                if node in reached:
+                    continue
+                reached.add(node)
+                stack.extend(children_map.get(node, []))
+            orphan_roots = [gid for gid in by_id if gid not in reached]
+            roots = true_roots + orphan_roots
+
+            tree_items: dict[str, QTreeWidgetItem] = {}
+            rendered: set[str] = set()
+
+            def _add(gid, parent_widget, seen):
+                if gid in seen or gid in rendered:  # گاردِ چرخه/تکرار — فقط در نمایش، بدونِ کرش
+                    return
+                seen = seen | {gid}
+                rendered.add(gid)
+                g = by_id[gid]
+                title = g.get("title") or f"گروه {gid}"
+                item = QTreeWidgetItem(parent_widget)
+                item.setData(0, Qt.UserRole, title)
+                item.setData(0, Qt.UserRole + 1, gid)
+                item.setText(0, self._format_group_text(title, gid))
+                item.setTextAlignment(0, Qt.AlignRight | Qt.AlignVCenter)
+                item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+                item.setCheckState(0, Qt.Checked if gid in selected else Qt.Unchecked)
+                tree_items[gid] = item
+                for child_gid in sorted(children_map.get(gid, []), key=lambda cid: by_id[cid].get("title") or ""):
+                    _add(child_gid, item, seen)
+
+            for gid in sorted(roots, key=lambda rid: by_id[rid].get("title") or ""):
+                _add(gid, self.tree, set())
+
+            # بازحسابِ tri-state از پایین به بالا (عمیق‌ترین‌ها اول، تا وقتیِ
+            # به والدِ کم‌عمق‌تر می‌رسیم، وضعیتِ فرزندانش قبلاً نهایی شده باشه)
+            for gid in sorted(tree_items, key=lambda g: -self._sepidar_item_depth(g, by_id)):
+                item = tree_items[gid]
+                if item.childCount():
+                    self._recompute_sepidar_parent_state(item)
+        finally:
+            self.tree.blockSignals(False)
+
+        self._populate_selected_list_sepidar(self._collect_checked_sepidar_ids())
+
+    def _sepidar_item_depth(self, gid, by_id) -> int:
+        from sync_app.core.scripts.sepidar.sepidar_categorysync import _ROOT_PARENT_REF
+
+        depth = 0
+        cur, seen = gid, {gid}
+        while cur in by_id:
+            parent_ref = by_id[cur].get("parent_ref")
+            parent_key = str(parent_ref) if parent_ref is not None else None
+            if (
+                parent_key is None
+                or parent_key == str(_ROOT_PARENT_REF)
+                or parent_key not in by_id
+                or parent_key in seen
+            ):
+                break
+            seen.add(parent_key)
+            cur = parent_key
+            depth += 1
+        return depth
+
+    def _recompute_sepidar_parent_state(self, parent_item):
+        total = parent_item.childCount()
+        if total == 0:
+            return
+        checked = sum(1 for i in range(total) if parent_item.child(i).checkState(0) == Qt.Checked)
+        if checked == 0:
+            parent_item.setCheckState(0, Qt.Unchecked)
+        elif checked == total:
+            parent_item.setCheckState(0, Qt.Checked)
+        else:
+            parent_item.setCheckState(0, Qt.PartiallyChecked)
+
+    def _cascade_sepidar_check_state(self, item, state):
+        for i in range(item.childCount()):
+            child = item.child(i)
+            child.setCheckState(0, state)
+            self._cascade_sepidar_check_state(child, state)
+
+    def _recompute_sepidar_ancestors_state(self, item):
+        cur = item
+        while cur is not None:
+            self._recompute_sepidar_parent_state(cur)
+            cur = cur.parent()
+
+    def _handle_item_changed_sepidar(self, item, column):
+        if getattr(self, "_tree_bulk_update", False):
+            return
+        if item.childCount() > 0:
+            check_state = item.checkState(column)
+            self.tree.blockSignals(True)
+            try:
+                self._cascade_sepidar_check_state(item, check_state)
+            finally:
+                self.tree.blockSignals(False)
+            self.save_selected_groups_sepidar()
+            return
+
+        parent = item.parent()
+        if parent is not None:
+            self.tree.blockSignals(True)
+            try:
+                self._recompute_sepidar_ancestors_state(parent)
+            finally:
+                self.tree.blockSignals(False)
+
+        self.save_selected_groups_sepidar()
+
+    def _iter_visible_sepidar_items(self):
+        def _walk(item):
+            for i in range(item.childCount()):
+                child = item.child(i)
+                if not child.isHidden():
+                    yield child
+                    yield from _walk(child)
+
+        yield from _walk(self.tree.invisibleRootItem())
+
+    def _recompute_all_sepidar_parent_states(self):
+        by_id = getattr(self, "_sepidar_groups_by_id", {}) or {}
+        items_with_children = []
+
+        def _collect(item):
+            for i in range(item.childCount()):
+                child = item.child(i)
+                if child.childCount() > 0:
+                    items_with_children.append(child)
+                _collect(child)
+
+        _collect(self.tree.invisibleRootItem())
+        items_with_children.sort(key=lambda it: -self._sepidar_item_depth(it.data(0, Qt.UserRole + 1), by_id))
+        for item in items_with_children:
+            self._recompute_sepidar_parent_state(item)
+
+    def _select_all_tree_groups_sepidar(self):
+        if self._ops_busy():
+            return
+        self._tree_bulk_update = True
+        self.tree.blockSignals(True)
+        try:
+            for item in self._iter_visible_sepidar_items():
+                item.setCheckState(0, Qt.Checked)
+            self._recompute_all_sepidar_parent_states()
+        finally:
+            self.tree.blockSignals(False)
+            self._tree_bulk_update = False
+        self.save_selected_groups_sepidar()
+
+    def _select_none_tree_groups_sepidar(self):
+        if self._ops_busy():
+            return
+        self._tree_bulk_update = True
+        self.tree.blockSignals(True)
+        try:
+            for item in self._iter_visible_sepidar_items():
+                item.setCheckState(0, Qt.Unchecked)
+            self._recompute_all_sepidar_parent_states()
+        finally:
+            self.tree.blockSignals(False)
+            self._tree_bulk_update = False
+        self.save_selected_groups_sepidar()
+
+    def _filter_tree_sepidar(self, text):
+        search = (text or "").strip().lower()
+
+        def _apply(item) -> bool:
+            name = item.data(0, Qt.UserRole) or ""
+            code = item.data(0, Qt.UserRole + 1) or ""
+            self_match = not search or search in str(name).lower() or search in str(code).lower()
+            any_child_visible = False
+            for i in range(item.childCount()):
+                if _apply(item.child(i)):
+                    any_child_visible = True
+            visible = self_match or any_child_visible
+            item.setHidden(not visible)
+            if search and any_child_visible:
+                item.setExpanded(True)
+            return visible
+
+        root = self.tree.invisibleRootItem()
+        for i in range(root.childCount()):
+            _apply(root.child(i))
+
+    def _collect_checked_sepidar_ids(self) -> list[str]:
+        ids: list[str] = []
+
+        def _walk(item):
+            for i in range(item.childCount()):
+                child = item.child(i)
+                gid = child.data(0, Qt.UserRole + 1)
+                if gid and child.checkState(0) == Qt.Checked:
+                    ids.append(str(gid))
+                _walk(child)
+
+        _walk(self.tree.invisibleRootItem())
+        return ids
+
+    def _populate_selected_list_sepidar(self, selected_ids):
+        self.selected_list.clear()
+        by_id = getattr(self, "_sepidar_groups_by_id", {}) or {}
+        for gid in selected_ids:
+            title = (by_id.get(gid) or {}).get("title") or gid
+            item = QListWidgetItem(self._rtl_display(f"{title} (کد: {gid})"))
+            self.selected_list.addItem(item)
+
+    def save_selected_groups_sepidar(self):
+        selected_ids = self._collect_checked_sepidar_ids()
+        self.config["SEPIDAR_SELECTED_GROUPS"] = selected_ids
+        save_secure_config(self.config)
+        self._populate_selected_list_sepidar(selected_ids)
+
+        from sync_app.core.tab_operation_guard import run_sql_reload_if_active
+
+        if self.product_tab_ref:
+            run_sql_reload_if_active(self.product_tab_ref, self.product_tab_ref.load_products)
+
+    def _sync_categories_sepidar(self):
+        if bool(self.config.get("DISABLE_ERP_CATEGORY_SYNC", False)):
+            QMessageBox.information(
+                self, "غیرفعال",
+                "سینکِ خودکارِ دسته‌بندیِ ERP خاموشه (تیکِ «غیرفعال‌کردنِ سینکِ خودکارِ دسته‌بندی» "
+                "در همین تب زده شده).\nبرایِ ارسال، اول تیک را بردارید.",
+            )
+            return
+        selected = [g for g in self.config.get("SEPIDAR_SELECTED_GROUPS", []) if str(g).strip()]
+        if not selected:
+            QMessageBox.warning(
+                self, "هشدار",
+                "هیچ گروهی انتخاب نشده است.\nلطفاً ابتدا گروه‌های مورد نظر را از درخت بالا تیک بزنید.",
+            )
+            return
+
+        if not wait_for_connectivity_dialog(
+            self, need_sql=True, need_wc=True, operation_label="همگام‌سازی دسته‌بندی‌ها",
+        ):
+            self._set_categories_status("warning", "⚠️ اتصال SQL یا فروشگاه برقرار نشد — دوباره تلاش کنید.")
+            return
+
+        from sync_app.core.scripts.sepidar.sepidar_categorysync import sync_categories_from_erp
+
+        def _job():
+            return sync_categories_from_erp(self.config)
+
+        def _ok(result=None):
+            self._end_categories_sync_ui()
+            self.refresh_logs()
+            stats = result if isinstance(result, dict) else {}
+            synced = stats.get("synced", 0)
+            total = stats.get("total", synced)
+            failed = stats.get("failed") or []
+            update_failed = stats.get("update_failed") or []
+            broken = stats.get("broken_groups") or []
+
+            if failed and synced == 0:
+                names = "، ".join(str(x) for x in failed[:5])
+                QMessageBox.warning(self, "همگام‌سازی ناموفق", f"هیچ دسته‌ای در فروشگاه ثبت نشد.\nخطا در: {names}")
+                self._set_categories_status("error", "❌ همگام‌سازی ناموفق بود")
+            elif failed:
+                names = "، ".join(str(x) for x in failed[:5])
+                QMessageBox.warning(self, "همگام‌سازی ناقص", f"{synced} از {total} گروه سینک شد.\nخطا در: {names}")
+                self._set_categories_status("warning", f"⚠️ {synced} از {total} گروه سینک شد")
+            elif synced == 0 and total == 0:
+                self._set_categories_status("ready", "ℹ️ هیچ گروهی برایِ سینک نبود.")
+            else:
+                msg = f"✅ {synced} از {total} گروه سینک شد."
+                if update_failed:
+                    names = "، ".join(str(x) for x in update_failed[:3])
+                    msg += f"\n⚠️ به‌روزرسانیِ ({names}) ناموفق بود — دسته‌ها رویِ سایت موجودن."
+                if broken:
+                    msg += (
+                        f"\n⚠️ {len(broken)} زنجیره‌یِ گروه به‌خاطرِ ارجاعِ حلقوی رد شد — "
+                        "لطفاً ساختارِ POS.ItemGroup را در سپیدار بررسی کنید."
+                    )
+                QMessageBox.information(self, "پایان", msg)
+                self._set_categories_status("success", f"✅ {synced} از {total} گروه سینک شد")
+
+        def _err(msg):
+            self._end_categories_sync_ui()
+            self.refresh_logs()
+            if "متوقف شد" in str(msg):
+                self._set_categories_status("warning", "⏹ همگام‌سازی متوقف شد.")
+                QMessageBox.information(self, "توقف", str(msg))
+            else:
+                self._set_categories_status("error", f"❌ {str(msg).split(chr(10))[0][:120]}")
+                QMessageBox.critical(self, "خطا", str(msg))
+
+        if not run_background_sync(
+            self, _job, on_success=_ok, on_error=_err, need_sql=True, need_wc=True, wait_on_disconnect=True,
+        ):
+            thread = getattr(self, "_peecha_bg_sync_thread", None)
+            if thread is not None and thread.isRunning():
+                QMessageBox.information(self, "در حال اجرا", "عملیات دیگری در جریان است.")
+            return
+        self._begin_categories_sync_ui()
+
     def _on_tree_item_clicked(self, item, column):
         """کلیک روی ردیف گروه اصلی - cascade توسط _handle_item_changed انجام می‌شود"""
         # ⚠️ نباید اینجا toggle کنیم: itemChanged قبل از itemClicked فایر می‌شه
@@ -977,6 +1362,11 @@ class CategoryTab(QWidget):
 
     def _handle_item_changed(self, item, column):
         """وقتی تیک گروه اصلی زده می‌شود، همه فرزندانش انتخاب/رد انتخاب می‌شوند"""
+        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+
+        if is_sepidar_provider(self.config):
+            self._handle_item_changed_sepidar(item, column)
+            return
         if getattr(self, "_tree_bulk_update", False):
             return
         is_parent = item.childCount() > 0
@@ -1019,6 +1409,11 @@ class CategoryTab(QWidget):
                     yield parent, child
 
     def _select_all_tree_groups(self):
+        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+
+        if is_sepidar_provider(self.config):
+            self._select_all_tree_groups_sepidar()
+            return
         if self._ops_busy():
             return
         self._tree_bulk_update = True
@@ -1054,6 +1449,11 @@ class CategoryTab(QWidget):
         self.save_selected_groups()
 
     def _select_none_tree_groups(self):
+        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+
+        if is_sepidar_provider(self.config):
+            self._select_none_tree_groups_sepidar()
+            return
         if self._ops_busy():
             return
         self._tree_bulk_update = True
@@ -1086,6 +1486,11 @@ class CategoryTab(QWidget):
 
     def _filter_tree(self, text):
         """فیلتر کردن درخت بر اساس متن جستجو + وضعیت لینک فروشگاه"""
+        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+
+        if is_sepidar_provider(self.config):
+            self._filter_tree_sepidar(text)
+            return
         search = text.strip().lower()
         link_mode = self.category_link_filter.currentData() if hasattr(self, "category_link_filter") else "all"
 
@@ -1439,6 +1844,16 @@ class CategoryTab(QWidget):
 
     def _start_wc_check(self):
         """دریافت دسته‌بندی‌های فروشگاه و مقایسه نامک با درخت SQL"""
+        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+
+        if is_sepidar_provider(self.config):
+            QMessageBox.information(
+                self, "به‌زودی",
+                "بررسیِ وضعیتِ تطبیقِ نامک/نام برایِ سپیدار/دشت هنوز پیاده‌سازی نشده — "
+                "برایِ دیدنِ اینکه کدوم گروه‌ها رویِ سایت سینک شدن، دکمه‌یِ «📤 همگام‌سازی» را بزنید؛ "
+                "نتیجه‌یِ سینک نشون می‌ده کدوم گروه‌ها موفق بودن.",
+            )
+            return
         if not ensure_connectivity(self, need_sql=False, need_wc=True, live=True):
             return
         if self._wc_check_thread is not None:
@@ -1793,15 +2208,7 @@ class CategoryTab(QWidget):
         from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
 
         if is_sepidar_provider(self.config):
-            from sync_app.core.integrations.erp_provider import erp_provider_label
-
-            QMessageBox.information(
-                self,
-                "غیرقابل‌استفاده برایِ این provider",
-                f"این تب مخصوصِ دژاوو/هلوعه (انتخابِ دستیِ گروه‌ها). برایِ {erp_provider_label(self.config)}، "
-                "دسته‌بندی‌هایِ سایت به‌صورتِ خودکار به آن منتقل می‌شوند — از تبِ «همگام‌سازیِ خودکار» "
-                "استفاده کنید.",
-            )
+            self._sync_categories_sepidar()
             return
         if bool(self.config.get("DISABLE_ERP_CATEGORY_SYNC", False)):
             from sync_app.core.integrations.erp_provider import erp_provider_label

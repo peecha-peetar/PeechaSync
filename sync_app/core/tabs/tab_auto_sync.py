@@ -157,7 +157,7 @@ SEPIDAR_AUTO_SYNC_JOBS: tuple[AutoSyncJob, ...] = (
         "sepidar_categorysync",
         "دسته‌بندی‌ها",
         "📂",
-        "گروه/زیرگروهِ کالا از دسته‌بندیِ سایت",
+        "دسته‌بندیِ سایت از POS.ItemGroup",
         sepidar_categorysync.main,
     ),
     AutoSyncJob(
