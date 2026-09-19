@@ -1756,6 +1756,14 @@ class PeechaLauncher(QWidget):
             tab.invalidate_stale_sql_data()
             log("• تطبیق: داده قبلی باطل شد")
 
+        # نشانِ «⚠️ N مورد بدون لینک» تویِ هدرِ برنامه فقط موقعِ استارتِ
+        # برنامه (بعدِ ۹ ثانیه) و بعدش هر ۱۰ دقیقه محاسبه می‌شه — بدونِ این
+        # فراخوانی، بعدِ سوئیچِ زنده‌یِ ERP/دیتابیس (بدونِ ری‌استارتِ برنامه)،
+        # همچنان عددِ محاسبه‌شده‌یِ قبل از سوئیچ (یا حتی هیچی، اگه هنوز
+        # نوبتِ اولین محاسبه نرسیده بود) رو نشون می‌داد.
+        self._refresh_link_warning()
+        log("• هشدارِ موارد بدون لینک (هدر): در حال بازمحاسبه")
+
     def reload_wc_dependent_tabs(self, log_callback=None):
         """اعمال WC_URL و کلیدهای سایت فعال در همه تب‌های باز."""
         from sync_app.core.secure_config_loader import load_secure_config
@@ -1800,6 +1808,11 @@ class PeechaLauncher(QWidget):
 
         self.refresh_header_branding()
         self.refresh_wc_connectivity(show_pending=True)
+        # همون دلیلِ reload_sql_dependent_tabs — سوئیچِ سایت هم رویِ
+        # نتیجه‌یِ fetch_site_products/fetch_site_categoriesِ استفاده‌شده
+        # تویِ این نشان اثر داره.
+        self._refresh_link_warning()
+        log("• هشدارِ موارد بدون لینک (هدر): در حال بازمحاسبه")
 
     def _tab_attr_for_widget(self, widget):
         if widget is None:
