@@ -219,6 +219,18 @@ def fetch_sepidar_products_for_sync(config: dict | None = None, selected_group_i
         for r in cursor.fetchall():
             if r[0] is not None and r[1] is not None:
                 group_by_item[int(r[0])] = int(r[1])
+
+        # POS.ItemImage — یه کالا می‌تونه چند تصویر داشته باشه (بدونِ ستونِ
+        # مسیر/path، فقط varbinary خام)؛ معادلِ HLOpictures دژاوو.
+        images_by_item: dict[int, list[bytes]] = {}
+        try:
+            cursor.execute("SELECT ItemRef, Image FROM POS.ItemImage ORDER BY ItemRef, ItemImageID")
+            for r in cursor.fetchall():
+                if r[0] is None or not r[1]:
+                    continue
+                images_by_item.setdefault(int(r[0]), []).append(bytes(r[1]))
+        except Exception:
+            images_by_item = {}
     finally:
         conn.close()
 
@@ -229,15 +241,17 @@ def fetch_sepidar_products_for_sync(config: dict | None = None, selected_group_i
         if selected_group_ids is not None:
             if item_group_id is None or str(item_group_id) not in selected_group_ids:
                 continue
+        erp_images = [(blob, "") for blob in images_by_item.get(item_id, [])]
+        first_blob = erp_images[0][0] if erp_images else b""
         rows.append({
             "sku": str(r[1] or "").strip(),
             "name": str(r[2] or "").strip(),
             "price": float(r[3]) if r[3] is not None else 0.0,
             "stock": stock_by_item.get(item_id, 0),
-            "picture_blob": b"",
+            "picture_blob": first_blob,
             "picture_path": "",
-            "erp_images": [],
-            "erp_image_count": 0,
+            "erp_images": erp_images,
+            "erp_image_count": len(erp_images),
             "is_variant": False,
             "_item_id": item_id,
             "_item_group_id": item_group_id,
