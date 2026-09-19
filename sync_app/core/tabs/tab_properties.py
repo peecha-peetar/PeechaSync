@@ -73,7 +73,11 @@ class PropertiesTab(SyncTab):
         )
         self._log_poll_timer.start()
 
-        self.properties_preview_label = QLabel("🧩 تعاریف سطح بالای ویژگی‌ها در دژاوو:")
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+
+        self.properties_preview_label = QLabel(
+            f"🧩 تعاریف سطح بالای ویژگی‌ها در {erp_provider_label(load_secure_config(None))}:"
+        )
         self.properties_preview_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self.properties_preview_label.setLayoutDirection(Qt.RightToLeft)
         self.properties_preview_label.setStyleSheet("font-weight: 700;")
@@ -84,8 +88,6 @@ class PropertiesTab(SyncTab):
         self.properties_list.setItemDelegate(RightAlignedItemDelegate(self.properties_list))
 
         self.properties_refresh_btn = CompactCaptionButton("🔄 بازخوانی تعاریف ویژگی‌ها")
-        from sync_app.core.integrations.erp_provider import erp_provider_label
-
         self.properties_refresh_btn.setToolTip(
             f"بازخوانی تعاریف ویژگی‌ها از {erp_provider_label(load_secure_config(None))}"
         )

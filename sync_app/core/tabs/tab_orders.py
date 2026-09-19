@@ -96,6 +96,17 @@ class OrderTab(SitePreviewLoaderMixin, SyncTab):
         self.order_date_to.dateChanged.connect(
             lambda: self.load_site_orders(silent=False, show_error_dialog=False)
         )
+
+        # انتخابِ دستیِ سفارش‌ها — پیش‌فرض همه تیک‌خورده (رفتارِ قبلی: ارسالِ
+        # همه‌یِ سفارش‌هایِ در حالِ نمایش)، ولی کاربر می‌تونه با فیلترهایِ
+        # بالا + این دو دکمه/تیکِ هر ردیف، فقط زیرمجموعه‌ای رو دستی بفرسته.
+        self.orders_select_all_btn = CompactCaptionButton("☑️ انتخابِ همه")
+        self.orders_select_all_btn.clicked.connect(self._select_all_orders)
+        filter_row.addWidget(self.orders_select_all_btn)
+        self.orders_select_none_btn = CompactCaptionButton("☐ هیچ‌کدام")
+        self.orders_select_none_btn.clicked.connect(self._select_no_orders)
+        filter_row.addWidget(self.orders_select_none_btn)
+
         filter_row.addStretch()
 
         self.orders_list = QListWidget()
@@ -178,6 +189,31 @@ class OrderTab(SitePreviewLoaderMixin, SyncTab):
         except Exception:
             pass
 
+    def _select_all_orders(self):
+        for i in range(self.orders_list.count()):
+            item = self.orders_list.item(i)
+            if item.flags() & Qt.ItemIsUserCheckable:
+                item.setCheckState(Qt.Checked)
+
+    def _select_no_orders(self):
+        for i in range(self.orders_list.count()):
+            item = self.orders_list.item(i)
+            if item.flags() & Qt.ItemIsUserCheckable:
+                item.setCheckState(Qt.Unchecked)
+
+    def _collect_checked_order_ids(self) -> set:
+        ids = set()
+        for i in range(self.orders_list.count()):
+            item = self.orders_list.item(i)
+            if not (item.flags() & Qt.ItemIsUserCheckable):
+                continue
+            if item.checkState() != Qt.Checked:
+                continue
+            order_id = item.data(Qt.UserRole)
+            if order_id is not None:
+                ids.add(int(order_id))
+        return ids
+
     def start_sync(self):
         """اجرای مستقیم اسکریپت سفارشات"""
         if not LicenseTab.is_license_valid():
@@ -188,8 +224,31 @@ class OrderTab(SitePreviewLoaderMixin, SyncTab):
             self.set_status("warning", "⚠️ ابتدا Cart/Checkout را در تنظیمات راه‌اندازی کنید")
             return
 
+        if self.orders_list.count() == 0:
+            QMessageBox.information(
+                self, "سفارشی نیست",
+                "ابتدا «🔄 بازخوانی سفارشات سایت» را بزنید تا سفارش‌ها نمایش داده شوند.",
+            )
+            return
+
+        checked_ids = self._collect_checked_order_ids()
+        if not checked_ids:
+            QMessageBox.information(
+                self, "چیزی انتخاب نشده",
+                "حداقل یک سفارش را تیک بزنید، یا «☑️ انتخاب همه» را بزنید.",
+            )
+            return
+
+        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+        config = load_secure_config(None) or {}
+        if is_sepidar_provider(config):
+            from sync_app.core.scripts.sepidar import sepidar_ordersync
+            sync_job = lambda: sepidar_ordersync.main(order_ids=checked_ids)
+        else:
+            sync_job = lambda: ordersync.main(order_ids=checked_ids)
+
         self.run_job_in_background(
-            ordersync.main,
+            sync_job,
             busy_text="⏳ در حال پردازش سفارشات...",
             success_message="همگام‌سازی سفارشات با موفقیت انجام شد.",
         )
@@ -304,9 +363,10 @@ class OrderTab(SitePreviewLoaderMixin, SyncTab):
                 billing = order.get("billing", {}) or {}
                 name = (f"{billing.get('first_name', '')} {billing.get('last_name', '')}").strip() or "مشتری"
                 try:
-                    ids.append(int(order_id))
+                    numeric_id = int(order_id)
                 except Exception:
-                    pass
+                    continue
+                ids.append(numeric_id)
                 items.append(f"{name} | کد سفارش: #{order_id} | وضعیت: {status} | مبلغ: {total} {currency}")
 
             return {"kind": "orders", "items": items, "ids": ids}
@@ -359,7 +419,9 @@ class OrderTab(SitePreviewLoaderMixin, SyncTab):
     def _apply_site_orders(self, payload, silent=False):
         self.orders_list.clear()
         payload = payload or {}
-        ids = set(payload.get("ids", []))
+        items = payload.get("items", []) or []
+        order_ids_list = payload.get("ids", []) or []
+        ids = set(order_ids_list)
 
         if self._orders_baseline_ready:
             new_ids = ids - self._seen_order_ids
@@ -372,8 +434,18 @@ class OrderTab(SitePreviewLoaderMixin, SyncTab):
         self._seen_order_ids = ids
         self._orders_baseline_ready = True
 
-        for item in payload.get("items", []):
-            self.orders_list.addItem(make_rtl_item(item))
+        if payload.get("kind") == "orders":
+            # هر ردیف با تیکِ قابلِ‌انتخاب — پیش‌فرض تیک‌خورده، تا رفتارِ
+            # فعلیِ «ارسالِ همه» برایِ کسی که کاری با تیک‌ها نداره حفظ بمونه.
+            for text, order_id in zip(items, order_ids_list):
+                item = make_rtl_item(text)
+                item.setData(Qt.UserRole, order_id)
+                item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+                item.setCheckState(Qt.Checked)
+                self.orders_list.addItem(item)
+        else:
+            for text in items:
+                self.orders_list.addItem(make_rtl_item(text))
 
         if payload.get("kind") == "orders":
             count = len(payload.get("ids", []))

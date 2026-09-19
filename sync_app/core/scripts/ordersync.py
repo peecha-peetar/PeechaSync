@@ -456,7 +456,7 @@ def insert_order(order):
 # ---------------------------------------------------------
 # 📌 اجرای اصلی — پرستاشاپ
 # ---------------------------------------------------------
-def _main_prestashop():
+def _main_prestashop(order_ids=None):
     from sync_app.core.ps_order_helper import ps_list_paid_orders
 
     cfg = load_secure_config(None) or {}
@@ -468,6 +468,9 @@ def _main_prestashop():
     except Exception as e:
         log.error(f"❌ خطا در دریافت سفارش‌های پرستاشاپ: {e}")
         raise RuntimeError(f"خطا در ارتباط با پرستاشاپ: {e}") from e
+
+    if order_ids is not None:
+        orders = [o for o in orders if int(o.get("id") or 0) in order_ids]
 
     log.info(f"📦 تعداد سفارش‌های پرداخت‌شده (valid=1): {len(orders)}")
     if not orders:
@@ -484,12 +487,12 @@ def _main_prestashop():
 # ---------------------------------------------------------
 # 📌 اجرای اصلی
 # ---------------------------------------------------------
-def main():
+def main(order_ids=None):
     log.info("▶️ شروع همگام‌سازی سفارشات...")
     init_runtime_config()
 
     if is_ps_mode():
-        return _main_prestashop()
+        return _main_prestashop(order_ids)
 
     try:
         validate_config()
@@ -547,6 +550,10 @@ def main():
             raise RuntimeError(msg)
 
         orders = response.json()
+
+        if order_ids is not None:
+            orders = [o for o in orders if int(o.get("id") or 0) in order_ids]
+
         log.info(f"📦 تعداد سفارش‌های دریافتی: {len(orders)}")
 
         if not orders:

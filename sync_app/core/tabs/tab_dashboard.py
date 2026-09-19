@@ -643,6 +643,39 @@ class DashboardTab(QWidget):
 
         return erp_provider_label(self._static_config)
 
+    def _refresh_erp_labels(self):
+        """متن/tooltipِ ویجت‌هایی که نامِ ERP رو تویِ خودشون دارن، موقعِ
+        ساختِ تب یک‌بار baked می‌شن (_init_ui فقط یک‌بار در عمرِ تب اجرا
+        می‌شه) و اگه این‌جا رفرش نشن، بعدِ سوئیچِ ERP همچنان نامِ providerِ
+        قبلی رو نشون می‌دن — چون خودِ نمونه‌یِ DashboardTab بعدِ سوئیچ از نو
+        ساخته نمی‌شه، فقط load_data() صدا زده می‌شه."""
+        self._static_config = load_secure_config(None) or {}
+        erp = self._erp_label()
+        if hasattr(self, "_hero_title"):
+            self._hero_title.setToolTip(f"نمای کلی وضعیت اتصال‌ها، داده‌های {erp} و آمار فروشگاه در یک صفحه")
+        if hasattr(self, "refresh_btn"):
+            self.refresh_btn.setToolTip(f"بارگذاری دوباره وضعیت {erp}، API فروشگاه، KPIها و جداول")
+        if hasattr(self, "_hero_sub"):
+            self._hero_sub.setText(f"نمای یکپارچه دیتابیس {erp} (SQL Server)، فروشگاه آنلاین و وضعیت همگام‌سازی")
+        if hasattr(self, "_health_sql"):
+            self._health_sql.title_label.setText(f"SQL Server — {erp}")
+        if hasattr(self, "_card_sql_products"):
+            self._card_sql_products.title_label.setText(f"کالاهای {erp}")
+            self._card_sql_products.setToolTip(f"تعداد کل کالاهای موجود در {erp} (جدول Article)")
+        if len(getattr(self, "_quick_buttons", [])) > 3:
+            self._quick_buttons[1].setText(f"⚖️ تطبیق {erp} ↔ سایت")
+            self._quick_buttons[3].setText(f"📂 دسته‌بندی {erp}")
+        if hasattr(self, "_insight_erp"):
+            self._insight_erp.setToolTip(f"اطلاعات سرور/دیتابیس {erp}، تعداد گروه‌ها و لیست قیمت فعال")
+        if hasattr(self, "_pending_table"):
+            self._pending_table["frame"].setToolTip(
+                f"سفارشاتی که هنوز پرداخت/تکمیل نشده‌اند و معمولاً در صف انتقال به {erp} هستند"
+            )
+        if hasattr(self, "footer_message"):
+            self.footer_message.setText(
+                f"💡 برای داده کامل، تنظیمات {erp} و فروشگاه را کامل کنید سپس «بازخوانی» بزنید."
+            )
+
     def apply_runtime_font(self, effective_font_size: int, is_bold: bool = False):
         """همگام با تغییر فونت/سایز در تنظیمات."""
         self._runtime_font_base = effective_font_size
@@ -686,6 +719,7 @@ class DashboardTab(QWidget):
         hero_title = QLabel("📊 مرکز فرمان پیچا")
         hero_title.setObjectName("dashHeroTitle")
         hero_top.addWidget(hero_title)
+        self._hero_title = hero_title
         hero_title.setToolTip(f"نمای کلی وضعیت اتصال‌ها، داده‌های {self._erp_label()} و آمار فروشگاه در یک صفحه")
         hero_top.addStretch()
 
@@ -704,6 +738,7 @@ class DashboardTab(QWidget):
         hero_sub.setWordWrap(True)
         hero_sub.setObjectName("dashHeroSub")
         hero_layout.addWidget(hero_sub)
+        self._hero_sub = hero_sub
 
         self.load_progress = QProgressBar()
         self.load_progress.setObjectName("dashLoadProgress")
@@ -1124,6 +1159,8 @@ class DashboardTab(QWidget):
         config = load_secure_config(None) or {}
         if self._thread and self._thread.isRunning():
             return
+
+        self._refresh_erp_labels()
 
         from sync_app.core.integrations.commerce_provider import is_prestashop, store_platform_label
 

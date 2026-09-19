@@ -189,11 +189,13 @@ def insert_invoice(order: dict, config: dict) -> None:
         conn.close()
 
 
-def sync_orders(config: dict | None = None) -> dict:
+def sync_orders(config: dict | None = None, order_ids=None) -> dict:
     from sync_app.core.sync_utils import log
 
     config = config or {}
     orders = _fetch_orders(config)
+    if order_ids is not None:
+        orders = [o for o in orders if int(o.get("id") or 0) in order_ids]
     log.info(f"📦 تعدادِ سفارش‌هایِ processing: {len(orders)}")
     if not orders:
         log.info("ℹ️ سفارشِ جدیدی یافت نشد.")
@@ -204,11 +206,11 @@ def sync_orders(config: dict | None = None) -> dict:
     return {"ok": True, "orders": len(orders)}
 
 
-def main(config: dict | None = None) -> dict:
+def main(config: dict | None = None, order_ids=None) -> dict:
     from sync_app.core.secure_config_loader import load_secure_config
 
     cfg = config or load_secure_config(None) or {}
-    return sync_orders(cfg)
+    return sync_orders(cfg, order_ids=order_ids)
 
 
 if __name__ == "__main__":

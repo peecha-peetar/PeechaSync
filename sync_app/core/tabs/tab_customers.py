@@ -148,8 +148,16 @@ class CustomerTab(SitePreviewLoaderMixin, SyncTab):
             QMessageBox.critical(self, "خطا", "لایسنس معتبر نیست.")
             return
 
+        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+        config = load_secure_config(None) or {}
+        if is_sepidar_provider(config):
+            from sync_app.core.scripts.sepidar import sepidar_customersync
+            sync_job = sepidar_customersync.main
+        else:
+            sync_job = customersync.main
+
         if self.run_job_in_background(
-            customersync.main,
+            sync_job,
             busy_text="⏳ در حال اجرا...",
             success_message="همگام‌سازی مشتریان با موفقیت انجام شد.",
         ):
