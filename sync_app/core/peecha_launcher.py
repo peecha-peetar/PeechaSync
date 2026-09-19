@@ -1507,6 +1507,70 @@ class PeechaLauncher(QWidget):
         layout.addWidget(label)
         return widget
 
+    def _format_tab_build_error(self, exc: Exception) -> str:
+        try:
+            from sync_app.core.sql_connection_helper import format_db_error
+
+            return format_db_error(exc)
+        except Exception:
+            return str(exc) or exc.__class__.__name__
+
+    def _make_tab_error_placeholder(self, spec):
+        """صفحه‌یِ خطا به‌جایِ placeholderِ دائمیِ «در حال آماده‌سازی...» —
+        وقتی ساختِ یک تبِ تنبل شکست می‌خوره (مثلاً به‌خاطرِ تنظیماتِ SQL
+        ناقص/غلط)، کاربر باید بفهمه که خطا داده، نه اینکه فکر کنه برنامه
+        هنوز داره لود می‌شه."""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setAlignment(Qt.AlignCenter)
+        layout.setSpacing(8)
+
+        icon = QLabel("⚠️")
+        icon.setAlignment(Qt.AlignCenter)
+        icon.setStyleSheet("font-size: 28px;")
+        layout.addWidget(icon)
+
+        title_label = QLabel("بارگذاریِ این تب با خطا مواجه شد.")
+        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setWordWrap(True)
+        title_label.setStyleSheet("color: #b91c1c; font-size: 14px; font-weight: 700; padding: 0 24px;")
+        layout.addWidget(title_label)
+
+        detail_label = QLabel(spec.get("last_error") or "")
+        detail_label.setAlignment(Qt.AlignCenter)
+        detail_label.setWordWrap(True)
+        detail_label.setStyleSheet("color: #64748b; font-size: 11px; padding: 0 24px;")
+        layout.addWidget(detail_label)
+
+        retry_btn = QPushButton("🔄 تلاش دوباره")
+        retry_btn.clicked.connect(lambda: self._retry_lazy_tab(spec))
+        layout.addWidget(retry_btn, alignment=Qt.AlignCenter)
+
+        return widget
+
+    def _show_lazy_tab_error(self, spec):
+        index = self._find_tab_index_by_attr(spec["attr"])
+        if index < 0:
+            return
+        title = self.tabs.tabText(index)
+        new_placeholder = self._make_tab_error_placeholder(spec)
+        current_idx = self.tabs.currentIndex()
+        self.tabs.blockSignals(True)
+        try:
+            self.tabs.removeTab(index)
+            self.tabs.insertTab(index, new_placeholder, title)
+            if current_idx == index:
+                self.tabs.setCurrentIndex(index)
+        finally:
+            self.tabs.blockSignals(False)
+        spec["placeholder"] = new_placeholder
+
+    def _retry_lazy_tab(self, spec):
+        if spec.get("loaded") or spec.get("building"):
+            return
+        spec["building"] = True
+        QTimer.singleShot(0, lambda: self._materialize_lazy_tab(spec))
+
     def _register_lazy_tab(self, title, attr_name, factory, tooltip=None):
         placeholder = self._make_tab_placeholder()
         index = self.tabs.addTab(placeholder, title)
@@ -1531,7 +1595,7 @@ class PeechaLauncher(QWidget):
 
         try:
             new_widget = spec["factory"]()
-        except Exception:
+        except Exception as exc:
             import traceback
 
             spec["building"] = False
@@ -1540,6 +1604,13 @@ class PeechaLauncher(QWidget):
                 spec.get("attr", "?"),
                 traceback.format_exc(),
             )
+            # قبلاً این‌جا فقط لاگ می‌شد و placeholderِ «در حال آماده‌سازی...»
+            # همون‌طور دست‌نخورده می‌موند — کاربر همیشه یک پیامِ لودینگِ
+            # دائمی می‌دید بدونِ هیچ نشونه‌ای از خطایِ واقعی (مثلاً تنظیماتِ
+            # SQL ناقص/غلط). حالا به‌جاش یک حالتِ خطایِ صریح با دکمه‌یِ
+            # «تلاش دوباره» نشون داده می‌شه.
+            spec["last_error"] = self._format_tab_build_error(exc)
+            self._show_lazy_tab_error(spec)
             return
 
         title = self.tabs.tabText(index)

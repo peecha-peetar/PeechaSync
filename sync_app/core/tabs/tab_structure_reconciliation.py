@@ -652,6 +652,15 @@ class StructureReconciliationTab(QWidget):
         from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
 
         force_simple_widget = self._build_force_simple_section()
+        # نگه‌داشتنِ یک ارجاعِ پایتونی روی self ضروریه — چون بدونِ addTab
+        # (پایینه)، این widget هیچ parentِ Qtای نداره، و بدونِ این ارجاع،
+        # به‌محضِ خروج از این متد garbage-collect می‌شه؛ اون‌وقت self.fs_table
+        # (که داخلِ همین widget ساخته شده) یه اشاره‌گرِ خراب می‌مونه و همین‌جا
+        # تویِ __init__، سرِ self._refresh_fs_table() با
+        # «RuntimeError: wrapped C/C++ object ... has been deleted» کرش
+        # می‌کنه — این‌جوری کلِ تبِ «همگام‌سازی» برایِ سپیدار/دشت هیچ‌وقت
+        # لود نمی‌شد (باگِ واقعیِ گزارش‌شده).
+        self._force_simple_widget = force_simple_widget
         if not is_sepidar_provider(self.config):
             # سپیدار/دشت هیچ‌وقت کالایِ متغیر نداره — این حالت («ERP متغیر /
             # سایت ساده») براش اصلاً ممکن نیست. خودِ widget ساخته می‌شه
