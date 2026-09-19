@@ -150,6 +150,12 @@ def _fmt_money(value, suffix="﷼"):
         return f"{value} {suffix}"
 
 
+def _rtl_html(inner: str) -> str:
+    """QLabelِ حاویِ HTML (برخلافِ متنِ ساده) به setAlignment/setLayoutDirectionِ
+    خودِ ویجت توجه نمی‌کنه و بدونِ این wrapper چپ‌چین می‌مونه — تاییدشده با تست."""
+    return f'<div dir="rtl" align="right">{inner}</div>'
+
+
 def _site_host(url):
     try:
         host = urlparse(url).netloc or urlparse(url).path
@@ -573,6 +579,7 @@ class HealthCard(QFrame):
 
         self.title_label = QLabel(title)
         self.title_label.setStyleSheet("font-weight: 700; color: #0f172a;")
+        self.title_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         header.addWidget(self.title_label)
         header.addStretch()
 
@@ -584,10 +591,12 @@ class HealthCard(QFrame):
         self.detail_label = QLabel("—")
         self.detail_label.setWordWrap(True)
         self.detail_label.setStyleSheet("color: #475569; line-height: 1.4;")
+        self.detail_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         layout.addWidget(self.detail_label)
 
         self.meta_label = QLabel("")
         self.meta_label.setStyleSheet("color: #94a3b8;")
+        self.meta_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         layout.addWidget(self.meta_label)
 
     def apply_theme(self, palette, font_base):
@@ -683,10 +692,13 @@ class DashboardTab(QWidget):
         self._apply_dashboard_theme()
 
     def ensure_tab_data_loaded(self):
-        if self._initial_load_started:
+        if not self._initial_load_started:
+            self._initial_load_started = True
+            self.load_data()
             return
-        self._initial_load_started = True
-        self.load_data()
+        from sync_app.core.tab_operation_guard import consume_pending_sql_reload
+
+        consume_pending_sql_reload(self, self.load_data)
 
     def _init_ui(self):
         outer = QVBoxLayout(self)
@@ -1223,7 +1235,7 @@ class DashboardTab(QWidget):
             recon_msg = f"{_fmt_num(map_count)} جفت محصول در product_woo_map ثبت شده است."
         else:
             recon_msg = "نگاشت محصول خالی است — برای سایت فعال، تب «تطبیق» را انجام دهید."
-        self._insight_recon.setText(f"<b>تطبیق</b><br>{recon_msg}")
+        self._insight_recon.setText(_rtl_html(f"<b>تطبیق</b><br>{recon_msg}"))
 
         # ── Health cards ─────────────────────────────
         if sql.get("ok"):
@@ -1305,22 +1317,22 @@ class DashboardTab(QWidget):
         self._refresh_settings_summary(cfg, woo)
         from sync_app.core.integrations.erp_provider import erp_provider_label
 
-        self._insight_erp.setText(
+        self._insight_erp.setText(_rtl_html(
             f"<b>{erp_provider_label(cfg)}</b><br>"
             f"گروه اصلی: {_fmt_num(sql.get('main_groups', '—'))} | "
             f"زیرگروه: {_fmt_num(sql.get('sub_groups', '—'))}<br>"
             f"لیست قیمت فعال: #{cfg.get('price_list', 1)}"
-        )
+        ))
         version_line = (
             f"ارز: {woo.get('currency') or '—'}" if woo.get("platform") == "prestashop"
             else f"نسخه WC: {woo.get('wc_version', '—')}"
         )
-        self._insight_wc.setText(
+        self._insight_wc.setText(_rtl_html(
             f"<b>فروشگاه</b><br>"
             f"محصولات: {_fmt_num(woo.get('total_products', '—'))} | "
             f"مشتریان: {_fmt_num(woo.get('total_customers', '—'))}<br>"
             f"{version_line}"
-        )
+        ))
         sync_ready = sql.get("ok") and wc_ok and sel > 0 and map_count > 0
         if sync_ready:
             sync_msg = f"آماده همگام‌سازی — {erp_provider_label(cfg)} و فروشگاه متصل، گروه‌ها انتخاب و تطبیق ثبت شده است."
@@ -1334,7 +1346,7 @@ class DashboardTab(QWidget):
             sync_msg = "برای همگام‌سازی کامل: اتصال SQL/فروشگاه را بررسی و در تب دسته‌بندی گروه انتخاب کنید."
             footer_state = "info"
             footer_msg = f"ℹ آخرین بروزرسانی: {loaded_at}"
-        self._insight_sync.setText(f"<b>همگام‌سازی</b><br>{sync_msg}")
+        self._insight_sync.setText(_rtl_html(f"<b>همگام‌سازی</b><br>{sync_msg}"))
         self._set_footer_status(footer_state, footer_msg)
 
         # ── Tables ─────────────────────────────────

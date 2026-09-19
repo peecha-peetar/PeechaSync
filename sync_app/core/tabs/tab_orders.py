@@ -1,8 +1,11 @@
 import sys
 import os
 import time
-from PyQt5.QtWidgets import QMessageBox, QLabel, QListWidget, QPushButton, QListWidgetItem
-from sync_app.core.rtl_item_delegate import RightAlignedItemDelegate, make_rtl_item
+from PyQt5.QtWidgets import (
+    QMessageBox, QLabel, QListWidget, QPushButton, QListWidgetItem,
+    QDialog, QVBoxLayout, QScrollArea, QFrame, QWidget,
+)
+from sync_app.core.rtl_item_delegate import RightAlignedCheckableItemDelegate, make_rtl_item
 from PyQt5.QtCore import QTimer, Qt
 
 # مسیردهی پایه برای تب همگام‌سازی سفارشات
@@ -44,6 +47,83 @@ ORDER_STATUS_LABELS = {
 def order_status_label(raw_status: str) -> str:
     key = str(raw_status or "").strip().lower()
     return ORDER_STATUS_LABELS.get(key, str(raw_status or "-"))
+
+
+def _fmt_order_num(value):
+    try:
+        return f"{float(value):,.0f}"
+    except (TypeError, ValueError):
+        return str(value) if value not in (None, "") else "—"
+
+
+class OrderDetailsDialog(QDialog):
+    """نمایشِ اقلامِ یک سفارشِ سایت — با دابل‌کلیک روی ردیفِ سفارش باز می‌شه."""
+
+    def __init__(self, parent, order: dict):
+        super().__init__(parent)
+        self.setLayoutDirection(Qt.RightToLeft)
+        order_id = order.get("id", "—")
+        self.setWindowTitle(f"اقلامِ سفارش #{order_id}")
+        self.setModal(True)
+        self.setMinimumWidth(520)
+        self.resize(560, 480)
+
+        root = QVBoxLayout(self)
+
+        billing = order.get("billing") or {}
+        customer_name = (
+            f"{billing.get('first_name', '')} {billing.get('last_name', '')}".strip() or "—"
+        )
+        header = QLabel(f"سفارش #{order_id}  |  مشتری: {customer_name}")
+        header.setStyleSheet("font-weight: 800; font-size: 14px;")
+        header.setAlignment(Qt.AlignRight)
+        root.addWidget(header)
+
+        body = QScrollArea()
+        body.setWidgetResizable(True)
+        body.setFrameShape(QFrame.NoFrame)
+        host = QWidget()
+        vl = QVBoxLayout(host)
+        vl.setSpacing(6)
+
+        line_items = order.get("line_items") or []
+        if not line_items:
+            empty = QLabel("هیچ قلمی برای این سفارش یافت نشد.")
+            empty.setAlignment(Qt.AlignRight)
+            vl.addWidget(empty)
+        for row_item in line_items:
+            card = QFrame()
+            card.setStyleSheet(
+                "QFrame { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; }"
+            )
+            cl = QVBoxLayout(card)
+            cl.setContentsMargins(10, 8, 10, 8)
+            name = str(row_item.get("name") or "—")
+            sku = str(row_item.get("sku") or "—")
+            qty = _fmt_order_num(row_item.get("quantity"))
+            price = _fmt_order_num(row_item.get("price"))
+            total = _fmt_order_num(row_item.get("total", row_item.get("subtotal")))
+
+            title_lbl = QLabel(f"{name}  (SKU: {sku})")
+            title_lbl.setStyleSheet("font-weight: 700; color: #0f172a;")
+            title_lbl.setAlignment(Qt.AlignRight)
+            title_lbl.setWordWrap(True)
+            cl.addWidget(title_lbl)
+
+            detail_lbl = QLabel(f"تعداد: {qty}  |  قیمت واحد: {price}  |  جمع: {total}")
+            detail_lbl.setAlignment(Qt.AlignRight)
+            cl.addWidget(detail_lbl)
+
+            vl.addWidget(card)
+
+        vl.addStretch(1)
+        body.setWidget(host)
+        root.addWidget(body, 1)
+
+        close_btn = QPushButton("بستن")
+        close_btn.setMinimumHeight(36)
+        close_btn.clicked.connect(self.accept)
+        root.addWidget(close_btn)
 
 
 class OrderTab(SitePreviewLoaderMixin, SyncTab):
@@ -112,7 +192,9 @@ class OrderTab(SitePreviewLoaderMixin, SyncTab):
         self.orders_list = QListWidget()
         self.orders_list.setLayoutDirection(Qt.RightToLeft)
         self.orders_list.setMinimumHeight(240)
-        self.orders_list.setItemDelegate(RightAlignedItemDelegate(self.orders_list))
+        self.orders_list.setItemDelegate(RightAlignedCheckableItemDelegate(self.orders_list))
+        self.orders_list.setToolTip("برای دیدن اقلامِ سفارش، روی ردیف دابل‌کلیک کنید.")
+        self.orders_list.itemDoubleClicked.connect(self._show_order_details)
         self.orders_refresh_button = CompactCaptionButton("🔄 بازخوانی سفارشات سایت")
         self.wc_admin_button = make_wc_admin_open_button(
             self, "orders", button_factory=CompactCaptionButton
@@ -213,6 +295,63 @@ class OrderTab(SitePreviewLoaderMixin, SyncTab):
             if order_id is not None:
                 ids.add(int(order_id))
         return ids
+
+    def _show_order_details(self, item):
+        order_id = item.data(Qt.UserRole)
+        if order_id is None:
+            return
+        self.set_status("info", f"⏳ در حال دریافت اقلام سفارش #{order_id}...")
+        run_in_thread(
+            lambda: self._fetch_order_details(int(order_id)),
+            on_complete=self._display_order_details,
+            on_error=self._handle_order_details_error,
+        )
+
+    def _fetch_order_details(self, order_id):
+        cfg = load_secure_config(None) or {}
+        timeout = site_preview_http_timeout(cfg)
+
+        from sync_app.core.integrations.commerce_provider import is_prestashop
+        if is_prestashop(cfg):
+            from sync_app.core.ps_order_helper import ps_get_order
+            order = ps_get_order(cfg, order_id, timeout=timeout)
+            if not order:
+                raise Exception(f"سفارش #{order_id} یافت نشد.")
+            return order
+
+        response = wc_rest_request(cfg, "GET", f"orders/{order_id}", timeout=timeout)
+        if int(response.status_code or 0) >= 400:
+            raise RuntimeError(
+                wc_http_error_message(
+                    response, cfg, prefix=f"دریافت اقلام سفارش #{order_id} ناموفق"
+                )
+            )
+        data = response.json()
+        line_items = [
+            {
+                "name": li.get("name"),
+                "sku": li.get("sku"),
+                "quantity": li.get("quantity"),
+                "price": li.get("price"),
+                "total": li.get("total"),
+            }
+            for li in (data.get("line_items") or [])
+        ]
+        return {
+            "id": data.get("id"),
+            "billing": data.get("billing") or {},
+            "line_items": line_items,
+        }
+
+    def _display_order_details(self, order):
+        self.set_status("success", f"✅ اقلام سفارش #{order.get('id', '—')} دریافت شد")
+        dlg = OrderDetailsDialog(self, order)
+        dlg.exec_()
+
+    def _handle_order_details_error(self, error):
+        message = f"❌ خطا در دریافت اقلام سفارش: {error}"
+        self.set_status("error", message[:120])
+        QMessageBox.critical(self, "خطا", f"دریافت اقلام سفارش ناموفق بود:\n{error}")
 
     def start_sync(self):
         """اجرای مستقیم اسکریپت سفارشات"""
