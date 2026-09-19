@@ -4,6 +4,7 @@ import time
 from PyQt5.QtWidgets import (
     QMessageBox, QLabel, QListWidget, QPushButton, QListWidgetItem, QWidget,
     QLineEdit, QHBoxLayout, QVBoxLayout, QDialog, QComboBox, QTextEdit, QDialogButtonBox,
+    QScrollArea, QFrame,
 )
 from sync_app.core.rtl_item_delegate import RightAlignedCheckableItemDelegate, make_rtl_item
 from PyQt5.QtCore import QTimer, Qt
@@ -45,6 +46,108 @@ SMS_TEMPLATES = [
 ]
 
 
+def _fmt_customer_date(raw: str) -> str:
+    if not raw:
+        return "—"
+    try:
+        from datetime import datetime
+
+        from sync_app.core.jalali_date_utils import to_jalali_datetime_str
+
+        dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        return to_jalali_datetime_str(dt)
+    except (TypeError, ValueError):
+        return str(raw)
+
+
+def _address_lines(addr: dict) -> str:
+    addr = addr or {}
+    name = f"{addr.get('first_name', '')} {addr.get('last_name', '')}".strip()
+    company = str(addr.get("company") or "").strip()
+    street = " ".join(p for p in (addr.get("address_1"), addr.get("address_2")) if p)
+    city_line = ", ".join(p for p in (addr.get("city"), addr.get("state"), addr.get("postcode")) if p)
+    country = str(addr.get("country") or "").strip()
+    phone = str(addr.get("phone") or "").strip()
+
+    lines = [ln for ln in (name, company, street, city_line, country) if ln]
+    if phone:
+        lines.append(f"تلفن: {phone}")
+    return "\n".join(lines) if lines else "—"
+
+
+class CustomerDetailsDialog(QDialog):
+    """نمایشِ اطلاعاتِ کاملِ یک مشتریِ سایت — با دابل‌کلیک روی ردیفِ مشتری باز می‌شه."""
+
+    def __init__(self, parent, record: dict):
+        super().__init__(parent)
+        self.setLayoutDirection(Qt.RightToLeft)
+        name = str(record.get("name") or "—")
+        cid = record.get("id") or "—"
+        guest_tag = " (مهمان)" if record.get("guest") else ""
+        self.setWindowTitle(f"اطلاعاتِ مشتری — {name}")
+        self.setModal(True)
+        self.setMinimumWidth(480)
+        self.resize(520, 460)
+
+        root = QVBoxLayout(self)
+
+        header = QLabel(f"{name}{guest_tag}  |  کد: #{cid}")
+        header.setStyleSheet("font-weight: 800; font-size: 14px;")
+        header.setAlignment(Qt.AlignRight)
+        root.addWidget(header)
+
+        body = QScrollArea()
+        body.setWidgetResizable(True)
+        body.setFrameShape(QFrame.NoFrame)
+        host = QWidget()
+        vl = QVBoxLayout(host)
+        vl.setSpacing(6)
+
+        def _add_card(title: str, text: str):
+            card = QFrame()
+            card.setStyleSheet(
+                "QFrame { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; }"
+            )
+            cl = QVBoxLayout(card)
+            cl.setContentsMargins(10, 8, 10, 8)
+
+            title_lbl = QLabel(title)
+            title_lbl.setStyleSheet("font-weight: 700; color: #0f172a;")
+            title_lbl.setAlignment(Qt.AlignRight)
+            cl.addWidget(title_lbl)
+
+            body_lbl = QLabel(text)
+            body_lbl.setAlignment(Qt.AlignRight)
+            body_lbl.setWordWrap(True)
+            cl.addWidget(body_lbl)
+
+            vl.addWidget(card)
+
+        email = str(record.get("email") or "—")
+        phone = str(record.get("phone") or "—")
+        _add_card("📞 اطلاعاتِ تماس", f"ایمیل: {email}\nموبایل: {phone}")
+
+        billing = record.get("billing") or {}
+        _add_card("🧾 آدرسِ صورتحساب", _address_lines(billing))
+
+        shipping = record.get("shipping") or {}
+        if any(str(v or "").strip() for v in shipping.values()):
+            _add_card("📦 آدرسِ ارسال", _address_lines(shipping))
+
+        date_created = record.get("date_created")
+        if date_created:
+            _add_card("🗓 تاریخِ عضویت", _fmt_customer_date(date_created))
+
+        vl.addStretch(1)
+        body.setWidget(host)
+        root.addWidget(body, 1)
+
+        close_btn = QPushButton("بستن")
+        close_btn.setMinimumHeight(36)
+        close_btn.clicked.connect(self.accept)
+        root.addWidget(close_btn)
+
+
 class CustomerTab(SitePreviewLoaderMixin, SyncTab):
     def __init__(self):
         super().__init__("customersync.py", "مشتریان")
@@ -80,6 +183,8 @@ class CustomerTab(SitePreviewLoaderMixin, SyncTab):
         self.customers_list.setMinimumHeight(240)
         self.customers_list.setItemDelegate(RightAlignedCheckableItemDelegate(self.customers_list))
         self.customers_list.itemChanged.connect(self._on_customer_item_changed)
+        self.customers_list.setToolTip("برای دیدنِ اطلاعاتِ کاملِ مشتری، روی ردیف دابل‌کلیک کنید.")
+        self.customers_list.itemDoubleClicked.connect(self._show_customer_details)
         self.customers_refresh_button = CompactCaptionButton("🔄 بازخوانی مشتریان سایت")
         self.wc_admin_button = make_wc_admin_open_button(
             self, "customers", button_factory=CompactCaptionButton
@@ -266,6 +371,9 @@ class CustomerTab(SitePreviewLoaderMixin, SyncTab):
                 records.append({
                     "id": cid, "name": name, "email": email, "phone": phone,
                     "guest": bool(customer.get("_guest")), "display": display,
+                    "billing": customer.get("billing") or {},
+                    "shipping": customer.get("shipping") or {},
+                    "date_created": customer.get("date_created") or "",
                 })
 
             if len(customers) > 40:
@@ -353,6 +461,13 @@ class CustomerTab(SitePreviewLoaderMixin, SyncTab):
                 self.customers_list.addItem(make_rtl_item("چیزی با این جستجو پیدا نشد."))
         finally:
             self.customers_list.blockSignals(False)
+
+    def _show_customer_details(self, item):
+        record = item.data(Qt.UserRole)
+        if not isinstance(record, dict):
+            return
+        dlg = CustomerDetailsDialog(self, record)
+        dlg.exec_()
 
     def _on_customer_item_changed(self, item):
         record = item.data(Qt.UserRole)
