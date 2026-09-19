@@ -13,6 +13,45 @@ from sync_app.core.scripts.sepidar.sepidar_common import get_sepidar_connection,
 _MAP_FILE = "sepidar_product_map.json"
 _CATEGORY_MAP_FILE = "sepidar_category_map.json"
 
+# POS.ItemSalePrice: DefaultPrice + Price1..Price10 — معادلِ Sel_Price..Sel_Price5ِ
+# دژاوو، ولی با ۱۱ ستون (نه ۵) و بدونِ نامِ ویژه برایِ اولین لیستِ جایگزین
+# (Price1 خودش وجود داره، برخلافِ دژاوو که "Sel_Price1" نداره).
+_SEPIDAR_PRICE_COLUMNS = ["DefaultPrice"] + [f"Price{i}" for i in range(1, 11)]
+
+
+def _sepidar_price_list_column_for_index(index: int | None) -> str:
+    """نامِ ستونِ POS.ItemSalePrice مطابقِ شماره‌یِ لیستِ قیمتِ ۰-based
+    (همون قراردادِ PRICE_LIST_INDEX/CATEGORY_PRICE_LIST_INDEXِ دژاوو —
+    ۰ یعنی پیش‌فرض، ۱..۱۰ یعنی Price1..Price10)."""
+    n = int(index or 0)
+    if n <= 0:
+        return "DefaultPrice"
+    if n > 10:
+        n = 10
+    return f"Price{n}"
+
+
+def _resolve_sepidar_row_price(price_columns: dict, price_col: str) -> float:
+    """مثلِ resolve_article_priceِ دژاوو — اول ستونِ ترجیحی، اگه صفر/خالی
+    بود به‌ترتیبِ بقیه‌یِ ستون‌ها (با اولویتِ DefaultPrice) fallback کن."""
+    ordered = [price_col] + [c for c in _SEPIDAR_PRICE_COLUMNS if c != price_col]
+    for name in ordered:
+        val = (price_columns or {}).get(name)
+        if val is not None and float(val or 0) > 0:
+            return float(val)
+    return 0.0
+
+
+def _resolve_sepidar_item_price(item: dict, group_code: str, config: dict) -> float:
+    """قیمتِ نهاییِ کالا برایِ سینک — بر اساسِ لیستِ قیمتِ resolve‌شده‌یِ
+    این SKU/دسته (override رویِ محصول → دسته‌بندیِ ERP سپیدار → پیش‌فرضِ
+    سراسری)، دقیقاً هم‌الگویِ resolve_article_price_columnِ دژاوو."""
+    from sync_app.core.category_price_list import resolve_price_list_index
+
+    index = resolve_price_list_index(item.get("sku") or "", group_code, config)
+    col = _sepidar_price_list_column_for_index(index)
+    return _resolve_sepidar_row_price(item.get("_price_columns"), col)
+
 
 def fetch_site_products(config: dict | None = None) -> list[dict]:
     """[{id, sku, name, regular_price, categories:[{id}], type, status}]."""
@@ -201,8 +240,9 @@ def fetch_sepidar_products_for_sync(config: dict | None = None, selected_group_i
     conn = get_sepidar_connection(config or {})
     try:
         cursor = conn.cursor()
+        price_cols_sql = ", ".join(f"sp.{c}" for c in _SEPIDAR_PRICE_COLUMNS)
         cursor.execute(
-            "SELECT i.ItemID, i.Code, i.Title, sp.DefaultPrice "
+            f"SELECT i.ItemID, i.Code, i.Title, {price_cols_sql} "
             "FROM POS.Item i LEFT JOIN POS.ItemSalePrice sp ON sp.ItemRef = i.ItemID"
         )
         item_rows = cursor.fetchall()
@@ -243,10 +283,15 @@ def fetch_sepidar_products_for_sync(config: dict | None = None, selected_group_i
                 continue
         erp_images = [(blob, "") for blob in images_by_item.get(item_id, [])]
         first_blob = erp_images[0][0] if erp_images else b""
+        price_columns = {
+            col: (float(r[3 + i]) if r[3 + i] is not None else 0.0)
+            for i, col in enumerate(_SEPIDAR_PRICE_COLUMNS)
+        }
         rows.append({
             "sku": str(r[1] or "").strip(),
             "name": str(r[2] or "").strip(),
-            "price": float(r[3]) if r[3] is not None else 0.0,
+            "price": price_columns["DefaultPrice"],
+            "_price_columns": price_columns,
             "stock": stock_by_item.get(item_id, 0),
             "picture_blob": first_blob,
             "picture_path": "",
@@ -348,6 +393,8 @@ def build_sepidar_products_sync_preview(config: dict | None = None) -> list:
             continue
         wc_id = int(product_map.get(sku) or 0) or None
         wc_cat_id = _resolve_sepidar_product_category(item.get("_item_group_id"), groups_by_id, erp_to_wc_category)
+        group_code = str(item.get("_item_group_id") or "")
+        price = _resolve_sepidar_item_price(item, group_code, config)
         notes = []
         if not wc_id:
             notes.append("هنوز در نگاشتِ سپیدار ثبت نشده — ممکن است با SKU در سایت پیدا شود یا محصول جدید ساخته شود")
@@ -355,7 +402,7 @@ def build_sepidar_products_sync_preview(config: dict | None = None) -> list:
             ProductSyncPreviewRow(
                 erp_sku=sku,
                 erp_name=item["name"] or sku,
-                price=str(int(item["price"])) if item["price"] else "0",
+                price=str(int(price)) if price else "0",
                 stock=item["stock"],
                 category_label=str(wc_cat_id) if wc_cat_id else "—",
                 wc_id=wc_id,
@@ -411,7 +458,8 @@ def sync_products_from_erp(config: dict | None = None) -> dict:
             existing_id, product_map = _resolve_existing_sepidar_product_id(wcapi, sku, product_map)
             wc_cat_id = _resolve_sepidar_product_category(item.get("_item_group_id"), groups_by_id, erp_to_wc_category)
             group_code = str(item.get("_item_group_id") or "")
-            price = apply_price_markup(item["price"], config, is_sale=False, sku=sku)
+            raw_price = _resolve_sepidar_item_price(item, group_code, config)
+            price = apply_price_markup(raw_price, config, is_sale=False, sku=sku)
             payload = {
                 "name": item["name"] or sku,
                 "sku": sku,
