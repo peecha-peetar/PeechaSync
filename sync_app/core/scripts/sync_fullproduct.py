@@ -411,22 +411,23 @@ def _sync_product_images_if_needed_ps(config, sku, product_id, erp_images):
     """
     from sync_app.core.erp_image_helper import load_transferred_image_ids, mark_images_transferred, stage_erp_images
     from sync_app.core.ps_sync_helper import ps_upload_product_image
+    from sync_app.core.integrations.erp_provider import erp_provider_label
+
+    erp_label = erp_provider_label(config)
 
     if not erp_images:
-        from sync_app.core.integrations.erp_provider import erp_provider_label
-
-        log.info(f"ℹ️ [{sku}] هیچ تصویری در HLOpictures ({erp_provider_label(config)}) برای این کد کالا پیدا نشد.")
+        log.info(f"ℹ️ [{sku}] هیچ تصویری در HLOpictures ({erp_label}) برای این کد کالا پیدا نشد.")
         return
 
     already_transferred = set(load_transferred_image_ids("prestashop").get(str(sku).strip(), []))
     new_erp_images = [(hlo_id, blob, path) for hlo_id, blob, path in erp_images if hlo_id not in already_transferred]
     if not new_erp_images:
         log.info(
-            f"ℹ️ [{sku}] {len(erp_images)} تصویر ERP پیدا شد ولی همه قبلاً به پرستاشاپ منتقل شده — رد شد."
+            f"ℹ️ [{sku}] {len(erp_images)} تصویر {erp_label} پیدا شد ولی همه قبلاً به پرستاشاپ منتقل شده — رد شد."
         )
         return
 
-    log.info(f"🖼️ [{sku}] {len(new_erp_images)} تصویر جدید از ERP برای انتقال به پرستاشاپ پیدا شد...")
+    log.info(f"🖼️ [{sku}] {len(new_erp_images)} تصویر جدید از {erp_label} برای انتقال به پرستاشاپ پیدا شد...")
 
     try:
         from sync_app.core.smart_publish import apply_default_pipeline
@@ -439,7 +440,7 @@ def _sync_product_images_if_needed_ps(config, sku, product_id, erp_images):
 
         if not rel_by_hlo_id:
             log.warning(
-                f"⚠️ [{sku}] {len(new_erp_images)} تصویر ERP پیدا شد ولی هیچ‌کدام روی دیسک ذخیره/staged نشدند."
+                f"⚠️ [{sku}] {len(new_erp_images)} تصویر {erp_label} پیدا شد ولی هیچ‌کدام روی دیسک ذخیره/staged نشدند."
             )
             return
 

@@ -1113,7 +1113,7 @@ class StructureReconciliationTab(QWidget):
         if not site_entries or not erp_entries:
             QMessageBox.information(
                 self, "توجه",
-                "اول از هر دو طرف (سایت و ERP) جستجو کنید تا موردی برایِ پیشنهاد باشه.",
+                f"اول از هر دو طرف (سایت و {self.erp_label}) جستجو کنید تا موردی برایِ پیشنهاد باشه.",
             )
             return
 
@@ -1651,7 +1651,7 @@ class StructureReconciliationTab(QWidget):
         if not site_entries or not erp_entries:
             QMessageBox.information(
                 self, "توجه",
-                "اول از هر دو طرف (سایت و ERP) جستجو کنید تا موردی برایِ پیشنهاد باشه.",
+                f"اول از هر دو طرف (سایت و {self.erp_label}) جستجو کنید تا موردی برایِ پیشنهاد باشه.",
             )
             return
 

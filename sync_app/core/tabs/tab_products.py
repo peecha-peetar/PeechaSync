@@ -204,7 +204,7 @@ class ProductRowWidget(QWidget):
         self.store_category_button = make_row_button(
             "🏷️",
             "دسته‌بندیِ این محصول را مستقیم از دسته‌بندی‌هایِ واقعیِ سایت "
-            "(نه ERP) انتخاب کن — این انتخاب در همگام‌سازی‌هایِ بعدی هم "
+            "(نه برنامه حسابداری) انتخاب کن — این انتخاب در همگام‌سازی‌هایِ بعدی هم "
             "حفظ می‌شه، مگه خودتون دوباره تغییرش بدید.",
             kind="neutral",
         )
@@ -298,7 +298,7 @@ class ProductRowWidget(QWidget):
         self.store_category_button.setStyleSheet(row_button_style(kind))
         base_tooltip = (
             "دسته‌بندیِ این محصول را مستقیم از دسته‌بندی‌هایِ واقعیِ سایت "
-            "(نه ERP) انتخاب کن"
+            "(نه برنامه حسابداری) انتخاب کن"
         )
         self.store_category_button.setToolTip(
             f"{base_tooltip}\n{tooltip_extra}" if tooltip_extra else base_tooltip
@@ -1639,9 +1639,10 @@ class ProductTab(QWidget):
         dlg.resize(420, 480)
         layout = QVBoxLayout(dlg)
 
+        erp_label = self._erp_label()
         hint = QLabel(
             "دسته‌بندیِ(هایِ) واقعیِ سایت رو برایِ این محصول انتخاب کنید. "
-            "این انتخاب رویِ منطقِ خودکارِ (ERP→دسته‌بندی) اولویت داره و در "
+            f"این انتخاب رویِ منطقِ خودکارِ ({erp_label}→دسته‌بندی) اولویت داره و در "
             "همگام‌سازی‌هایِ بعدی هم حفظ می‌شه — تا خودتون دوباره تغییرش بدید."
         )
         hint.setWordWrap(True)
@@ -1676,7 +1677,7 @@ class ProductTab(QWidget):
 
         btn_row = QHBoxLayout()
         clear_btn = QPushButton("↩️ بازگشت به حالتِ خودکار")
-        clear_btn.setToolTip("حذفِ کاملِ این override — دوباره از منطقِ خودکارِ ERP→دسته‌بندی استفاده می‌شه")
+        clear_btn.setToolTip(f"حذفِ کاملِ این override — دوباره از منطقِ خودکارِ {erp_label}→دسته‌بندی استفاده می‌شه")
         btn_row.addWidget(clear_btn)
         btn_row.addStretch(1)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)

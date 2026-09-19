@@ -1300,9 +1300,12 @@ class CategoryTab(QWidget):
 
     def _sync_categories_sepidar(self):
         if bool(self.config.get("DISABLE_ERP_CATEGORY_SYNC", False)):
+            from sync_app.core.integrations.erp_provider import erp_provider_label
+
+            erp_label = erp_provider_label(self.config)
             QMessageBox.information(
                 self, "غیرفعال",
-                "سینکِ خودکارِ دسته‌بندیِ ERP خاموشه (تیکِ «غیرفعال‌کردنِ سینکِ خودکارِ دسته‌بندی» "
+                f"سینکِ خودکارِ دسته‌بندیِ {erp_label} خاموشه (تیکِ «غیرفعال‌کردنِ سینکِ خودکارِ دسته‌بندی» "
                 "در همین تب زده شده).\nبرایِ ارسال، اول تیک را بردارید.",
             )
             return
