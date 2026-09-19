@@ -1728,6 +1728,10 @@ class PeechaLauncher(QWidget):
         run_tab("variation_tab", "متغیرها", lambda t: t.load_variations())
         run_tab("category_tab", "دسته‌بندی", lambda t: t.load_groups(silent=False, manual=False))
         run_tab("dashboard_tab", "داشبورد", lambda t: t.load_data())
+        # این تب هم به ERP_PROVIDER وابسته‌ست (resolve دسته‌بندی/برندِ
+        # سپیدار در برابرِ دژاوو) — بدونِ این، سوئیچِ ERP بدونِ سوئیچِ سایت
+        # باعث می‌شد self.config همچنان providerِ قبلی رو نشون بده.
+        run_tab("category_brand_studio_tab", "دسته‌بندی و برند", lambda t: t._reload_products())
 
         def load_properties(tab):
             tab.load_properties_preview()
@@ -1772,6 +1776,8 @@ class PeechaLauncher(QWidget):
             ("customer_tab", "مشتریان"),
             ("order_tab", "سفارشات"),
             ("reconciliation_tab", "تطبیق"),
+            ("category_brand_studio_tab", "دسته‌بندی و برند"),
+            ("price_list_studio_tab", "لیستِ قیمت"),
         ):
             tab = getattr(self, attr, None)
             if tab is None:

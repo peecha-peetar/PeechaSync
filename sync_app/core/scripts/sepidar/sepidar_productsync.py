@@ -383,6 +383,9 @@ def sync_products_from_erp(config: dict | None = None) -> dict:
     product_map = load_sepidar_map(_MAP_FILE)
     wcapi = build_store_api(config)
 
+    from sync_app.core.article_price import apply_price_markup
+    from sync_app.core.stock_mode import resolve_stock_mode, apply_stock_mode_to_payload
+
     ok = 0
     failed_skus: list[str] = []
 
@@ -393,14 +396,16 @@ def sync_products_from_erp(config: dict | None = None) -> dict:
         try:
             existing_id, product_map = _resolve_existing_sepidar_product_id(wcapi, sku, product_map)
             wc_cat_id = _resolve_sepidar_product_category(item.get("_item_group_id"), groups_by_id, erp_to_wc_category)
+            group_code = str(item.get("_item_group_id") or "")
+            price = apply_price_markup(item["price"], config, is_sale=False, sku=sku)
             payload = {
                 "name": item["name"] or sku,
                 "sku": sku,
-                "regular_price": str(int(item["price"])) if item["price"] else "0",
-                "manage_stock": True,
-                "stock_quantity": int(item["stock"]),
+                "regular_price": str(int(price)) if price else "0",
                 "status": "publish",
             }
+            stock_mode = resolve_stock_mode(sku, group_code, config)
+            apply_stock_mode_to_payload(payload, stock_mode, int(item["stock"]))
             if wc_cat_id:
                 payload["categories"] = [{"id": int(wc_cat_id)}]
 

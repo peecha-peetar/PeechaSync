@@ -63,8 +63,64 @@ def _clean_record(record: dict | None) -> dict:
     return out
 
 
+_TABLE_FILES = {
+    SITE_CATEGORY_PRICE_KEY: "site_category_price_list.json",
+    SITE_BRAND_PRICE_KEY: "site_brand_price_list.json",
+}
+
+
+def _load_table(storage_key: str) -> dict:
+    """جدولِ رکوردها از فایلِ site-scoped — چون idِ دسته‌بندی/برند مالِ یک
+    سایتِ مشخصه، دقیقاً هم‌الگویِ product_category_override.py. قبلاً این
+    داده مستقیم داخلِ secure_config.bin (بدونِ site-scoping) ذخیره می‌شد؛
+    مهاجرتِ یک‌باره پایین همون دیتایِ قدیمی رو به فایلِ سایتِ فعلی منتقل
+    می‌کنه."""
+    import json
+    import os
+
+    from sync_app.core.sync_utils import site_scoped_path
+
+    path = site_scoped_path(_TABLE_FILES[storage_key])
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            return raw if isinstance(raw, dict) else {}
+        except Exception:
+            return {}
+
+    try:
+        from sync_app.core.secure_config_loader import load_secure_config
+
+        legacy = (load_secure_config(None) or {}).get(storage_key) or {}
+        if legacy:
+            _save_table(storage_key, legacy)
+            return dict(legacy)
+    except Exception:
+        pass
+    return {}
+
+
+def _save_table(storage_key: str, table: dict) -> None:
+    import json
+
+    from sync_app.core.sync_utils import site_scoped_path
+
+    path = site_scoped_path(_TABLE_FILES[storage_key])
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(table, f, ensure_ascii=False, indent=2)
+    except Exception as exc:
+        try:
+            from sync_app.core.sync_utils import log
+
+            log.warning(f"⚠️ ذخیره‌یِ {_TABLE_FILES[storage_key]} ناموفق: {exc}")
+        except Exception:
+            pass
+
+
 def _get_record(config: dict, storage_key: str, entity_id) -> dict | None:
-    table = (config or {}).get(storage_key) or {}
+    table = _load_table(storage_key)
     record = table.get(str(entity_id))
     if not record:
         return None
@@ -73,10 +129,7 @@ def _get_record(config: dict, storage_key: str, entity_id) -> dict | None:
 
 
 def _set_record(storage_key: str, entity_id, record: dict | None) -> None:
-    from sync_app.core.secure_config_loader import load_secure_config, save_secure_config
-
-    cfg = load_secure_config(None) or {}
-    table = dict(cfg.get(storage_key) or {})
+    table = _load_table(storage_key)
     key = str(entity_id).strip()
     if not key:
         return
@@ -85,8 +138,7 @@ def _set_record(storage_key: str, entity_id, record: dict | None) -> None:
         table[key] = cleaned
     else:
         table.pop(key, None)
-    cfg[storage_key] = table
-    save_secure_config(cfg)
+    _save_table(storage_key, table)
 
 
 def _delete_record(storage_key: str, entity_id) -> None:

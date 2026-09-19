@@ -3122,7 +3122,12 @@ class CategoryTab(QWidget):
                         break
 
                     if ok_cat:
-                        if category_map.get(full_code) != cat_id:
+                        # category_map فقط در شاخه‌یِ دژاوو (بالایِ همین تابع)
+                        # مقداردهی می‌شه؛ کوتاه‌مدارشدنِ and باعث می‌شه برایِ
+                        # سپیدار (که این کشِ محلی رو استفاده نمی‌کنه، خودِ
+                        # نگاشتِ اصلی‌اش erp_to_wc/_reconcile_sepidar_category_mapه)
+                        # هیچ‌وقت category_map.get(...) صدا زده نشه.
+                        if not is_sepidar_provider(cfg) and category_map.get(full_code) != cat_id:
                             category_map[full_code] = cat_id
                             save_category_map(category_map)
                         log.info(f"✅ تصویر دسته {full_code} ({s_name}) ارسال شد.")
@@ -3276,7 +3281,10 @@ class CategoryTab(QWidget):
                     fail_count += 1
                     continue
 
-                if category_map.get(full_code) != cat_id:
+                # category_map فقط در شاخه‌یِ دژاوو (بالایِ همین تابع) مقداردهی
+                # می‌شه — همون گاردِ کوتاه‌مدارِ and که در معادلِ Wooِِهمینِ تابع
+                # (_do_send_category_images_to_woo) استفاده شده.
+                if not is_sepidar_provider(cfg) and category_map.get(full_code) != cat_id:
                     category_map[full_code] = cat_id
                     save_category_map(category_map)
                 log.info(f"✅ تصویر دسته {full_code} ({s_name}) ارسال شد.")

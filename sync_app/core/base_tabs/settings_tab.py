@@ -5282,12 +5282,18 @@ class SettingsTab(QWidget):
             ),
         )
         theme_changed = str(old_cfg.get("APP_THEME") or "") != str(theme_value or "")
+        # ERP_PROVIDER عوض‌شده نیاز به بازخوانیِ کاملِ tab‌هایِ SQL-دار داره
+        # (مشتریان/سفارشات/تطبیق هم، نه فقط چهارتایِ زیر) — چون این کلید
+        # مسیرِ دژاوو/سپیدار رو در همه‌شون عوض می‌کنه؛ قبلاً این تغییر تویِ
+        # شاخه‌یِ محدودترِ catalog_changed می‌افتاد و اون چهار تب رو جا
+        # می‌انداخت.
+        erp_provider_changed = self._config_slice_changed(old_cfg, new_cfg, ("ERP_PROVIDER",))
 
         from sync_app.core.connectivity_guard import find_peecha_launcher
 
         launcher = find_peecha_launcher(self)
 
-        if sql_changed:
+        if sql_changed or erp_provider_changed:
             db_name = str(new_cfg.get("SQL_DATABASE") or "").strip()
             if launcher is not None and db_name:
                 if hasattr(launcher, "set_sql_header_database"):

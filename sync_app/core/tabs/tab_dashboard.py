@@ -216,18 +216,35 @@ class DashboardWorker(QObject):
 
             if is_sepidar_provider(self.config):
                 from sync_app.core.scripts.sepidar.sepidar_categorysync import fetch_sepidar_item_groups
-                from sync_app.core.scripts.sepidar.sepidar_productsync import fetch_sepidar_items
+                # به‌جایِ fetch_sepidar_items (بدونِ گروه) از تابعِ سنگین‌ترِ
+                # fetch_sepidar_products_for_sync استفاده می‌شه چون
+                # _item_group_id لازمه — سپیدار از فازِ درختِ کاملِ
+                # دسته‌بندی به بعد واقعاً انتخابِ دامنه (SEPIDAR_SELECTED_GROUPS)
+                # داره، دیگه «دامنه = همه» فرضِ درستی نیست.
+                from sync_app.core.scripts.sepidar.sepidar_productsync import (
+                    fetch_sepidar_products_for_sync, _expand_sepidar_groups_with_descendants,
+                )
 
                 groups = fetch_sepidar_item_groups(self.config)
-                items = fetch_sepidar_items(self.config)
+                items = fetch_sepidar_products_for_sync(self.config)
                 # هر گروهِ ریشه (ParentGroupRef == -5) دقیقاً معادلِ سطحِ
                 # M_Group و بقیه معادلِ S_Groupه (طبقِ خودِ sepidar_categorysync)
                 # — همون دو لیبلِ موجودِ UI بدونِ هیچ تغییرِ رابطِ کاربری درست می‌مونن.
                 sql["main_groups"] = sum(1 for g in groups if g["parent_ref"] == -5)
                 sql["sub_groups"] = len(groups) - sql["main_groups"]
                 sql["articles"] = len(items)
-                sql["selected_groups"] = len(groups)  # سپیدار «انتخابِ زیرگروه» نداره — دامنه = همه
-                sql["filtered_articles"] = sql["articles"]
+                selected = [
+                    str(g).strip() for g in self.config.get("SEPIDAR_SELECTED_GROUPS", []) if str(g).strip()
+                ]
+                if selected:
+                    scope_ids = _expand_sepidar_groups_with_descendants(selected, groups)
+                    sql["selected_groups"] = len(scope_ids)
+                    sql["filtered_articles"] = sum(
+                        1 for it in items if str(it.get("_item_group_id")) in scope_ids
+                    )
+                else:
+                    sql["selected_groups"] = len(groups)
+                    sql["filtered_articles"] = sql["articles"]
                 try:
                     cur.execute("SELECT SUM(CAST(ISNULL(Quantity, 0) AS BIGINT)) FROM POS.ItemOpening")
                     sql["total_stock"] = int(cur.fetchone()[0] or 0)
@@ -1230,7 +1247,14 @@ class DashboardTab(QWidget):
 
         self.status_label.setText(f"آخرین بروزرسانی: {loaded_at}")
 
-        map_count = len(load_product_woo_map() or {})
+        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+
+        if is_sepidar_provider(self._static_config):
+            from sync_app.core.scripts.sepidar.sepidar_common import load_sepidar_map
+
+            map_count = len(load_sepidar_map("sepidar_product_map.json") or {})
+        else:
+            map_count = len(load_product_woo_map() or {})
         if map_count > 0:
             recon_msg = f"{_fmt_num(map_count)} جفت محصول در product_woo_map ثبت شده است."
         else:
@@ -1376,9 +1400,8 @@ class DashboardTab(QWidget):
 
         link_health = data.get("link_health")
         if link_health:
-            product_map_count = len(load_product_woo_map() or {})
             health_items = [
-                ("لینک‌شده", float(product_map_count)),
+                ("لینک‌شده", float(map_count)),
                 ("لینک‌نشده", float(link_health.get("products", 0))),
             ]
             self._health_chart.set_data(

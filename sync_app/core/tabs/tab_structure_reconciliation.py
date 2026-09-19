@@ -365,9 +365,27 @@ class _CategoryOptionsLoader(QThread):
     def __init__(self, cfg):
         super().__init__()
         self.cfg = cfg
+        self.sepidar_groups: list[dict] | None = None
 
     def run(self):
         try:
+            from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+
+            if is_sepidar_provider(self.cfg):
+                from sync_app.core.scripts.sepidar.sepidar_categorysync import (
+                    fetch_sepidar_item_groups, group_label_chain,
+                )
+
+                groups = fetch_sepidar_item_groups(self.cfg)
+                by_id = {str(g["id"]): g for g in groups}
+                options = [
+                    (str(g["id"]), group_label_chain(g["id"], by_id))
+                    for g in sorted(groups, key=lambda g: g.get("title") or "")
+                ]
+                self.sepidar_groups = groups
+                self.done.emit(options, "")
+                return
+
             from sync_app.core.sql_connection_helper import open_sql_connection
 
             conn, _, _ = open_sql_connection(self.cfg, timeout=5)
@@ -470,10 +488,11 @@ class _SepidarSyncedSkuLoader(QThread):
 
     done = pyqtSignal(list, str)  # [(sku, label), ...], error
 
-    def __init__(self, cfg, query: str):
+    def __init__(self, cfg, query: str, category_code: str = ""):
         super().__init__()
         self.cfg = cfg
         self.query = query
+        self.category_code = category_code
 
     def run(self):
         try:
@@ -485,8 +504,26 @@ class _SepidarSyncedSkuLoader(QThread):
             by_sku = {str(p.get("sku") or "").strip(): p for p in products}
             needle = str(self.query or "").strip().lower()
 
+            category_code = str(self.category_code or "").strip()
+            scope_ids = None
+            group_by_sku: dict = {}
+            if category_code:
+                from sync_app.core.scripts.sepidar.sepidar_categorysync import fetch_sepidar_item_groups
+                from sync_app.core.scripts.sepidar.sepidar_productsync import (
+                    fetch_sepidar_products_for_sync, _expand_sepidar_groups_with_descendants,
+                )
+
+                groups = fetch_sepidar_item_groups(self.cfg)
+                scope_ids = _expand_sepidar_groups_with_descendants([category_code], groups)
+                erp_items = fetch_sepidar_products_for_sync(self.cfg)
+                group_by_sku = {it["sku"]: it.get("_item_group_id") for it in erp_items if it.get("sku")}
+
             out = []
             for sku in sepidar_map:
+                if scope_ids is not None:
+                    gid = group_by_sku.get(sku)
+                    if gid is None or str(gid) not in scope_ids:
+                        continue
                 product = by_sku.get(sku) or {}
                 name = str(product.get("name") or "").strip()
                 if needle and needle not in sku.lower() and needle not in name.lower():
@@ -596,6 +633,7 @@ class StructureReconciliationTab(QWidget):
         self._syncing_selection = False
         self.sv_suggestions: list[dict] = []
         self.fs_suggestions: list[dict] = []
+        self._sepidar_groups_for_filter: list[dict] | None = None
 
         from sync_app.core.integrations.erp_provider import erp_provider_label
 
@@ -607,23 +645,15 @@ class StructureReconciliationTab(QWidget):
         self._load_category_options()
 
     def _load_category_options(self):
-        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
-
-        if is_sepidar_provider(self.config):
-            # سپیدار/دشت جدولِ M_Group/S_Group نداره — تطبیقِ ساختاری برایِ
-            # این providerها هنوز پیاده‌سازی نشده (بک‌لاگِ فازِ بعدی)،
-            # پس فقط لیستِ دسته‌ها رو خالی می‌ذاریم، بدونِ کوئریِ دژاوو.
-            self._on_category_options_loaded([], None)
-            return
-
         loader = _CategoryOptionsLoader(self.config)
         self._keep_loader(loader)
-        loader.done.connect(self._on_category_options_loaded)
+        loader.done.connect(lambda options, error, ldr=loader: self._on_category_options_loaded(options, error, ldr))
         loader.start()
 
-    def _on_category_options_loaded(self, options, error):
+    def _on_category_options_loaded(self, options, error, loader=None):
         if error:
             return
+        self._sepidar_groups_for_filter = getattr(loader, "sepidar_groups", None)
         for combo in (self.sv_category_filter, self.fs_category_filter):
             current = combo.currentData()
             combo.blockSignals(True)
@@ -930,10 +960,10 @@ class StructureReconciliationTab(QWidget):
 
         from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
 
+        category_code = self.sv_category_filter.currentData() or ""
         if is_sepidar_provider(self.config):
-            loader = _SepidarSyncedSkuLoader(self.config, self.sv_erp_search.text())
+            loader = _SepidarSyncedSkuLoader(self.config, self.sv_erp_search.text(), category_code)
         else:
-            category_code = self.sv_category_filter.currentData() or ""
             loader = _ErpSimpleSkuLoader(self.config, self.sv_erp_search.text(), category_code)
         self._keep_loader(loader)
         loader.done.connect(self._on_sv_erp_results)
@@ -944,13 +974,20 @@ class StructureReconciliationTab(QWidget):
             self.sv_status_label.setText(f"⚠️ جستجویِ {self.erp_label} ناموفق بود: {error}")
             return
         from sync_app.core.structure_mismatch_override import get_site_variation_target
-        from sync_app.core.product_woo_map_helper import load_product_woo_map
+        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
 
         # کالاهایِ سادهٔ ERP که از قبل با «تطبیق» معمولی (نه این ابزار) به یک
         # محصولِ سایت لینک شدن — اینا مشکلی ندارن، محصولِ ساده‌ی معمولی‌اند و
         # نیازی به تطبیقِ ساختاری ندارن؛ نباید کنارِ کالاهایِ واقعاً بی‌لینک
         # تویِ «فقط لینک‌نشده» بیفتن.
-        product_map = load_product_woo_map()
+        if is_sepidar_provider(self.config):
+            from sync_app.core.scripts.sepidar.sepidar_common import load_sepidar_map
+
+            product_map = load_sepidar_map("sepidar_product_map.json")
+        else:
+            from sync_app.core.product_woo_map_helper import load_product_woo_map
+
+            product_map = load_product_woo_map()
 
         structural_count = 0
         reconciled_count = 0

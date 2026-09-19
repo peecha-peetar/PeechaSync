@@ -127,6 +127,7 @@ class ReconciliationTab(QWidget):
         self.config = load_secure_config(None) or {}
         self._comparison: ComparisonResult | None = None
         self._comparison_unfiltered: ComparisonResult | None = None
+        self._sepidar_groups_for_filter: list[dict] | None = None
         self._pending_pairs: list[tuple[ReconRow, ReconRow]] = []
         self._auto_suggested_pairs: list[tuple[ReconRow, ReconRow, str]] = []
         self._active_entity = ENTITY_PRODUCTS
@@ -1335,9 +1336,17 @@ class ReconciliationTab(QWidget):
             from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
 
             if is_sepidar_provider(config):
-                # M_Group/S_Group مخصوصِ دژاووعن — سپیدار/دشت هنوز فیلترِ
-                # دسته‌بندی نداره، فقط «همه دسته‌بندی‌ها» می‌مونه.
-                return []
+                from sync_app.core.scripts.sepidar.sepidar_categorysync import (
+                    fetch_sepidar_item_groups, group_label_chain,
+                )
+
+                groups = fetch_sepidar_item_groups(config)
+                by_id = {str(g["id"]): g for g in groups}
+                options = [
+                    (str(g["id"]), group_label_chain(g["id"], by_id))
+                    for g in sorted(groups, key=lambda g: g.get("title") or "")
+                ]
+                return options, groups
 
             conn, _, _ = open_sql_connection(config, timeout=5)
             try:
@@ -1364,11 +1373,13 @@ class ReconciliationTab(QWidget):
                     groups.append((m_code, m_name))
                     for full_code, s_name in sub_by_main.get(m_code, []):
                         groups.append((full_code, f"{m_name} › {s_name}"))
-                return groups
+                return groups, None
             finally:
                 conn.close()
 
-        def _done(groups):
+        def _done(result):
+            groups, sepidar_groups = result
+            self._sepidar_groups_for_filter = sepidar_groups
             self.category_filter_combo.blockSignals(True)
             self.category_filter_combo.clear()
             self.category_filter_combo.addItem("همه دسته‌بندی‌ها", "")
@@ -1442,9 +1453,24 @@ class ReconciliationTab(QWidget):
         def _sku_of(row: ReconRow) -> str:
             return str(row.erp_key or row.key or "").split(":")[-1].strip()
 
+        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+
+        sepidar_scope_ids: set[str] | None = None
+        if group_code and is_sepidar_provider(self.config) and self._sepidar_groups_for_filter:
+            from sync_app.core.scripts.sepidar.sepidar_productsync import (
+                _expand_sepidar_groups_with_descendants,
+            )
+
+            sepidar_scope_ids = _expand_sepidar_groups_with_descendants(
+                [group_code], self._sepidar_groups_for_filter
+            )
+
         def _erp_matches(row: ReconRow) -> bool:
             if not group_code:
                 return True
+            if sepidar_scope_ids is not None:
+                item_group_id = row.extra.get("item_group_id")
+                return item_group_id is not None and str(item_group_id) in sepidar_scope_ids
             sku = _sku_of(row)
             return bool(sku) and sku.startswith(group_code)
 
@@ -2687,11 +2713,11 @@ class ReconciliationTab(QWidget):
         if not confirm_live_site_backup(self, "لغو تطبیق"):
             return
 
-        if remove_link_pair(entity, erp, wc):
+        if remove_link_pair(entity, erp, wc, config=self.config):
             self._mark_rows_unsynced_locally(erp.key, wc.key)
             self._refresh_lists()
             self._set_status("success", "↩ تطبیق از فایل تطبیق حذف شد.")
-        elif entity == ENTITY_PRODUCTS and not product_pair_in_map(erp, wc):
+        elif entity == ENTITY_PRODUCTS and not product_pair_in_map(erp, wc, config=self.config):
             QMessageBox.information(
                 self,
                 "در فایل ثبت نشده",

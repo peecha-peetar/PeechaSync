@@ -309,6 +309,25 @@ def fetch_sepidar_item_groups(config: dict | None = None) -> list[dict]:
     ]
 
 
+def group_label_chain(item_group_id, groups_by_id: dict) -> str:
+    """برچسبِ «والد › فرزند › نوه...» برایِ یک گروه — برایِ کمبوباکسِ
+    فیلترِ دسته‌بندی (چون سپیدار برخلافِ M_Group/S_Groupِدژاووِ ۲سطحی،
+    درختِ عمقِ دلخواهه). groups_by_id: {str(id): {..., parent_ref}}،
+    خروجیِ fetch_sepidar_item_groups. گاردِ چرخه با seen."""
+    chain: list[str] = []
+    cur = str(item_group_id)
+    seen: set[str] = set()
+    while cur in groups_by_id and cur not in seen:
+        seen.add(cur)
+        g = groups_by_id[cur]
+        chain.append(g.get("title") or cur)
+        parent = g.get("parent_ref")
+        if parent is None or str(parent) == str(_ROOT_PARENT_REF) or str(parent) not in groups_by_id:
+            break
+        cur = str(parent)
+    return " › ".join(reversed(chain))
+
+
 def main(config: dict | None = None) -> dict:
     from sync_app.core.secure_config_loader import load_secure_config
 

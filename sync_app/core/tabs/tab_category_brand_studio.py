@@ -630,11 +630,13 @@ class CategoryBrandStudioTab(QWidget):
         from sync_app.core.integrations.commerce_provider import is_prestashop
         from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
 
-        product_map = load_product_woo_map()
         ps_mode = is_prestashop(self.config)
 
         sepidar = is_sepidar_provider(self.config)
         if sepidar:
+            from sync_app.core.scripts.sepidar.sepidar_common import load_sepidar_map
+
+            product_map = load_sepidar_map("sepidar_product_map.json")
             from sync_app.core.scripts.sepidar.sepidar_categorysync import (
                 fetch_sepidar_item_groups, _reconcile_sepidar_category_map,
             )
@@ -649,6 +651,7 @@ class CategoryBrandStudioTab(QWidget):
                 if r.get("sku")
             }
         else:
+            product_map = load_product_woo_map()
             cat_map = load_category_map() if not ps_mode else {}
 
         ok_count, fail_count = 0, 0
@@ -766,8 +769,14 @@ class CategoryBrandStudioTab(QWidget):
         from sync_app.core.product_woo_map_helper import load_product_woo_map
         from sync_app.core.product_brand_override import set_manual_brand_id
         from sync_app.core.integrations.commerce_provider import is_prestashop
+        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
 
-        product_map = load_product_woo_map()
+        if is_sepidar_provider(self.config):
+            from sync_app.core.scripts.sepidar.sepidar_common import load_sepidar_map
+
+            product_map = load_sepidar_map("sepidar_product_map.json")
+        else:
+            product_map = load_product_woo_map()
         ps_mode = is_prestashop(self.config)
         ok_count, fail_count = 0, 0
         for sku in skus:
@@ -808,3 +817,16 @@ class CategoryBrandStudioTab(QWidget):
         # شده)، حالا که تبِ محصولات قطعاً موجوده، دوباره بارگذاری کن.
         if self.product_list.count() == 0:
             self._reload_products()
+            return
+        from sync_app.core.tab_operation_guard import consume_pending_sql_reload
+
+        consume_pending_sql_reload(self, self._reload_products)
+
+    def reload_site_scoped_caches(self):
+        """بعد از سوئیچِ سایت/پریست (بدونِ بستنِ تب) صدا زده می‌شه — چون
+        self._categories/self._brands/self.category_combo/self.brand_combo
+        یک‌بار موقعِ ساختِ تب لود شدن و اگه این‌جا دوباره از سایتِ فعلی
+        دریافت نشن، دکمه‌هایِ «الصاق» ممکنه idِ دسته‌بندی/برندِ سایتِ قبلی
+        رو رویِ سایتِ جدید بنویسن. _load_site_taxonomy خودش در انتها
+        _reload_products رو هم صدا می‌زنه — نیازی به فراخوانیِ جدا نیست."""
+        self._load_site_taxonomy()

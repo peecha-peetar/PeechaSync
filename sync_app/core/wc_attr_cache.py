@@ -38,9 +38,13 @@ def load_wc_attr_cache(
     labels = [x for x in labels if x]
     labels_key = _dim_labels_key(labels)
     try:
+        from sync_app.core.sync_utils import _site_scope_key
+
         cfg = load_secure_config(None) or {}
         raw = cfg.get(WC_ATTR_CACHE_KEY) or {}
         if not isinstance(raw, dict):
+            return None, None
+        if raw.get("scope") != _site_scope_key():
             return None, None
         if _now() - float(raw.get("at") or 0) > max(60, int(ttl_sec)):
             return None, None
@@ -71,9 +75,12 @@ def save_wc_attr_cache(
             labels.append(dim3_label)
     labels = [x for x in labels if x]
     try:
+        from sync_app.core.sync_utils import _site_scope_key
+
         cfg = load_secure_config(None) or {}
         cfg[WC_ATTR_CACHE_KEY] = {
             "at": _now(),
+            "scope": _site_scope_key(),
             "dim_labels_key": _dim_labels_key(labels),
             "global_ids": global_ids,
             "term_lookup": term_lookup,
@@ -93,10 +100,14 @@ def attrs_fingerprint(attr_map: dict) -> str:
 
 def load_product_attrs_fingerprint(product_id: int) -> str | None:
     try:
+        from sync_app.core.sync_utils import _site_scope_key
+
         cfg = load_secure_config(None) or {}
         fps = cfg.get(WC_PRODUCT_ATTR_FP_KEY) or {}
         if isinstance(fps, dict):
-            return fps.get(str(int(product_id)))
+            scope_table = fps.get(_site_scope_key())
+            if isinstance(scope_table, dict):
+                return scope_table.get(str(int(product_id)))
     except Exception:
         pass
     return None
@@ -104,9 +115,14 @@ def load_product_attrs_fingerprint(product_id: int) -> str | None:
 
 def save_product_attrs_fingerprint(product_id: int, fingerprint: str) -> None:
     try:
+        from sync_app.core.sync_utils import _site_scope_key
+
         cfg = load_secure_config(None) or {}
         fps = dict(cfg.get(WC_PRODUCT_ATTR_FP_KEY) or {})
-        fps[str(int(product_id))] = str(fingerprint or "")
+        scope = _site_scope_key()
+        scope_table = dict(fps.get(scope) or {})
+        scope_table[str(int(product_id))] = str(fingerprint or "")
+        fps[scope] = scope_table
         cfg[WC_PRODUCT_ATTR_FP_KEY] = fps
         save_secure_config(cfg)
     except Exception:

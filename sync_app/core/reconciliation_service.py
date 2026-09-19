@@ -835,8 +835,20 @@ def _mark_product_sync_by_map(erp_rows: list[ReconRow], wc_rows: list[ReconRow])
         wc.synced = True
 
 
-def product_pair_in_map(erp: ReconRow, wc: ReconRow) -> bool:
-    """آیا این جفت ERP↔Woo در product_woo_map.json ثبت شده؟"""
+def product_pair_in_map(erp: ReconRow, wc: ReconRow, *, config: dict | None = None) -> bool:
+    """آیا این جفت ERP↔Woo در فایلِ نگاشتِ محصول ثبت شده؟"""
+    from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+
+    if is_sepidar_provider(config):
+        from sync_app.core.scripts.sepidar.sepidar_common import load_sepidar_map
+
+        sku = str(wc.match_key or (wc.extra or {}).get("sku") or "").strip()
+        item_id = str(erp.erp_key or "").strip()
+        if not sku or not item_id:
+            return False
+        product_map = load_sepidar_map("sepidar_product_map.json")
+        return str(product_map.get(sku) or "") == item_id
+
     sku = str(erp.erp_key or erp.match_key or "").strip()
     if not sku:
         return False
@@ -1771,21 +1783,27 @@ def _fetch_sepidar_wc_categories(config: dict) -> list[ReconRow]:
 
 
 def _fetch_sepidar_products(config: dict) -> list[ReconRow]:
-    from sync_app.core.scripts.sepidar.sepidar_productsync import fetch_sepidar_items
+    # قبلاً از fetch_sepidar_items (بدونِ گروه) می‌خوند — برایِ فیلترِ
+    # دسته‌بندی نیاز به _item_group_id هر کالا هست، پس از تابعِ سنگین‌تر
+    # (با join به POS.ItemGroupItem) استفاده می‌شه؛ تنها صداکننده همین‌جاست.
+    from sync_app.core.scripts.sepidar.sepidar_productsync import fetch_sepidar_products_for_sync
 
-    items = fetch_sepidar_items(config)
+    items = fetch_sepidar_products_for_sync(config)
     rows: list[ReconRow] = []
     for it in items:
-        item_id = str(it["id"])
+        item_id = str(it.get("_item_id") or "")
+        sku = str(it.get("sku") or "").strip()
+        if not item_id or not sku:
+            continue
         rows.append(
             ReconRow(
                 key=f"sepidar:{item_id}",
                 erp_key=item_id,
-                label=f"{it['title']} — کد {it['code']} — {it['price']:,.0f}",
+                label=f"{it.get('name') or sku} — کد {sku} — {it.get('price', 0):,.0f}",
                 synced=False,
                 side="erp",
-                match_key=it["code"],
-                extra={"sku": it["code"]},
+                match_key=sku,
+                extra={"sku": sku, "item_group_id": it.get("_item_group_id")},
             )
         )
     return rows
@@ -2397,8 +2415,45 @@ def _find_erp_partner_for_wc(
     return None
 
 
-def remove_link_pair(entity: str, erp: ReconRow, wc: ReconRow) -> bool:
+def _remove_sepidar_category_link(erp: ReconRow, wc: ReconRow) -> bool:
+    from sync_app.core.scripts.sepidar.sepidar_common import load_sepidar_map, save_sepidar_map
+
+    sepidar_map = load_sepidar_map("sepidar_category_map.json")
+    site_id = str(wc.match_key or wc.wc_id or "").strip()
+    item_group_id = str(erp.erp_key or "").strip()
+    if not site_id or not item_group_id or str(sepidar_map.get(site_id)) != item_group_id:
+        return False
+    del sepidar_map[site_id]
+    save_sepidar_map("sepidar_category_map.json", sepidar_map)
+    log.info(f"↩ لغو تطبیق دسته (سپیدار): {item_group_id} ↔ سایت #{site_id}")
+    return True
+
+
+def _remove_sepidar_product_link(erp: ReconRow, wc: ReconRow) -> bool:
+    from sync_app.core.scripts.sepidar.sepidar_common import load_sepidar_map, save_sepidar_map
+
+    sepidar_map = load_sepidar_map("sepidar_product_map.json")
+    sku = str(wc.match_key or (wc.extra or {}).get("sku") or "").strip()
+    item_id = str(erp.erp_key or "").strip()
+    if not sku or not item_id or str(sepidar_map.get(sku)) != item_id:
+        return False
+    del sepidar_map[sku]
+    save_sepidar_map("sepidar_product_map.json", sepidar_map)
+    log.info(f"↩ لغو تطبیق محصول (سپیدار): {sku} ↔ {item_id}")
+    return True
+
+
+def remove_link_pair(entity: str, erp: ReconRow, wc: ReconRow, *, config: dict | None = None) -> bool:
     """تطبیق ذخیره‌شده را از فایل نگاشت حذف می‌کند."""
+    from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+
+    if is_sepidar_provider(config):
+        if entity == ENTITY_CATEGORIES:
+            return _remove_sepidar_category_link(erp, wc)
+        if entity == ENTITY_PRODUCTS:
+            return _remove_sepidar_product_link(erp, wc)
+        return False
+
     if entity == ENTITY_CATEGORIES:
         category_map = load_category_map()
         code = str(erp.erp_key or "").strip()

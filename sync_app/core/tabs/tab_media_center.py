@@ -754,7 +754,12 @@ class MediaCenterTab(QWidget):
         append_mode = append_radio.isChecked()
 
         config = load_secure_config(None) or {}
-        product_map = load_product_woo_map()
+        if is_sepidar_provider(config):
+            from sync_app.core.scripts.sepidar.sepidar_common import load_sepidar_map
+
+            product_map = load_sepidar_map("sepidar_product_map.json")
+        else:
+            product_map = load_product_woo_map()
         matched_groups = dict(self._bulk_matched_groups)
 
         self.bulk_upload_btn.setEnabled(False)
