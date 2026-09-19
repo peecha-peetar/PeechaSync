@@ -107,125 +107,11 @@ class LoginWindow(QDialog):
         QTimer.singleShot(1500, self.refresh_connectivity_status)
 
     def _init_ui(self):
-        self.setStyleSheet("""
-            QDialog {
-                background: #0f0a1e;
-            }
-            QFrame#formPanel {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #1e1b4b, stop:0.5 #1a1035, stop:1 #0f0a1e);
-                border: 1.5px solid rgba(99, 102, 241, 0.6);
-                border-left: none;
-                border-top-right-radius: 26px;
-                border-bottom-right-radius: 26px;
-            }
-            QLabel {
-                background: transparent;
-                color: #d1d5db;
-            }
-            QLabel#welcomeTitle {
-                color: #ffffff;
-                font-size: 22px;
-                font-weight: 800;
-            }
-            QLabel#welcomeSubtitle {
-                color: #a5b4fc;
-                font-size: 11.5px;
-                font-weight: 500;
-            }
-            QLabel#fieldLabel {
-                color: #a5b4fc;
-                font-size: 11px;
-                font-weight: 700;
-            }
-            QLabel#statusLabel {
-                color: #6b7280;
-                font-size: 10px;
-            }
-            QLineEdit {
-                background-color: rgba(15, 20, 40, 0.85);
-                border: 1px solid rgba(99, 102, 241, 0.35);
-                border-radius: 10px;
-                padding: 10px 14px;
-                font-size: 13px;
-                color: #e5e7eb;
-                selection-background-color: #4f46e5;
-            }
-            QLineEdit:focus {
-                border: 1.5px solid #818cf8;
-                background-color: rgba(10, 12, 30, 0.95);
-            }
-            QComboBox {
-                background-color: rgba(15, 20, 40, 0.85);
-                border: 1px solid rgba(99, 102, 241, 0.35);
-                border-radius: 10px;
-                padding: 8px 14px;
-                font-size: 13px;
-                color: #e5e7eb;
-                selection-background-color: #4f46e5;
-            }
-            QComboBox:focus {
-                border: 1.5px solid #818cf8;
-                background-color: rgba(10, 12, 30, 0.95);
-            }
-            QComboBox::drop-down {
-                border: none;
-                width: 26px;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #1a1035;
-                color: #e5e7eb;
-                selection-background-color: #4f46e5;
-                border: 1px solid rgba(99, 102, 241, 0.5);
-                outline: none;
-            }
-            QPushButton#loginBtn {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #4f46e5, stop:1 #7c3aed);
-                color: white;
-                border: none;
-                border-radius: 10px;
-                font-size: 14px;
-                font-weight: 700;
-                padding: 11px;
-                letter-spacing: 1px;
-            }
-            QPushButton#loginBtn:hover {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #4338ca, stop:1 #6d28d9);
-            }
-            QPushButton#loginBtn:pressed {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #3730a3, stop:1 #581c87);
-            }
-            QPushButton#refreshBtn {
-                background-color: transparent;
-                color: #6366f1;
-                border: 1px solid rgba(99, 102, 241, 0.4);
-                border-radius: 8px;
-                font-size: 10px;
-                font-weight: 600;
-                padding: 7px;
-            }
-            QPushButton#refreshBtn:hover {
-                background-color: rgba(79, 70, 229, 0.12);
-                color: #a5b4fc;
-                border-color: rgba(99, 102, 241, 0.7);
-            }
-            QPushButton#closeBtn {
-                background-color: transparent;
-                color: rgba(129, 140, 248, 0.6);
-                border: none;
-                font-size: 18px;
-                min-width: 28px;
-                min-height: 28px;
-                border-radius: 14px;
-            }
-            QPushButton#closeBtn:hover {
-                background-color: rgba(239, 68, 68, 0.2);
-                color: #f87171;
-            }
-        """)
+        from sync_app.core.app_theme import build_login_window_stylesheet, get_active_theme_palette
+
+        _, palette = get_active_theme_palette()
+        self.setStyleSheet(build_login_window_stylesheet(palette))
+        self._theme_hover_color = palette["hover"]
 
         PANEL_H = 568
         PHOTO_W = 336
@@ -289,7 +175,10 @@ class LoginWindow(QDialog):
         # خط جداکننده
         divider = QFrame()
         divider.setFixedHeight(1)
-        divider.setStyleSheet("background: rgba(99, 102, 241, 0.2); border: none; margin: 0 8px;")
+        from sync_app.core.app_theme import _hex_to_rgb
+
+        hr, hg, hb = _hex_to_rgb(self._theme_hover_color)
+        divider.setStyleSheet(f"background: rgba({hr}, {hg}, {hb}, 0.2); border: none; margin: 0 8px;")
         card_layout.addWidget(divider)
         card_layout.addSpacing(12)
 
