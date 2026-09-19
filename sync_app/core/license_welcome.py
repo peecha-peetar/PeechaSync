@@ -30,25 +30,50 @@ from sync_app.core.tabs.tab_license import LicenseTab
 from sync_app.core.wc_sync_helper import open_external_url
 
 
+def _boot_log(msg: str) -> None:
+    """هم‌الگویِ main.py._boot_log/peecha_launcher._boot_log — مستقیم رویِ
+    همون فایلِ startup-errors.log، برایِ ردیابیِ دقیقِ محلِ گیرکردنِ
+    LicenseWelcomeWindow (بدونِ نیاز به importِ متقابلِ ماژول‌ها)."""
+    try:
+        import os
+        from datetime import datetime
+
+        base = os.getenv("LOCALAPPDATA") or os.path.expanduser("~")
+        folder = os.path.join(base, "PeechaSync")
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, "startup-errors.log")
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(f"[{datetime.now():%a %m/%d/%Y %H:%M:%S.%f}] boot {msg}\n")
+    except Exception:
+        pass
+
+
 class LicenseWelcomeWindow(QWidget):
     """راهنمای ساده برای کاربر تازه — به‌جای تب فنی فعال‌سازی در شروع برنامه."""
 
     def __init__(self, on_activated=None):
         super().__init__()
+        _boot_log("LicenseWelcomeWindow.__init__ start")
         self._on_activated = on_activated
         self.hwid = ""
         self._cfg = load_secure_config(None) or {}
+        _boot_log("LicenseWelcomeWindow: config loaded")
         self._site_url = license_server_url(self._cfg)
         self._support_url = license_support_url(self._cfg)
 
         self.setObjectName("licenseWelcomeRoot")
         self.setLayoutDirection(Qt.RightToLeft)
         self._apply_theme()
+        _boot_log("LicenseWelcomeWindow: theme applied")
         self._build_ui()
+        _boot_log("LicenseWelcomeWindow: UI built")
         self.btn_activate.setEnabled(False)
         self._apply_status_copy()
+        _boot_log("LicenseWelcomeWindow: status copy applied")
         self._fetch_hwid_async()
+        _boot_log("LicenseWelcomeWindow: hwid fetch kicked off (async)")
         QTimer.singleShot(600, self._try_refresh_existing_license)
+        _boot_log("LicenseWelcomeWindow.__init__ done")
 
     def _fetch_hwid_async(self) -> None:
         """LicenseTab.get_hwid() رویِ ویندوز با subprocess (PowerShell/wmic)

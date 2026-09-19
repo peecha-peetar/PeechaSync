@@ -3559,11 +3559,14 @@ def main(existing_app=None):
             except Exception:
                 pass
     
+    _boot_log("main() entered")
     instance_manager = SingleInstanceManager("peecha_launcher")
     instance_manager.ensure_single_instance()
+    _boot_log("single-instance check passed")
     _startup_log.info("Loading PeechaSync UI...")
 
     apply_windows_taskbar_branding()
+    _boot_log("taskbar branding applied")
     app = existing_app or QApplication(sys.argv)
     app._peecha_splash = getattr(app, "_peecha_splash", None)
     if app._peecha_splash is None:
@@ -3572,6 +3575,7 @@ def main(existing_app=None):
         splash.show()
         app.processEvents()
         app._peecha_splash = splash
+    _boot_log("loading splash ready")
     _install_crash_logger()
     app.setQuitOnLastWindowClosed(False)
     app_icon = brand_icon()
@@ -3580,15 +3584,19 @@ def main(existing_app=None):
     install_persian_message_boxes()
     install_messagebox_logging()
     QTimer.singleShot(0, lambda: ensure_iransans_font_loaded(app))
+    _boot_log("crash logger + message boxes installed")
 
     migrate_legacy_profiles(log)
+    _boot_log("legacy profile migration checked")
     last_profile = load_last_profile_id()
     if last_profile:
         activate_profile(last_profile)
     else:
         reconfigure_app_logging()
+    _boot_log(f"profile activation done (last_profile={last_profile!r})")
 
     cfg = load_secure_config_after_profile(log) or {}
+    _boot_log("secure config loaded")
 
     selected_theme = cfg.get("APP_THEME", "navy")
     if selected_theme not in ALLOWED_THEMES:
@@ -3637,7 +3645,10 @@ def main(existing_app=None):
         instance_manager.cleanup()
         sys.exit(1)
 
-    if LicenseTab.is_license_valid_for_launch():
+    _boot_log("checking license validity")
+    license_ok = LicenseTab.is_license_valid_for_launch()
+    _boot_log(f"license validity checked (valid={license_ok})")
+    if license_ok:
         scope_ok, scope_msg = LicenseTab.check_license_scope(cfg)
         if not scope_ok:
             _block_on_license_scope(scope_msg)
@@ -3654,16 +3665,21 @@ def main(existing_app=None):
             show_main_launcher()
     else:
         _startup_log.info("License required - opening activation window...")
+        _boot_log("importing license_welcome module")
         from sync_app.core.license_welcome import LicenseWelcomeWindow
 
+        _boot_log("constructing LicenseWelcomeWindow")
         activation_win = LicenseWelcomeWindow(on_activated=show_login_window)
+        _boot_log("LicenseWelcomeWindow constructed")
         from sync_app.core.app_site_config import get_store_display_name
 
         activation_win.setWindowTitle(f"فعال‌سازی — {get_store_display_name()}")
         apply_brand_window_icon(activation_win)
         activation_win.resize(540, 720)
         activation_win.setMinimumSize(480, 620)
+        _boot_log("presenting LicenseWelcomeWindow")
         _present_startup_window(activation_win, "License activation")
+        _boot_log("LicenseWelcomeWindow presented")
 
     exit_code = app.exec_()
     
