@@ -3555,8 +3555,16 @@ def _present_startup_window(window, label: str) -> None:
     _startup_log.info("%s opened", label)
     _boot_log(
         f"{label}: post-show state — visible={window.isVisible()} "
-        f"minimized={window.isMinimized()} active={window.isActiveWindow()}"
+        f"minimized={window.isMinimized()} active={window.isActiveWindow()} "
+        f"geometry={window.geometry()} winId={int(window.winId())}"
     )
+    try:
+        screens = QApplication.screens() if app is not None else []
+        _boot_log(f"{label}: screen count={len(screens)}")
+        for i, scr in enumerate(screens):
+            _boot_log(f"{label}: screen[{i}] name={scr.name()!r} geometry={scr.geometry()} available={scr.availableGeometry()}")
+    except Exception as exc:
+        _boot_log(f"{label}: screen enumeration failed: {exc}")
     if os.environ.get("PEECHA_DEBUG_CONSOLE", "").strip().lower() in ("1", "true", "yes"):
         print(f"[INFO] {label} opened - check taskbar or Alt+Tab", flush=True)
 
@@ -3577,6 +3585,21 @@ def main(existing_app=None):
                 pass
     
     _boot_log("main() entered")
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            pid = os.getpid()
+            session_id = ctypes.c_ulong()
+            ctypes.windll.kernel32.ProcessIdToSessionId(pid, ctypes.byref(session_id))
+            active_console_session = ctypes.windll.kernel32.WTSGetActiveConsoleSessionId()
+            _boot_log(
+                f"windows session check — pid={pid} process_session={session_id.value} "
+                f"active_console_session={active_console_session} "
+                f"same_session={session_id.value == active_console_session}"
+            )
+        except Exception as exc:
+            _boot_log(f"windows session check failed: {exc}")
     instance_manager = SingleInstanceManager("peecha_launcher")
     instance_manager.ensure_single_instance()
     _boot_log("single-instance check passed")
