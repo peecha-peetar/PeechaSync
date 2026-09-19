@@ -1256,12 +1256,36 @@ class CategoryTab(QWidget):
         return ids
 
     def _populate_selected_list_sepidar(self, selected_ids):
+        from sync_app.core.stock_mode import get_category_stock_mode
+        from sync_app.core.category_price_list import get_category_price_list_index
+
         self.selected_list.clear()
         by_id = getattr(self, "_sepidar_groups_by_id", {}) or {}
         for gid in selected_ids:
+            gid = str(gid)
             title = (by_id.get(gid) or {}).get("title") or gid
-            item = QListWidgetItem(self._rtl_display(f"{title} (کد: {gid})"))
+            text = self._rtl_display(f"{title} (کد: {gid})")
+
+            item = QListWidgetItem()
+            item.setData(Qt.UserRole, gid)
+            item.setData(Qt.UserRole + 1, title)
+            item.setData(Qt.UserRole + 2, self._category_images_map.get(gid, ""))
+
+            row_widget = CategoryRowWidget(
+                text,
+                on_upload=lambda _=False, g=gid, it=item: self._upload_image_for_category(g, it),
+                on_clear=lambda g=gid, it=item: self._clear_image_for_category(g, it),
+                on_stock_mode_changed=lambda mode, g=gid: self._set_category_stock_mode(g, mode),
+                on_price_list_changed=lambda idx, g=gid: self._set_category_price_list(g, idx),
+                parent=self.selected_list,
+            )
+            row_widget.set_stock_mode(get_category_stock_mode(self.config, gid))
+            row_widget.set_price_list_index(get_category_price_list_index(self.config, gid))
+            row_widget.set_has_image(self._category_has_local_image(gid))
+            item.setSizeHint(QSize(0, 48))
+
             self.selected_list.addItem(item)
+            self.selected_list.setItemWidget(item, row_widget)
 
     def save_selected_groups_sepidar(self):
         selected_ids = self._collect_checked_sepidar_ids()
@@ -2941,47 +2965,62 @@ class CategoryTab(QWidget):
         success_count = 0
         fail_count = 0
 
-        category_map = load_category_map()
-        slug_map = dict(wc_slug_map_snapshot or {})
+        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+        if is_sepidar_provider(cfg):
+            from sync_app.core.scripts.sepidar.sepidar_categorysync import _reconcile_sepidar_category_map
+            erp_to_wc = _reconcile_sepidar_category_map(cfg)
+            log.info(f"ℹ️ نگاشتِ دسته‌بندیِ سپیدار ({len(erp_to_wc)} مورد).")
 
-        unresolved = [
-            full_code
-            for full_code, _s_name, _rel_path in to_process
-            if not resolve_wc_category_id(full_code, category_map, slug_map)
-        ]
-        if unresolved:
-            log.info(
-                f"ℹ️ {len(unresolved)} دسته در نگاشت محلی نیست — واکشی از API "
-                f"({', '.join(unresolved[:4])}{'...' if len(unresolved) > 4 else ''})"
-            )
-            try:
-                check_cancelled()
-                fresh_slug_map = fetch_wc_slug_map(
-                    cfg,
-                    timeout=min(45, timeout),
-                    cancel_check=check_cancelled,
+            def _resolve_cat_id(full_code):
+                try:
+                    return erp_to_wc.get(int(full_code))
+                except (TypeError, ValueError):
+                    return None
+        else:
+            category_map = load_category_map()
+            slug_map = dict(wc_slug_map_snapshot or {})
+
+            unresolved = [
+                full_code
+                for full_code, _s_name, _rel_path in to_process
+                if not resolve_wc_category_id(full_code, category_map, slug_map)
+            ]
+            if unresolved:
+                log.info(
+                    f"ℹ️ {len(unresolved)} دسته در نگاشت محلی نیست — واکشی از API "
+                    f"({', '.join(unresolved[:4])}{'...' if len(unresolved) > 4 else ''})"
                 )
-                if fresh_slug_map:
-                    slug_map = fresh_slug_map
-                    merged = merge_category_map_with_slug_map(category_map, slug_map)
-                    if merged != category_map:
-                        save_category_map(merged)
-                        category_map = merged
-                    log.info(f"ℹ️ نگاشت دسته‌ها از API واکشی شد ({len(slug_map)} مورد).")
-            except SyncCancelled:
-                raise
-            except Exception as exc:
-                log.warning(f"⚠️ واکشی نگاشت دسته ناموفق: {exc} — از cache محلی استفاده می‌شود.")
+                try:
+                    check_cancelled()
+                    fresh_slug_map = fetch_wc_slug_map(
+                        cfg,
+                        timeout=min(45, timeout),
+                        cancel_check=check_cancelled,
+                    )
+                    if fresh_slug_map:
+                        slug_map = fresh_slug_map
+                        merged = merge_category_map_with_slug_map(category_map, slug_map)
+                        if merged != category_map:
+                            save_category_map(merged)
+                            category_map = merged
+                        log.info(f"ℹ️ نگاشت دسته‌ها از API واکشی شد ({len(slug_map)} مورد).")
+                except SyncCancelled:
+                    raise
+                except Exception as exc:
+                    log.warning(f"⚠️ واکشی نگاشت دسته ناموفق: {exc} — از cache محلی استفاده می‌شود.")
 
-        if slug_map:
-            log.info(f"ℹ️ نگاشت دسته‌ها از cache/API ({len(slug_map)} مورد).")
-        elif category_map:
-            log.info("ℹ️ نگاشت دسته‌ها از category_map محلی.")
+            if slug_map:
+                log.info(f"ℹ️ نگاشت دسته‌ها از cache/API ({len(slug_map)} مورد).")
+            elif category_map:
+                log.info("ℹ️ نگاشت دسته‌ها از category_map محلی.")
+
+            def _resolve_cat_id(full_code):
+                return resolve_wc_category_id(full_code, category_map, slug_map)
 
         still_missing = [
             full_code
             for full_code, _s_name, _rel_path in to_process
-            if not resolve_wc_category_id(full_code, category_map, slug_map)
+            if not _resolve_cat_id(full_code)
         ]
         if still_missing:
             detail = (
@@ -3005,7 +3044,7 @@ class CategoryTab(QWidget):
                     log.warning(f"⚠️ فایل تصویر پیدا نشد — دسته {full_code} رد شد")
                     continue
 
-                cat_id = resolve_wc_category_id(full_code, category_map, slug_map)
+                cat_id = _resolve_cat_id(full_code)
                 if not cat_id:
                     log.warning(
                         f"⚠️ دسته {full_code} ({s_name}) در فروشگاه پیدا نشد — "
@@ -3128,40 +3167,55 @@ class CategoryTab(QWidget):
         timeout = int(cfg.get("PS_TIMEOUT", 60) or 60)
         self._last_cat_upload_detail = ""
 
-        category_map = load_category_map()
-        slug_map = dict(ps_slug_map_snapshot or {})
+        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+        if is_sepidar_provider(cfg):
+            from sync_app.core.scripts.sepidar.sepidar_categorysync import _reconcile_sepidar_category_map
+            erp_to_wc = _reconcile_sepidar_category_map(cfg)
+            log.info(f"ℹ️ نگاشتِ دسته‌بندیِ سپیدار ({len(erp_to_wc)} مورد).")
 
-        unresolved = [
-            full_code
-            for full_code, _s_name, _rel_path in to_process
-            if not resolve_wc_category_id(full_code, category_map, slug_map)
-        ]
-        if unresolved:
-            log.info(
-                f"ℹ️ {len(unresolved)} دسته در نگاشت محلی نیست — واکشی از API "
-                f"({', '.join(unresolved[:4])}{'...' if len(unresolved) > 4 else ''})"
-            )
-            try:
-                check_cancelled()
-                from sync_app.core.integrations.commerce_provider import fetch_store_slug_map
+            def _resolve_cat_id(full_code):
+                try:
+                    return erp_to_wc.get(int(full_code))
+                except (TypeError, ValueError):
+                    return None
+        else:
+            category_map = load_category_map()
+            slug_map = dict(ps_slug_map_snapshot or {})
 
-                fresh_slug_map = fetch_store_slug_map(cfg, timeout=min(45, timeout), cancel_check=check_cancelled)
-                if fresh_slug_map:
-                    slug_map = fresh_slug_map
-                    merged = merge_category_map_with_slug_map(category_map, slug_map)
-                    if merged != category_map:
-                        save_category_map(merged)
-                        category_map = merged
-                    log.info(f"ℹ️ نگاشت دسته‌ها از API واکشی شد ({len(slug_map)} مورد).")
-            except SyncCancelled:
-                raise
-            except Exception as exc:
-                log.warning(f"⚠️ واکشی نگاشت دسته ناموفق: {exc} — از cache محلی استفاده می‌شود.")
+            unresolved = [
+                full_code
+                for full_code, _s_name, _rel_path in to_process
+                if not resolve_wc_category_id(full_code, category_map, slug_map)
+            ]
+            if unresolved:
+                log.info(
+                    f"ℹ️ {len(unresolved)} دسته در نگاشت محلی نیست — واکشی از API "
+                    f"({', '.join(unresolved[:4])}{'...' if len(unresolved) > 4 else ''})"
+                )
+                try:
+                    check_cancelled()
+                    from sync_app.core.integrations.commerce_provider import fetch_store_slug_map
+
+                    fresh_slug_map = fetch_store_slug_map(cfg, timeout=min(45, timeout), cancel_check=check_cancelled)
+                    if fresh_slug_map:
+                        slug_map = fresh_slug_map
+                        merged = merge_category_map_with_slug_map(category_map, slug_map)
+                        if merged != category_map:
+                            save_category_map(merged)
+                            category_map = merged
+                        log.info(f"ℹ️ نگاشت دسته‌ها از API واکشی شد ({len(slug_map)} مورد).")
+                except SyncCancelled:
+                    raise
+                except Exception as exc:
+                    log.warning(f"⚠️ واکشی نگاشت دسته ناموفق: {exc} — از cache محلی استفاده می‌شود.")
+
+            def _resolve_cat_id(full_code):
+                return resolve_wc_category_id(full_code, category_map, slug_map)
 
         still_missing = [
             full_code
             for full_code, _s_name, _rel_path in to_process
-            if not resolve_wc_category_id(full_code, category_map, slug_map)
+            if not _resolve_cat_id(full_code)
         ]
         if still_missing:
             detail = (
@@ -3190,7 +3244,7 @@ class CategoryTab(QWidget):
                     log.warning(f"⚠️ فایل تصویر پیدا نشد — دسته {full_code} رد شد")
                     continue
 
-                cat_id = resolve_wc_category_id(full_code, category_map, slug_map)
+                cat_id = _resolve_cat_id(full_code)
                 if not cat_id:
                     log.warning(
                         f"⚠️ دسته {full_code} ({s_name}) در فروشگاه پیدا نشد — "
