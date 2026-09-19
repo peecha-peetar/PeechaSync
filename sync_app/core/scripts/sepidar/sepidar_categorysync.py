@@ -285,22 +285,6 @@ def sync_categories_from_erp(config: dict | None = None) -> dict:
     }
 
 
-def resolve_mapped_item_group_from_index(category_ids: list[int], category_map: dict, by_id: dict) -> int | None:
-    """نزدیک‌ترین ItemGroupِ سینک‌شده برایِ یکی از دسته‌هایِ محصول — والدها
-    رو بالا می‌ره تا یکی رو تو نگاشت پیدا کنه (برایِ دسته‌هایِ عمیق‌ترِ سایت)."""
-    for cat_id in category_ids or []:
-        current = cat_id
-        depth = 0
-        while current and depth < 10:
-            key = str(current)
-            if key in category_map:
-                return int(category_map[key])
-            parent = (by_id.get(current) or {}).get("parent")
-            current = parent if parent else None
-            depth += 1
-    return None
-
-
 def fetch_sepidar_item_groups(config: dict | None = None) -> list[dict]:
     """[{id, code, title, parent_ref}] — گروه/زیرگروه‌هایِ موجود در
     POS.ItemGroup — برایِ نمایشِ سمتِ سپیدار در تبِ «تطبیق» (تبِ محصولات/

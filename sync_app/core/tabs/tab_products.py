@@ -732,9 +732,9 @@ class ProductTab(QWidget):
         from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
 
         if is_sepidar_provider(config):
-            from sync_app.core.scripts.sepidar.sepidar_productsync import fetch_products_for_display
+            from sync_app.core.scripts.sepidar.sepidar_productsync import fetch_sepidar_products_for_sync
 
-            return fetch_products_for_display(config)
+            return fetch_sepidar_products_for_sync(config, selected_group_ids=selected_groups)
 
         price_col = config.get("PRICE_LIST_COLUMN", "Sel_Price")
         conn, _, _ = open_sql_connection(config, timeout=3)
@@ -808,8 +808,22 @@ class ProductTab(QWidget):
 
         from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
 
-        selected_groups = [str(g).strip() for g in self.config.get("SELECTED_SUB_GROUPS", []) if str(g).strip()]
-        if not selected_groups and not is_sepidar_provider(self.config):
+        if is_sepidar_provider(self.config):
+            selected_ids = [str(g).strip() for g in self.config.get("SEPIDAR_SELECTED_GROUPS", []) if str(g).strip()]
+            if selected_ids:
+                from sync_app.core.scripts.sepidar.sepidar_categorysync import fetch_sepidar_item_groups
+                from sync_app.core.scripts.sepidar.sepidar_productsync import (
+                    _expand_sepidar_groups_with_descendants,
+                )
+
+                groups = fetch_sepidar_item_groups(self.config)
+                selected_groups = _expand_sepidar_groups_with_descendants(selected_ids, groups)
+            else:
+                selected_groups = set()
+        else:
+            selected_groups = [str(g).strip() for g in self.config.get("SELECTED_SUB_GROUPS", []) if str(g).strip()]
+
+        if not selected_groups:
             self.product_list.clear()
             self._add_product_message("⚠️ هیچ گروهی انتخاب نشده است.")
             self._set_products_status(
@@ -876,9 +890,9 @@ class ProductTab(QWidget):
         if is_sepidar_provider(self.config):
             from sync_app.core.scripts.sepidar.sepidar_common import load_sepidar_map
 
-            # برایِ سپیدار/دشت «لینک» یعنی این SKU از قبل در سپیدار به‌عنوانِ
-            # Item ساخته شده — نه چیزی دربارهٔ وجودش رویِ ووکامرس (که این
-            # ردیف‌ها اصلاً از همون‌جا خونده شدن).
+            # برایِ سپیدار/دشت «لینک» یعنی این SKU (از POS.Item) قبلاً به‌عنوانِ
+            # محصولِ سایت پوش/سینک شده — دقیقاً هم‌معنایِ product_woo_map.json
+            # دژاوو، فقط در فایلِ جداگانه‌یِ سپیدار.
             product_map = load_sepidar_map("sepidar_product_map.json")
         else:
             product_map = load_product_woo_map()
@@ -1004,7 +1018,12 @@ class ProductTab(QWidget):
                 log.info("ℹ️ بروزرسانی لیست محصولات: موردی یافت نشد.")
             else:
                 if is_sepidar_provider(self.config):
-                    status_suffix = "از سایت"
+                    groups_text = "، ".join(
+                        str(g).strip()
+                        for g in self.config.get("SEPIDAR_SELECTED_GROUPS", [])
+                        if str(g).strip()
+                    )
+                    status_suffix = f"گروه‌ها: {groups_text}" if groups_text else "گروه‌هایِ انتخاب‌شده"
                 else:
                     groups_text = "، ".join(
                         str(g).strip()
@@ -3018,9 +3037,7 @@ class ProductTab(QWidget):
 
         from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
 
-        if is_sepidar_provider(self.config):
-            self._start_send_products_sepidar()
-            return
+        sepidar = is_sepidar_provider(self.config)
 
         if not ensure_connectivity(self, need_sql=True, need_wc=True, live=False):
             return
@@ -3041,7 +3058,15 @@ class ProductTab(QWidget):
                 self.config["DISABLED_PRODUCT_SKUS"] = sorted(original_disabled | self._temp_extra_disabled)
                 save_secure_config(self.config)
 
-        previews = build_products_sync_preview(self.config)
+        if sepidar:
+            from sync_app.core.scripts.sepidar import sepidar_productsync
+
+            previews = sepidar_productsync.build_sepidar_products_sync_preview(self.config)
+            sync_job = sepidar_productsync.main
+        else:
+            previews = build_products_sync_preview(self.config)
+            sync_job = sync_fullproduct.main
+
         if not previews:
             self._restore_temp_disabled_skus()
             QMessageBox.information(
@@ -3060,7 +3085,7 @@ class ProductTab(QWidget):
 
         if not run_background_sync(
             self,
-            sync_fullproduct.main,
+            sync_job,
             on_success=self._products_sync_done,
             on_error=self._products_sync_error,
             need_sql=True,
@@ -3079,37 +3104,6 @@ class ProductTab(QWidget):
         self.sync_detail_label.setVisible(True)
         self._sync_live_timer.start()
         self._set_products_status("loading", "⏳ در حال ارسال محصولات به فروشگاه...")
-
-    def _start_send_products_sepidar(self):
-        """برایِ سپیدار/دشت جهتِ سینک برعکسه: محصولاتِ سایت خونده می‌شن و
-        در سپیدار به‌عنوانِ Item ساخته می‌شن (sepidar_productsync.sync_products)
-        — نه ارسالِ ERP→سایت. بدونِ دیالوگِ preview/confirm_live_site_backup
-        چون مقصدِ نوشتن ERPه، نه سایتِ زنده."""
-        from sync_app.core.scripts.sepidar.sepidar_productsync import sync_products
-
-        def _job():
-            result = sync_products(self.config)
-            return {"ok": result.get("created", 0)}
-
-        if not run_background_sync(
-            self, _job,
-            on_success=self._products_sync_done,
-            on_error=self._products_sync_error,
-            need_sql=True,
-            need_wc=True,
-        ):
-            thread = getattr(self, "_peecha_bg_sync_thread", None)
-            if thread is not None and thread.isRunning():
-                QMessageBox.information(self, "در حال اجرا", "همگام‌سازی دیگری در جریان است.")
-            return
-        self._action_ops.begin("sync")
-        self._sync_started_at = time.monotonic()
-        self.sync_progress.setValue(2)
-        self.sync_progress.setVisible(True)
-        self.sync_detail_label.setText("آماده‌سازی ارسال...")
-        self.sync_detail_label.setVisible(True)
-        self._sync_live_timer.start()
-        self._set_products_status("loading", f"⏳ در حال ارسال محصولات به {self._erp_label()}...")
 
     def _hidden_checked_skus(self) -> set:
         """SKUهایی که تیک‌خورده‌ان ولی الان (به‌خاطر فیلتر) روی صفحه مخفی‌ان."""

@@ -164,7 +164,7 @@ SEPIDAR_AUTO_SYNC_JOBS: tuple[AutoSyncJob, ...] = (
         "sepidar_productsync",
         "محصولات",
         "📦",
-        "کالایِ سادهٔ سایت → سپیدار",
+        "کالایِ سادهٔ سپیدار → سایت",
         sepidar_productsync.main,
     ),
     AutoSyncJob(
