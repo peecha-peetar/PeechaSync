@@ -1507,6 +1507,70 @@ class PeechaLauncher(QWidget):
         layout.addWidget(label)
         return widget
 
+    def _format_tab_build_error(self, exc: Exception) -> str:
+        try:
+            from sync_app.core.sql_connection_helper import format_db_error
+
+            return format_db_error(exc)
+        except Exception:
+            return str(exc) or exc.__class__.__name__
+
+    def _make_tab_error_placeholder(self, spec):
+        """صفحه‌یِ خطا به‌جایِ placeholderِ دائمیِ «در حال آماده‌سازی...» —
+        وقتی ساختِ یک تبِ تنبل شکست می‌خوره (مثلاً به‌خاطرِ تنظیماتِ SQL
+        ناقص/غلط)، کاربر باید بفهمه که خطا داده، نه اینکه فکر کنه برنامه
+        هنوز داره لود می‌شه."""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setAlignment(Qt.AlignCenter)
+        layout.setSpacing(8)
+
+        icon = QLabel("⚠️")
+        icon.setAlignment(Qt.AlignCenter)
+        icon.setStyleSheet("font-size: 28px;")
+        layout.addWidget(icon)
+
+        title_label = QLabel("بارگذاریِ این تب با خطا مواجه شد.")
+        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setWordWrap(True)
+        title_label.setStyleSheet("color: #b91c1c; font-size: 14px; font-weight: 700; padding: 0 24px;")
+        layout.addWidget(title_label)
+
+        detail_label = QLabel(spec.get("last_error") or "")
+        detail_label.setAlignment(Qt.AlignCenter)
+        detail_label.setWordWrap(True)
+        detail_label.setStyleSheet("color: #64748b; font-size: 11px; padding: 0 24px;")
+        layout.addWidget(detail_label)
+
+        retry_btn = QPushButton("🔄 تلاش دوباره")
+        retry_btn.clicked.connect(lambda: self._retry_lazy_tab(spec))
+        layout.addWidget(retry_btn, alignment=Qt.AlignCenter)
+
+        return widget
+
+    def _show_lazy_tab_error(self, spec):
+        index = self._find_tab_index_by_attr(spec["attr"])
+        if index < 0:
+            return
+        title = self.tabs.tabText(index)
+        new_placeholder = self._make_tab_error_placeholder(spec)
+        current_idx = self.tabs.currentIndex()
+        self.tabs.blockSignals(True)
+        try:
+            self.tabs.removeTab(index)
+            self.tabs.insertTab(index, new_placeholder, title)
+            if current_idx == index:
+                self.tabs.setCurrentIndex(index)
+        finally:
+            self.tabs.blockSignals(False)
+        spec["placeholder"] = new_placeholder
+
+    def _retry_lazy_tab(self, spec):
+        if spec.get("loaded") or spec.get("building"):
+            return
+        spec["building"] = True
+        QTimer.singleShot(0, lambda: self._materialize_lazy_tab(spec))
+
     def _register_lazy_tab(self, title, attr_name, factory, tooltip=None):
         placeholder = self._make_tab_placeholder()
         index = self.tabs.addTab(placeholder, title)
@@ -1531,7 +1595,7 @@ class PeechaLauncher(QWidget):
 
         try:
             new_widget = spec["factory"]()
-        except Exception:
+        except Exception as exc:
             import traceback
 
             spec["building"] = False
@@ -1540,6 +1604,13 @@ class PeechaLauncher(QWidget):
                 spec.get("attr", "?"),
                 traceback.format_exc(),
             )
+            # قبلاً این‌جا فقط لاگ می‌شد و placeholderِ «در حال آماده‌سازی...»
+            # همون‌طور دست‌نخورده می‌موند — کاربر همیشه یک پیامِ لودینگِ
+            # دائمی می‌دید بدونِ هیچ نشونه‌ای از خطایِ واقعی (مثلاً تنظیماتِ
+            # SQL ناقص/غلط). حالا به‌جاش یک حالتِ خطایِ صریح با دکمه‌یِ
+            # «تلاش دوباره» نشون داده می‌شه.
+            spec["last_error"] = self._format_tab_build_error(exc)
+            self._show_lazy_tab_error(spec)
             return
 
         title = self.tabs.tabText(index)
@@ -1657,6 +1728,10 @@ class PeechaLauncher(QWidget):
         run_tab("variation_tab", "متغیرها", lambda t: t.load_variations())
         run_tab("category_tab", "دسته‌بندی", lambda t: t.load_groups(silent=False, manual=False))
         run_tab("dashboard_tab", "داشبورد", lambda t: t.load_data())
+        # این تب هم به ERP_PROVIDER وابسته‌ست (resolve دسته‌بندی/برندِ
+        # سپیدار در برابرِ دژاوو) — بدونِ این، سوئیچِ ERP بدونِ سوئیچِ سایت
+        # باعث می‌شد self.config همچنان providerِ قبلی رو نشون بده.
+        run_tab("category_brand_studio_tab", "دسته‌بندی و برند", lambda t: t._reload_products())
 
         def load_properties(tab):
             tab.load_properties_preview()
@@ -1681,6 +1756,14 @@ class PeechaLauncher(QWidget):
             tab.invalidate_stale_sql_data()
             log("• تطبیق: داده قبلی باطل شد")
 
+        # نشانِ «⚠️ N مورد بدون لینک» تویِ هدرِ برنامه فقط موقعِ استارتِ
+        # برنامه (بعدِ ۹ ثانیه) و بعدش هر ۱۰ دقیقه محاسبه می‌شه — بدونِ این
+        # فراخوانی، بعدِ سوئیچِ زنده‌یِ ERP/دیتابیس (بدونِ ری‌استارتِ برنامه)،
+        # همچنان عددِ محاسبه‌شده‌یِ قبل از سوئیچ (یا حتی هیچی، اگه هنوز
+        # نوبتِ اولین محاسبه نرسیده بود) رو نشون می‌داد.
+        self._refresh_link_warning()
+        log("• هشدارِ موارد بدون لینک (هدر): در حال بازمحاسبه")
+
     def reload_wc_dependent_tabs(self, log_callback=None):
         """اعمال WC_URL و کلیدهای سایت فعال در همه تب‌های باز."""
         from sync_app.core.secure_config_loader import load_secure_config
@@ -1701,6 +1784,8 @@ class PeechaLauncher(QWidget):
             ("customer_tab", "مشتریان"),
             ("order_tab", "سفارشات"),
             ("reconciliation_tab", "تطبیق"),
+            ("category_brand_studio_tab", "دسته‌بندی و برند"),
+            ("price_list_studio_tab", "لیستِ قیمت"),
         ):
             tab = getattr(self, attr, None)
             if tab is None:
@@ -1723,6 +1808,11 @@ class PeechaLauncher(QWidget):
 
         self.refresh_header_branding()
         self.refresh_wc_connectivity(show_pending=True)
+        # همون دلیلِ reload_sql_dependent_tabs — سوئیچِ سایت هم رویِ
+        # نتیجه‌یِ fetch_site_products/fetch_site_categoriesِ استفاده‌شده
+        # تویِ این نشان اثر داره.
+        self._refresh_link_warning()
+        log("• هشدارِ موارد بدون لینک (هدر): در حال بازمحاسبه")
 
     def _tab_attr_for_widget(self, widget):
         if widget is None:
@@ -2776,7 +2866,14 @@ class PeechaLauncher(QWidget):
             cfg = load_secure_config(None) or {}
         except Exception:
             return
-        if not cfg.get("SELECTED_SUB_GROUPS"):
+
+        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+
+        sepidar = is_sepidar_provider(cfg)
+        if not sepidar and not cfg.get("SELECTED_SUB_GROUPS"):
+            # M_Group/S_Group/Article مخصوصِ دژاوو/هلوعن و به SELECTED_SUB_GROUPS
+            # وابسته‌ن — سپیدار/دشت این مفهوم رو نداره، پس این گاردِ خاصِ دژاوو
+            # روش اعمال نمی‌شه (پایین‌تر compute_sepidar_unlinked_counts صدا زده می‌شه).
             self.link_warning_badge.setVisible(False)
             return
 
@@ -2786,6 +2883,9 @@ class PeechaLauncher(QWidget):
         self.link_warning_badge.setVisible(True)
 
         def _worker():
+            if sepidar:
+                from sync_app.core.scripts.sepidar.sepidar_common import compute_sepidar_unlinked_counts
+                return compute_sepidar_unlinked_counts(cfg)
             from sync_app.core.auto_sync_scope import compute_unlinked_counts
             return compute_unlinked_counts(cfg)
 

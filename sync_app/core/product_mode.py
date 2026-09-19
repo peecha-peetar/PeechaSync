@@ -25,7 +25,16 @@ def get_product_mode(config: dict | None = None) -> str:
 
 
 def is_simple_only(config: dict | None = None) -> bool:
-    return get_product_mode(config) == MODE_SIMPLE_ONLY
+    from sync_app.core.secure_config_loader import load_secure_config
+
+    cfg = config if config is not None else (load_secure_config(None) or {})
+    if get_product_mode(cfg) == MODE_SIMPLE_ONLY:
+        return True
+    # سپیدار/دشت ذاتاً ویژگی/متغیر (رنگ/سایز) ندارن — همیشه «فقط ساده»
+    # حساب می‌شن، بدونِ نیاز به تنظیمِ دستیِ PRODUCT_MODE.
+    from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+
+    return is_sepidar_provider(cfg)
 
 
 def set_product_mode(mode: str) -> None:

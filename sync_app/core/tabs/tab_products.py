@@ -204,7 +204,7 @@ class ProductRowWidget(QWidget):
         self.store_category_button = make_row_button(
             "🏷️",
             "دسته‌بندیِ این محصول را مستقیم از دسته‌بندی‌هایِ واقعیِ سایت "
-            "(نه ERP) انتخاب کن — این انتخاب در همگام‌سازی‌هایِ بعدی هم "
+            "(نه برنامه حسابداری) انتخاب کن — این انتخاب در همگام‌سازی‌هایِ بعدی هم "
             "حفظ می‌شه، مگه خودتون دوباره تغییرش بدید.",
             kind="neutral",
         )
@@ -298,7 +298,7 @@ class ProductRowWidget(QWidget):
         self.store_category_button.setStyleSheet(row_button_style(kind))
         base_tooltip = (
             "دسته‌بندیِ این محصول را مستقیم از دسته‌بندی‌هایِ واقعیِ سایت "
-            "(نه ERP) انتخاب کن"
+            "(نه برنامه حسابداری) انتخاب کن"
         )
         self.store_category_button.setToolTip(
             f"{base_tooltip}\n{tooltip_extra}" if tooltip_extra else base_tooltip
@@ -729,6 +729,13 @@ class ProductTab(QWidget):
             self._action_ops.end()
 
     def _fetch_products_from_sql(self, config, selected_groups):
+        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+
+        if is_sepidar_provider(config):
+            from sync_app.core.scripts.sepidar.sepidar_productsync import fetch_sepidar_products_for_sync
+
+            return fetch_sepidar_products_for_sync(config, selected_group_ids=selected_groups)
+
         price_col = config.get("PRICE_LIST_COLUMN", "Sel_Price")
         conn, _, _ = open_sql_connection(config, timeout=3)
         cursor = conn.cursor()
@@ -799,7 +806,23 @@ class ProductTab(QWidget):
         price_idx = self.config.get("PRICE_LIST_INDEX", 0) + 1
         self.price_label.setText(f"💰 قیمت‌ها بر اساس: لیست قیمت شماره {price_idx}")
 
-        selected_groups = [str(g).strip() for g in self.config.get("SELECTED_SUB_GROUPS", []) if str(g).strip()]
+        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+
+        if is_sepidar_provider(self.config):
+            selected_ids = [str(g).strip() for g in self.config.get("SEPIDAR_SELECTED_GROUPS", []) if str(g).strip()]
+            if selected_ids:
+                from sync_app.core.scripts.sepidar.sepidar_categorysync import fetch_sepidar_item_groups
+                from sync_app.core.scripts.sepidar.sepidar_productsync import (
+                    _expand_sepidar_groups_with_descendants,
+                )
+
+                groups = fetch_sepidar_item_groups(self.config)
+                selected_groups = _expand_sepidar_groups_with_descendants(selected_ids, groups)
+            else:
+                selected_groups = set()
+        else:
+            selected_groups = [str(g).strip() for g in self.config.get("SELECTED_SUB_GROUPS", []) if str(g).strip()]
+
         if not selected_groups:
             self.product_list.clear()
             self._add_product_message("⚠️ هیچ گروهی انتخاب نشده است.")
@@ -862,7 +885,17 @@ class ProductTab(QWidget):
         disabled_products = set(self.config.get("DISABLED_PRODUCT_SKUS", []))
         is_toman = bool(self.config.get("WC_CURRENCY_IS_TOMAN"))
         row_count = 0
-        product_map = load_product_woo_map()
+        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+
+        if is_sepidar_provider(self.config):
+            from sync_app.core.scripts.sepidar.sepidar_common import load_sepidar_map
+
+            # برایِ سپیدار/دشت «لینک» یعنی این SKU (از POS.Item) قبلاً به‌عنوانِ
+            # محصولِ سایت پوش/سینک شده — دقیقاً هم‌معنایِ product_woo_map.json
+            # دژاوو، فقط در فایلِ جداگانه‌یِ سپیدار.
+            product_map = load_sepidar_map("sepidar_product_map.json")
+        else:
+            product_map = load_product_woo_map()
         # این فایل رو یه‌بار برایِ کلِ لیست می‌خونیم، نه هر بار داخلِ حلقه —
         # وگرنه برایِ هر محصول جداگانه از دیسک خونده و JSON‌پارس می‌شد و
         # با کاتالوگِ بزرگ باعثِ کندیِ محسوسِ بارگذاریِ لیست می‌شد.
@@ -984,14 +1017,23 @@ class ProductTab(QWidget):
                 )
                 log.info("ℹ️ بروزرسانی لیست محصولات: موردی یافت نشد.")
             else:
-                groups_text = "، ".join(
-                    str(g).strip()
-                    for g in self.config.get("SELECTED_SUB_GROUPS", [])
-                    if str(g).strip()
-                )
+                if is_sepidar_provider(self.config):
+                    groups_text = "، ".join(
+                        str(g).strip()
+                        for g in self.config.get("SEPIDAR_SELECTED_GROUPS", [])
+                        if str(g).strip()
+                    )
+                    status_suffix = f"گروه‌ها: {groups_text}" if groups_text else "گروه‌هایِ انتخاب‌شده"
+                else:
+                    groups_text = "، ".join(
+                        str(g).strip()
+                        for g in self.config.get("SELECTED_SUB_GROUPS", [])
+                        if str(g).strip()
+                    )
+                    status_suffix = f"گروه‌ها: {groups_text}"
                 self._set_products_status(
                     "success",
-                    f"✅ {row_count} محصول بارگذاری شد (گروه‌ها: {groups_text})",
+                    f"✅ {row_count} محصول بارگذاری شد ({status_suffix})",
                 )
                 log.info(f"✅ بروزرسانی لیست محصولات: {row_count} مورد بارگذاری شد.")
             self._filter_products(self.product_search.text())
@@ -1170,7 +1212,12 @@ class ProductTab(QWidget):
         # نام محصول، و لینک محصول رو سایت (اگه قبلاً به فروشگاه لینک شده باشه).
         product_url = ""
         try:
-            wc_id = load_product_woo_map().get(sku)
+            from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+            if is_sepidar_provider(config):
+                from sync_app.core.scripts.sepidar.sepidar_common import load_sepidar_map
+                wc_id = load_sepidar_map("sepidar_product_map.json").get(sku)
+            else:
+                wc_id = load_product_woo_map().get(sku)
             site_url = str(config.get("WC_URL") or "").strip().rstrip("/")
             if wc_id and site_url:
                 product_url = f"{site_url}/?p={int(wc_id)}"
@@ -1592,9 +1639,10 @@ class ProductTab(QWidget):
         dlg.resize(420, 480)
         layout = QVBoxLayout(dlg)
 
+        erp_label = self._erp_label()
         hint = QLabel(
             "دسته‌بندیِ(هایِ) واقعیِ سایت رو برایِ این محصول انتخاب کنید. "
-            "این انتخاب رویِ منطقِ خودکارِ (ERP→دسته‌بندی) اولویت داره و در "
+            f"این انتخاب رویِ منطقِ خودکارِ ({erp_label}→دسته‌بندی) اولویت داره و در "
             "همگام‌سازی‌هایِ بعدی هم حفظ می‌شه — تا خودتون دوباره تغییرش بدید."
         )
         hint.setWordWrap(True)
@@ -1629,7 +1677,7 @@ class ProductTab(QWidget):
 
         btn_row = QHBoxLayout()
         clear_btn = QPushButton("↩️ بازگشت به حالتِ خودکار")
-        clear_btn.setToolTip("حذفِ کاملِ این override — دوباره از منطقِ خودکارِ ERP→دسته‌بندی استفاده می‌شه")
+        clear_btn.setToolTip(f"حذفِ کاملِ این override — دوباره از منطقِ خودکارِ {erp_label}→دسته‌بندی استفاده می‌شه")
         btn_row.addWidget(clear_btn)
         btn_row.addStretch(1)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -1736,7 +1784,12 @@ class ProductTab(QWidget):
 
         config = load_secure_config(None) or {}
         ps_mode = is_prestashop(config)
-        product_map = load_product_woo_map()
+        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+        if is_sepidar_provider(config):
+            from sync_app.core.scripts.sepidar.sepidar_common import load_sepidar_map
+            product_map = load_sepidar_map("sepidar_product_map.json")
+        else:
+            product_map = load_product_woo_map()
         wc_id = product_map.get(sku)
         if not wc_id:
             QMessageBox.information(
@@ -1796,9 +1849,15 @@ class ProductTab(QWidget):
             return resp.json()
 
         def _done(_data):
-            pmap = load_product_woo_map()
-            pmap.pop(sku, None)
-            save_product_woo_map(pmap)
+            if is_sepidar_provider(config):
+                from sync_app.core.scripts.sepidar.sepidar_common import load_sepidar_map, save_sepidar_map
+                pmap = load_sepidar_map("sepidar_product_map.json")
+                pmap.pop(sku, None)
+                save_sepidar_map("sepidar_product_map.json", pmap)
+            else:
+                pmap = load_product_woo_map()
+                pmap.pop(sku, None)
+                save_product_woo_map(pmap)
             msg = "برای همیشه حذف شد" if force else "به زباله‌دان منتقل شد"
             QMessageBox.information(self, "انجام شد", f"محصول {sku} {msg}.")
             self.load_products(manual=False)
@@ -1809,7 +1868,13 @@ class ProductTab(QWidget):
         run_in_thread(_worker, on_complete=_done, on_error=_fail)
 
     def _open_seo_dialog(self, sku, item):
-        product_map = load_product_woo_map()
+        config = load_secure_config(None) or {}
+        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+        if is_sepidar_provider(config):
+            from sync_app.core.scripts.sepidar.sepidar_common import load_sepidar_map
+            product_map = load_sepidar_map("sepidar_product_map.json")
+        else:
+            product_map = load_product_woo_map()
         wc_id = product_map.get(sku)
         if not wc_id:
             QMessageBox.information(
@@ -1819,7 +1884,6 @@ class ProductTab(QWidget):
             )
             return
 
-        config = load_secure_config(None) or {}
         fallback_name = item.data(Qt.UserRole + 4)
 
         def _worker():
@@ -2115,7 +2179,12 @@ class ProductTab(QWidget):
         steps = pipeline_data.get("steps", [])
         profile_name = pipeline_data.get("profile", "")
 
-        product_map = load_product_woo_map()
+        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+        if is_sepidar_provider(config):
+            from sync_app.core.scripts.sepidar.sepidar_common import load_sepidar_map
+            product_map = load_sepidar_map("sepidar_product_map.json")
+        else:
+            product_map = load_product_woo_map()
         wc_id = product_map.get(sku)
         if not wc_id:
             QMessageBox.information(
@@ -2222,9 +2291,14 @@ class ProductTab(QWidget):
         try:
             from sync_app.core.integrations.commerce_provider import is_prestashop
 
-            product_map = load_product_woo_map()
-            wc_id = product_map.get(sku)
             cfg = load_secure_config(None) or {}
+            from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+            if is_sepidar_provider(cfg):
+                from sync_app.core.scripts.sepidar.sepidar_common import load_sepidar_map
+                product_map = load_sepidar_map("sepidar_product_map.json")
+            else:
+                product_map = load_product_woo_map()
+            wc_id = product_map.get(sku)
             if is_prestashop(cfg):
                 site_url = str(cfg.get("PS_URL") or "").strip().rstrip("/")
                 if wc_id and site_url:
@@ -2834,8 +2908,13 @@ class ProductTab(QWidget):
                     download_image_to_temp, download_images_to_temp, fetch_product_content,
                 )
 
-                product_map = load_product_woo_map()
                 cfg = load_secure_config(None) or {}
+                from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+                if is_sepidar_provider(cfg):
+                    from sync_app.core.scripts.sepidar.sepidar_common import load_sepidar_map
+                    product_map = load_sepidar_map("sepidar_product_map.json")
+                else:
+                    product_map = load_product_woo_map()
                 tpl = find_template(list_templates(cfg), template_id) if template_id else None
                 done = 0
                 failed = []
@@ -2911,7 +2990,13 @@ class ProductTab(QWidget):
         پیشنهادی قالب‌محور تولید و به‌طور خودکار روی سایت ثبت می‌کند —
         فقط با یک تأیید کلی، نه تیک زدن تک‌تک مثل دکمه‌ی 📝.
         """
-        product_map = load_product_woo_map()
+        config = load_secure_config(None) or {}
+        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+        if is_sepidar_provider(config):
+            from sync_app.core.scripts.sepidar.sepidar_common import load_sepidar_map
+            product_map = load_sepidar_map("sepidar_product_map.json")
+        else:
+            product_map = load_product_woo_map()
         wc_id = product_map.get(sku)
         if not wc_id:
             QMessageBox.information(
@@ -2920,7 +3005,6 @@ class ProductTab(QWidget):
             )
             return
 
-        config = load_secure_config(None) or {}
         fallback_name = item.data(Qt.UserRole + 4)
 
         def _worker():
@@ -2992,6 +3076,11 @@ class ProductTab(QWidget):
     def _start_send_products(self):
         """همگام‌سازی محصولات در پس‌زمینه"""
         self.config = load_secure_config(None) or {}
+
+        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+
+        sepidar = is_sepidar_provider(self.config)
+
         if not ensure_connectivity(self, need_sql=True, need_wc=True, live=False):
             return
 
@@ -3011,7 +3100,15 @@ class ProductTab(QWidget):
                 self.config["DISABLED_PRODUCT_SKUS"] = sorted(original_disabled | self._temp_extra_disabled)
                 save_secure_config(self.config)
 
-        previews = build_products_sync_preview(self.config)
+        if sepidar:
+            from sync_app.core.scripts.sepidar import sepidar_productsync
+
+            previews = sepidar_productsync.build_sepidar_products_sync_preview(self.config)
+            sync_job = sepidar_productsync.main
+        else:
+            previews = build_products_sync_preview(self.config)
+            sync_job = sync_fullproduct.main
+
         if not previews:
             self._restore_temp_disabled_skus()
             QMessageBox.information(
@@ -3030,7 +3127,7 @@ class ProductTab(QWidget):
 
         if not run_background_sync(
             self,
-            sync_fullproduct.main,
+            sync_job,
             on_success=self._products_sync_done,
             on_error=self._products_sync_error,
             need_sql=True,
@@ -3281,7 +3378,12 @@ class ProductTab(QWidget):
         )
         from sync_app.core.smart_publish import apply_default_pipeline
 
-        product_map = load_product_woo_map()
+        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+        if is_sepidar_provider(cfg):
+            from sync_app.core.scripts.sepidar.sepidar_common import load_sepidar_map
+            product_map = load_sepidar_map("sepidar_product_map.json")
+        else:
+            product_map = load_product_woo_map()
         success_count = 0
         fail_count = 0
         log.info(f"📷 شروع ارسال تصاویر {len(to_process)} محصول به پرستاشاپ — فقط فایل‌های موجود روی دیسک")
@@ -3393,7 +3495,12 @@ class ProductTab(QWidget):
         # — تا فرقی نکنه تصویر از کجا اومده، همه از یه مسیر پردازش رد بشن.
         from sync_app.core.smart_publish import apply_default_pipeline
 
-        product_map = load_product_woo_map()
+        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+        if is_sepidar_provider(cfg):
+            from sync_app.core.scripts.sepidar.sepidar_common import load_sepidar_map
+            product_map = load_sepidar_map("sepidar_product_map.json")
+        else:
+            product_map = load_product_woo_map()
 
         def _apply_pipeline_if_needed(sku: str, abs_path: str, already_processed: bool) -> str:
             """اگه پایپ‌لاین خودکار فعاله، تصویر رو پردازش می‌کنه و مسیر

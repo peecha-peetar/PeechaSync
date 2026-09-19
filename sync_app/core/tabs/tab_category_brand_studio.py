@@ -333,6 +333,7 @@ class CategoryBrandStudioTab(QWidget):
         from sync_app.core.product_brand_override import load_brand_overrides
         from sync_app.core.category_rules import resolve_product_categories, sku_to_category_codes
         from sync_app.core.category_resolver import load_category_map
+        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
 
         self.product_list.blockSignals(True)
         self.product_list.clear()
@@ -340,8 +341,26 @@ class CategoryBrandStudioTab(QWidget):
         product_map = load_product_woo_map()
         overrides = load_category_overrides()
         brand_overrides = load_brand_overrides()
-        cat_map = load_category_map()
-        self._erp_code_index = self._erp_code_name_map()
+
+        sepidar = is_sepidar_provider(self.config)
+        sepidar_erp_code_names: dict[str, str] = {}
+        if sepidar:
+            from sync_app.core.scripts.sepidar.sepidar_categorysync import (
+                fetch_sepidar_item_groups, _reconcile_sepidar_category_map,
+            )
+            from sync_app.core.scripts.sepidar.sepidar_productsync import (
+                fetch_sepidar_products_for_sync, _resolve_sepidar_product_category,
+            )
+            sepidar_groups_by_id = {str(g["id"]): g for g in fetch_sepidar_item_groups(self.config)}
+            sepidar_erp_to_wc = _reconcile_sepidar_category_map(self.config)
+            sepidar_sku_to_group = {
+                r["sku"]: r.get("_item_group_id")
+                for r in fetch_sepidar_products_for_sync(self.config)
+                if r.get("sku")
+            }
+        else:
+            cat_map = load_category_map()
+            self._erp_code_index = self._erp_code_name_map()
 
         erp_codes_seen: set[str] = set()
         source_list = getattr(self.product_tab_ref, "product_list", None)
@@ -364,10 +383,27 @@ class CategoryBrandStudioTab(QWidget):
             is_linked = bool(src_item.data(Qt.UserRole + 12))
             manual_ids = overrides.get(sku)
             has_override = bool(manual_ids)
-            codes = sku_to_category_codes(sku)
+
+            if sepidar:
+                item_group_id = sepidar_sku_to_group.get(sku)
+                leaf_code = str(item_group_id) if item_group_id is not None else ""
+                erp_name = (sepidar_groups_by_id.get(leaf_code) or {}).get("title") if leaf_code else None
+                codes = [leaf_code] if leaf_code else []
+                if leaf_code and erp_name:
+                    sepidar_erp_code_names[leaf_code] = erp_name
+                wc_cat_id = _resolve_sepidar_product_category(
+                    item_group_id, sepidar_groups_by_id, sepidar_erp_to_wc
+                )
+                auto_effective_ids = [wc_cat_id] if wc_cat_id else []
+            else:
+                codes = sku_to_category_codes(sku)
+                leaf_code = codes[0] if codes else ""
+                erp_name = self._erp_code_index.get(leaf_code)
+                auto_effective_ids = [
+                    int(c["id"]) for c in resolve_product_categories(sku, cat_map, self._slug_map)
+                ]
+
             erp_codes_seen.update(codes)
-            leaf_code = codes[0] if codes else ""
-            erp_name = self._erp_code_index.get(leaf_code)
             if leaf_code and erp_name:
                 erp_label = f"{erp_name} (کدِ {leaf_code})"
             elif leaf_code:
@@ -375,12 +411,7 @@ class CategoryBrandStudioTab(QWidget):
             else:
                 erp_label = "—"
 
-            if manual_ids:
-                effective_ids = list(manual_ids)
-            else:
-                effective_ids = [
-                    int(c["id"]) for c in resolve_product_categories(sku, cat_map, self._slug_map)
-                ]
+            effective_ids = list(manual_ids) if manual_ids else auto_effective_ids
             if effective_ids:
                 cat_names = [self._id_to_name.get(cid, f"#{cid}") for cid in effective_ids]
                 site_cat_label = "، ".join(cat_names)
@@ -415,9 +446,10 @@ class CategoryBrandStudioTab(QWidget):
             item.setData(Qt.UserRole + 7, bool(brand_id))  # دارایِ برند
             self.product_list.addItem(item)
 
+        erp_name_lookup = sepidar_erp_code_names if sepidar else self._erp_code_index
         erp_options = []
         for code in sorted(erp_codes_seen):
-            entry_name = self._erp_code_index.get(code)
+            entry_name = erp_name_lookup.get(code)
             label = f"{entry_name} (کدِ {code})" if entry_name else f"کدِ {code}"
             erp_options.append((code, label))
         self.erp_category_filter.set_options(erp_options)
@@ -596,18 +628,46 @@ class CategoryBrandStudioTab(QWidget):
         from sync_app.core.category_rules import resolve_product_categories
         from sync_app.core.category_resolver import load_category_map
         from sync_app.core.integrations.commerce_provider import is_prestashop
+        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
 
-        product_map = load_product_woo_map()
         ps_mode = is_prestashop(self.config)
-        cat_map = load_category_map() if not ps_mode else {}
+
+        sepidar = is_sepidar_provider(self.config)
+        if sepidar:
+            from sync_app.core.scripts.sepidar.sepidar_common import load_sepidar_map
+
+            product_map = load_sepidar_map("sepidar_product_map.json")
+            from sync_app.core.scripts.sepidar.sepidar_categorysync import (
+                fetch_sepidar_item_groups, _reconcile_sepidar_category_map,
+            )
+            from sync_app.core.scripts.sepidar.sepidar_productsync import (
+                fetch_sepidar_products_for_sync, _resolve_sepidar_product_category,
+            )
+            sepidar_groups_by_id = {str(g["id"]): g for g in fetch_sepidar_item_groups(self.config)}
+            sepidar_erp_to_wc = _reconcile_sepidar_category_map(self.config)
+            sepidar_sku_to_group = {
+                r["sku"]: r.get("_item_group_id")
+                for r in fetch_sepidar_products_for_sync(self.config)
+                if r.get("sku")
+            }
+        else:
+            product_map = load_product_woo_map()
+            cat_map = load_category_map() if not ps_mode else {}
+
         ok_count, fail_count = 0, 0
         for sku in skus:
             try:
                 baseline = get_manual_category_ids(sku)
                 if baseline is None:
-                    baseline = [
-                        int(c["id"]) for c in resolve_product_categories(sku, cat_map, {})
-                    ]
+                    if sepidar:
+                        wc_cat_id = _resolve_sepidar_product_category(
+                            sepidar_sku_to_group.get(sku), sepidar_groups_by_id, sepidar_erp_to_wc
+                        )
+                        baseline = [wc_cat_id] if wc_cat_id else []
+                    else:
+                        baseline = [
+                            int(c["id"]) for c in resolve_product_categories(sku, cat_map, {})
+                        ]
                 merged = sorted({*baseline, int(category_id)})
                 set_manual_category_ids(sku, merged)
 
@@ -709,8 +769,14 @@ class CategoryBrandStudioTab(QWidget):
         from sync_app.core.product_woo_map_helper import load_product_woo_map
         from sync_app.core.product_brand_override import set_manual_brand_id
         from sync_app.core.integrations.commerce_provider import is_prestashop
+        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
 
-        product_map = load_product_woo_map()
+        if is_sepidar_provider(self.config):
+            from sync_app.core.scripts.sepidar.sepidar_common import load_sepidar_map
+
+            product_map = load_sepidar_map("sepidar_product_map.json")
+        else:
+            product_map = load_product_woo_map()
         ps_mode = is_prestashop(self.config)
         ok_count, fail_count = 0, 0
         for sku in skus:
@@ -751,3 +817,16 @@ class CategoryBrandStudioTab(QWidget):
         # شده)، حالا که تبِ محصولات قطعاً موجوده، دوباره بارگذاری کن.
         if self.product_list.count() == 0:
             self._reload_products()
+            return
+        from sync_app.core.tab_operation_guard import consume_pending_sql_reload
+
+        consume_pending_sql_reload(self, self._reload_products)
+
+    def reload_site_scoped_caches(self):
+        """بعد از سوئیچِ سایت/پریست (بدونِ بستنِ تب) صدا زده می‌شه — چون
+        self._categories/self._brands/self.category_combo/self.brand_combo
+        یک‌بار موقعِ ساختِ تب لود شدن و اگه این‌جا دوباره از سایتِ فعلی
+        دریافت نشن، دکمه‌هایِ «الصاق» ممکنه idِ دسته‌بندی/برندِ سایتِ قبلی
+        رو رویِ سایتِ جدید بنویسن. _load_site_taxonomy خودش در انتها
+        _reload_products رو هم صدا می‌زنه — نیازی به فراخوانیِ جدا نیست."""
+        self._load_site_taxonomy()

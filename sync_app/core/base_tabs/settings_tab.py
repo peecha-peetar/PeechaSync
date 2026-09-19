@@ -646,9 +646,22 @@ class SettingsTab(QWidget):
         from sync_app.core.threading_helper import run_in_thread
         from sync_app.core.product_mode import detect_product_mode_from_db, MODE_SIMPLE_ONLY
 
+        cfg = self.config or {}
+        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+
+        if is_sepidar_provider(cfg):
+            idx = self.product_mode_combo.findData(MODE_SIMPLE_ONLY)
+            if idx >= 0:
+                self.product_mode_combo.setCurrentIndex(idx)
+            QMessageBox.information(
+                self, "نیازی به تشخیص نیست",
+                "سپیدار/دشت اصلاً ویژگی/متغیر (رنگ/سایز) نداره — همیشه «فقط محصولاتِ ساده»ست، "
+                "نیازی به کوئری از دیتابیس نیست.",
+            )
+            return
+
         self.product_mode_detect_btn.setEnabled(False)
         self.product_mode_detect_btn.setText("⏳ در حال بررسی دیتابیس...")
-        cfg = self.config or {}
 
         def _worker():
             return detect_product_mode_from_db(cfg)
@@ -902,7 +915,8 @@ class SettingsTab(QWidget):
         confirm = QMessageBox.question(
             self, "تأیید بازیابی",
             "تنظیمات فعلی با این نسخه‌ی پشتیبان جایگزین می‌شود "
-            "(خودِ حالت فعلی هم قبلش پشتیبان گرفته می‌شود). ادامه می‌دهید؟",
+            "(خودِ حالت فعلی هم قبلش پشتیبان گرفته می‌شود). بلافاصله بعدِ بازیابی، "
+            "برنامه خودکار بسته و دوباره باز می‌شود تا مقادیرِ جدید بارگذاری شوند. ادامه می‌دهید؟",
             QMessageBox.Yes | QMessageBox.No,
         )
         if confirm != QMessageBox.Yes:
@@ -911,13 +925,20 @@ class SettingsTab(QWidget):
         try:
             _, config_file = _candidate_pairs()[0]
             restore_config_backup(backup_path, config_file)
-            QMessageBox.information(
-                self, "انجام شد",
-                "تنظیمات بازیابی شد. لطفاً برنامه را ببندید و دوباره باز کنید تا مقادیر جدید بارگذاری شوند.",
-            )
-            self._refresh_backup_list()
         except Exception as exc:
             QMessageBox.critical(self, "خطا در بازیابی", str(exc))
+            return
+
+        # قبلاً این‌جا فقط یه پیامِ اطلاع‌رسانی نشون داده می‌شد و از کاربر
+        # می‌خواستیم دستی برنامه رو ببنده/باز کنه — چون تنظیماتِ درحافظه
+        # (خودِ این تب و بقیه‌ی تب‌هایِ باز) هنوز نسخه‌ی قبل از بازیابی رو
+        # نگه می‌دارن، خیلی وقتا کاربر این مرحله رو نادیده می‌گرفت و به نظر
+        # می‌رسید بازیابی «هیچ اثری نداشته». حالا دقیقاً مثلِ تعویضِ پروفایل
+        # (که از همین restart_application استفاده می‌کنه)، خودکار ریستارت
+        # می‌کنیم تا نسخه‌یِ بازیابی‌شده قطعاً بارگذاری بشه.
+        from sync_app.core.app_restart import restart_application
+
+        restart_application()
 
     def _resolve_sql_auth_mode_for_save(self, existing_config):
         auth_mode = self._last_success_sql_auth_mode
@@ -1243,12 +1264,13 @@ class SettingsTab(QWidget):
 
         self.erp_provider_combo = QComboBox()
         for _key, _label in ERP_PROVIDER_CHOICES:
-            suffix = " (فعلی)" if _key == "dejavu" else " (پیش‌نمایش آینده)"
+            suffix = " (پیش‌نمایش آینده)" if _key == "ghiaas" else ""
             self.erp_provider_combo.addItem(f"{_label}{suffix}", _key)
         current_provider = normalize_erp_provider_key(self.config.get("ERP_PROVIDER"))
         provider_idx = self.erp_provider_combo.findData(current_provider)
         self.erp_provider_combo.setCurrentIndex(provider_idx if provider_idx >= 0 else 0)
         self.erp_provider_combo.currentIndexChanged.connect(self.update_provider_hint)
+        self.erp_provider_combo.currentIndexChanged.connect(self._on_erp_provider_changed)
 
         self.provider_hint_label = QLabel("")
         self.provider_hint_label.setWordWrap(True)
@@ -1350,10 +1372,10 @@ class SettingsTab(QWidget):
         app_layout.addRow(QLabel("قیمت ویژه:"), self.sale_price_enabled_cb)
         app_layout.addRow(QLabel("لیست قیمت ویژه:"), self.sale_price_combo)
         app_layout.addRow(QLabel("درصد افزایش قیمت ویژه:"), self.sale_price_markup_spin)
-        app_layout.addRow(QLabel("پوشه تصاویر ERP:"), self.erp_picture_root_input)
+        app_layout.addRow(QLabel("پوشه تصاویر برنامه حسابداری:"), self.erp_picture_root_input)
         app_layout.addRow(QLabel("تم نرم‌افزار:"), self.theme_combo)
         app_layout.addRow(QLabel("سایز فونت:"), self.font_size_combo)
-        app_layout.addRow(QLabel("نوعِ ERP:"), self.erp_provider_combo)
+        app_layout.addRow(QLabel("نوعِ برنامه حسابداری:"), self.erp_provider_combo)
         app_layout.addRow(QLabel("نام کاربری ورود:"), self.app_login_username_input)
         app_layout.addRow(QLabel("رمز عبور ورود:"), self.app_login_password_input)
         app_layout.addRow(QLabel("صفحه لاگین:"), self.login_screen_enabled_checkbox)
@@ -2140,6 +2162,41 @@ class SettingsTab(QWidget):
         self._on_default_customer_mode_changed()  # نمایش/مخفی کردن بر اساس مقدار اولیه
         self._on_customer_creation_method_changed()  # نمایش/مخفی کردن کل/معین بر اساس مقدار اولیه
 
+        # ── گروه تنظیماتِ سپیدار/دشت — فقط وقتی providerِ ERP رویِ یکی از
+        # این دو باشه نمایش داده می‌شه (_on_erp_provider_changed) ──────
+        sepidar_group = QGroupBox("تنظیماتِ سپیدار/دشت")
+        sepidar_form = QFormLayout()
+        sepidar_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        sepidar_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        sepidar_form.setHorizontalSpacing(14)
+        sepidar_form.setVerticalSpacing(10)
+
+        self.sepidar_stock_ref_input = QLineEdit(str(self.config.get("SEPIDAR_STOCK_REF") or "1"))
+        self.sepidar_stock_ref_input.setPlaceholderText("StockRef (پیش‌فرض 1)")
+        self.sepidar_fiscal_period_ref_input = QLineEdit(str(self.config.get("SEPIDAR_FISCAL_PERIOD_REF") or "1"))
+        self.sepidar_fiscal_period_ref_input.setPlaceholderText("FiscalPeriodRef (پیش‌فرض 1)")
+        self.sepidar_location_ref_input = QLineEdit(str(self.config.get("SEPIDAR_DEFAULT_LOCATION_REF") or ""))
+        self.sepidar_location_ref_input.setPlaceholderText("LocationRef — خالی یعنی آدرس ذخیره نشود")
+        for _w in (self.sepidar_stock_ref_input, self.sepidar_fiscal_period_ref_input, self.sepidar_location_ref_input):
+            _w.setLayoutDirection(Qt.LeftToRight)
+            _w.setAlignment(Qt.AlignLeft)
+            _w.setMinimumHeight(32)
+
+        sepidar_form.addRow(QLabel("کدِ انبار (StockRef):"), self.sepidar_stock_ref_input)
+        sepidar_form.addRow(QLabel("کدِ دورهٔ مالی (FiscalPeriodRef):"), self.sepidar_fiscal_period_ref_input)
+        sepidar_form.addRow(QLabel("کدِ محل/آدرسِ پیش‌فرض (LocationRef):"), self.sepidar_location_ref_input)
+        sepidar_hint = QLabel(
+            "این کدها از خودِ سپیدار/دشت (جدولِ انبار، دورهٔ مالی، محل) خونده می‌شن. "
+            "اگر LocationRef خالی بماند، آدرسِ مشتری در سپیدار ذخیره نمی‌شود (فقط نام/موبایل)."
+        )
+        sepidar_hint.setWordWrap(True)
+        sepidar_hint.setStyleSheet("color:#64748b; font-size:10px;")
+        sepidar_form.addRow(sepidar_hint)
+
+        sepidar_group.setLayout(sepidar_form)
+        self.sepidar_group = sepidar_group
+        self._on_erp_provider_changed()  # نمایش/مخفی کردن بر اساس providerِ ERPِ فعلی
+
         # ── گروه فیلدهای قابل‌انتخاب همگام‌سازی (محصول/دسته/ویژگی/متغیر) ──
         fields_group = QGroupBox("فیلدهای همگام‌سازی (SQL → فروشگاه)")
         fields_layout = QVBoxLayout()
@@ -2210,7 +2267,8 @@ class SettingsTab(QWidget):
         backup_layout = QVBoxLayout()
         backup_hint = QLabel(
             "قبل از هر ذخیره، یک نسخه از تنظیمات قبلی خودکار نگه داشته می‌شود "
-            "(آخرین ۱۵ نسخه). اگر تنظیمات به‌اشتباه تغییر کرد، از اینجا برگردانید."
+            "(۲۰ نسخه‌ی اخیر + حداقل یک نسخه در روز تا ۳۰ روزِ گذشته). "
+            "اگر تنظیمات به‌اشتباه تغییر کرد، از اینجا برگردانید — بعدِ بازیابی، برنامه خودکار ریستارت می‌شود."
         )
         backup_hint.setWordWrap(True)
         backup_hint.setStyleSheet("color:#64748b; font-size:10px;")
@@ -2241,7 +2299,7 @@ class SettingsTab(QWidget):
         self.settings_sub_tabs.addTab(wc_page_scroll, "🛒 فروشگاه")
         self.settings_sub_tabs.addTab(self._build_settings_page([self.app_group]), "⚙️ عمومی")
         self.settings_sub_tabs.addTab(
-            self._build_settings_page([self.fields_group, self.customer_group]),
+            self._build_settings_page([self.fields_group, self.customer_group, self.sepidar_group]),
             "🔄 همگام‌سازی و مشتری",
         )
         self.settings_sub_tabs.addTab(
@@ -2333,6 +2391,7 @@ class SettingsTab(QWidget):
             self.sms_provider_url_input, self.sms_username_input, self.sms_password_input, self.sms_sender_number_input,
             self.contact_phone_input, self.site_address_display_input,
             self.social_instagram_input, self.social_telegram_input, self.social_whatsapp_input,
+            self.sepidar_stock_ref_input, self.sepidar_fiscal_period_ref_input, self.sepidar_location_ref_input,
         ] + list(self._field_sync_checkboxes.values()) + list(self._force_full_sync_checkboxes.values())
 
         _text_inputs = [
@@ -2348,6 +2407,7 @@ class SettingsTab(QWidget):
             self.sms_provider_url_input, self.sms_username_input, self.sms_password_input, self.sms_sender_number_input,
             self.contact_phone_input, self.site_address_display_input,
             self.social_instagram_input, self.social_telegram_input, self.social_whatsapp_input,
+            self.sepidar_stock_ref_input, self.sepidar_fiscal_period_ref_input, self.sepidar_location_ref_input,
         ]
         for w in _text_inputs:
             w.textChanged.connect(self._on_settings_field_changed)
@@ -4350,6 +4410,14 @@ class SettingsTab(QWidget):
         self.default_customer_code_input.setVisible(is_fixed)
         self.default_customer_code_label.setVisible(is_fixed)
 
+    def _on_erp_provider_changed(self):
+        """نمایش/مخفی‌کردنِ گروهِ تنظیماتِ سپیدار/دشت — فقط وقتی providerِ
+        ERPِ انتخاب‌شده یکی از این دو باشه."""
+        if not hasattr(self, "sepidar_group"):
+            return
+        provider_key = self.erp_provider_combo.currentData()
+        self.sepidar_group.setVisible(provider_key in ("sepidar", "dasht"))
+
     def _on_customer_creation_method_changed(self):
         """نمایش/مخفی‌کردنِ کمبویِ کل/معین بر اساسِ روشِ انتخاب‌شده — و
         بارگذاریِ خودکارِ کدهایِ کل وقتی برایِ اولین بار به یکی از دو
@@ -5214,12 +5282,18 @@ class SettingsTab(QWidget):
             ),
         )
         theme_changed = str(old_cfg.get("APP_THEME") or "") != str(theme_value or "")
+        # ERP_PROVIDER عوض‌شده نیاز به بازخوانیِ کاملِ tab‌هایِ SQL-دار داره
+        # (مشتریان/سفارشات/تطبیق هم، نه فقط چهارتایِ زیر) — چون این کلید
+        # مسیرِ دژاوو/سپیدار رو در همه‌شون عوض می‌کنه؛ قبلاً این تغییر تویِ
+        # شاخه‌یِ محدودترِ catalog_changed می‌افتاد و اون چهار تب رو جا
+        # می‌انداخت.
+        erp_provider_changed = self._config_slice_changed(old_cfg, new_cfg, ("ERP_PROVIDER",))
 
         from sync_app.core.connectivity_guard import find_peecha_launcher
 
         launcher = find_peecha_launcher(self)
 
-        if sql_changed:
+        if sql_changed or erp_provider_changed:
             db_name = str(new_cfg.get("SQL_DATABASE") or "").strip()
             if launcher is not None and db_name:
                 if hasattr(launcher, "set_sql_header_database"):
@@ -5347,6 +5421,9 @@ class SettingsTab(QWidget):
                 "CUSTOMER_CREATION_METHOD": self.customer_creation_method_combo.currentData() or "auto",
                 "CUSTOMER_KOL_CODE": (self.customer_kol_combo.currentData() or "").strip(),
                 "CUSTOMER_MOIEN_CODE": (self.customer_moien_combo.currentData() or "").strip(),
+                "SEPIDAR_STOCK_REF": (self.sepidar_stock_ref_input.text() or "1").strip(),
+                "SEPIDAR_FISCAL_PERIOD_REF": (self.sepidar_fiscal_period_ref_input.text() or "1").strip(),
+                "SEPIDAR_DEFAULT_LOCATION_REF": (self.sepidar_location_ref_input.text() or "").strip(),
                 "STORE_PLATFORM": self.store_platform_combo.currentData() or "woocommerce",
                 "PS_URL": self.ps_url_input.text().strip(),
                 "PS_API_KEY": self.ps_api_key_input.text().strip(),

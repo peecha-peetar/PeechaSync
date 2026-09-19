@@ -31,12 +31,36 @@ THEME_PALETTE: dict[str, dict[str, str]] = {
 
 def get_active_theme_palette() -> tuple[str, dict[str, str]]:
     from sync_app.core.secure_config_loader import load_secure_config
+    from sync_app.core.user_profile import get_current_profile_id, load_last_profile_id, read_profile_config_readonly
 
-    cfg = load_secure_config(None) or {}
+    if get_current_profile_id():
+        cfg = load_secure_config(None) or {}
+    else:
+        # قبل از لاگین/فعال‌سازیِ لایسنس، هنوز هیچ پروفایلی «فعال» نشده —
+        # بدونِ این، load_secure_config به مسیرهایِ legacy/ریشه برمی‌گرده
+        # (نه پوشه‌ی پروفایلِ کاربر) و APP_THEME واقعیِ کاربر هیچ‌وقت پیدا
+        # نمی‌شه (همیشه navy پیش‌فرض می‌مونه، حتی اگه کاربر رنگِ دیگه‌ای
+        # انتخاب کرده باشه). آخرین پروفایلِ استفاده‌شده رو فقط می‌خونیم
+        # (بدونِ activate_profile که عوارضِ جانبی مثلِ ریست‌کردنِ لاگِ
+        # برنامه داره) — همون الگویِ read_profile_config_readonly که
+        # login_window.py برایِ پیش‌نمایشِ پیش‌تنظیم‌ها هم استفاده می‌کنه.
+        last = load_last_profile_id()
+        cfg = read_profile_config_readonly(last) if last else {}
+
     name = str(cfg.get("APP_THEME", "navy")).strip()
     if name not in ALLOWED_THEMES:
         name = "navy"
     return name, THEME_PALETTE[name]
+
+
+def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
+    h = (hex_color or "").lstrip("#")
+    if len(h) != 6:
+        return (0, 0, 0)
+    try:
+        return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    except ValueError:
+        return (0, 0, 0)
 
 
 def resolve_user_font_pref(font_setting) -> tuple[int, bool]:
@@ -885,5 +909,134 @@ QPushButton#licenseWelcomeCopyBtn {{
 QPushButton#licenseWelcomeSecondaryBtn:hover,
 QPushButton#licenseWelcomeCopyBtn:hover {{
     background-color: {soft};
+}}
+"""
+
+
+def build_login_window_stylesheet(palette: dict[str, str]) -> str:
+    """صفحه‌ی لاگین (پس‌زمینه‌ی همیشه‌تیره/برندیِ خودش رو حفظ می‌کنه —
+    شبیهِ waitLogPanelِ build_connectivity_wait_stylesheet که رویِ زمینه‌ی
+    تیره هم از پالتِ تم استفاده می‌کنه)، ولی رنگِ لهجه‌ای/حاشیه‌ها/دکمه
+    دیگه هاردکدِ نیلی/بنفش نیست — از APP_THEمِ فعال می‌آد."""
+    primary = palette["primary"]
+    hover = palette["hover"]
+    pressed = palette["pressed"]
+    soft = palette["soft"]
+    pr, pg, pb = _hex_to_rgb(primary)
+    hr, hg, hb = _hex_to_rgb(hover)
+    return f"""
+QDialog {{
+    background: #0f0a1e;
+}}
+QFrame#formPanel {{
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #1e1b4b, stop:0.5 #1a1035, stop:1 #0f0a1e);
+    border: 1.5px solid rgba({hr}, {hg}, {hb}, 0.6);
+    border-left: none;
+    border-top-right-radius: 26px;
+    border-bottom-right-radius: 26px;
+}}
+QLabel {{
+    background: transparent;
+    color: #d1d5db;
+}}
+QLabel#welcomeTitle {{
+    color: #ffffff;
+    font-size: 22px;
+    font-weight: 800;
+}}
+QLabel#welcomeSubtitle {{
+    color: {soft};
+    font-size: 11.5px;
+    font-weight: 500;
+}}
+QLabel#fieldLabel {{
+    color: {soft};
+    font-size: 11px;
+    font-weight: 700;
+}}
+QLabel#statusLabel {{
+    color: #6b7280;
+    font-size: 10px;
+}}
+QLineEdit {{
+    background-color: rgba(15, 20, 40, 0.85);
+    border: 1px solid rgba({hr}, {hg}, {hb}, 0.35);
+    border-radius: 10px;
+    padding: 10px 14px;
+    font-size: 13px;
+    color: #e5e7eb;
+    selection-background-color: {primary};
+}}
+QLineEdit:focus {{
+    border: 1.5px solid {hover};
+    background-color: rgba(10, 12, 30, 0.95);
+}}
+QComboBox {{
+    background-color: rgba(15, 20, 40, 0.85);
+    border: 1px solid rgba({hr}, {hg}, {hb}, 0.35);
+    border-radius: 10px;
+    padding: 8px 14px;
+    font-size: 13px;
+    color: #e5e7eb;
+    selection-background-color: {primary};
+}}
+QComboBox:focus {{
+    border: 1.5px solid {hover};
+    background-color: rgba(10, 12, 30, 0.95);
+}}
+QComboBox::drop-down {{
+    border: none;
+    width: 26px;
+}}
+QComboBox QAbstractItemView {{
+    background-color: #1a1035;
+    color: #e5e7eb;
+    selection-background-color: {primary};
+    border: 1px solid rgba({hr}, {hg}, {hb}, 0.5);
+    outline: none;
+}}
+QPushButton#loginBtn {{
+    background-color: {primary};
+    color: white;
+    border: none;
+    border-radius: 10px;
+    font-size: 14px;
+    font-weight: 700;
+    padding: 11px;
+    letter-spacing: 1px;
+}}
+QPushButton#loginBtn:hover {{
+    background-color: {hover};
+}}
+QPushButton#loginBtn:pressed {{
+    background-color: {pressed};
+}}
+QPushButton#refreshBtn {{
+    background-color: transparent;
+    color: {hover};
+    border: 1px solid rgba({hr}, {hg}, {hb}, 0.4);
+    border-radius: 8px;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 7px;
+}}
+QPushButton#refreshBtn:hover {{
+    background-color: rgba({pr}, {pg}, {pb}, 0.12);
+    color: {soft};
+    border-color: rgba({hr}, {hg}, {hb}, 0.7);
+}}
+QPushButton#closeBtn {{
+    background-color: transparent;
+    color: rgba({hr}, {hg}, {hb}, 0.6);
+    border: none;
+    font-size: 18px;
+    min-width: 28px;
+    min-height: 28px;
+    border-radius: 14px;
+}}
+QPushButton#closeBtn:hover {{
+    background-color: rgba(239, 68, 68, 0.2);
+    color: #f87171;
 }}
 """

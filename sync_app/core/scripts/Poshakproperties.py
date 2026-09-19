@@ -279,9 +279,9 @@ def _update_attr_name(wcapi, attr_id, new_name):
 def _load_attr_id_map() -> dict[str, int]:
     """بارگذاری نگاشت نام‌نرمال ERP → Woo attribute ID از فایل."""
     try:
-        from sync_app.core.sync_utils import app_path
+        from sync_app.core.sync_utils import site_scoped_path
         import json
-        path = app_path("attr_id_map.json")
+        path = site_scoped_path("attr_id_map.json")
         if os.path.exists(path):
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -294,9 +294,9 @@ def _load_attr_id_map() -> dict[str, int]:
 def _save_attr_id_map(mapping: dict[str, int]) -> None:
     """ذخیره نگاشت نام‌نرمال ERP → Woo attribute ID در فایل."""
     try:
-        from sync_app.core.sync_utils import app_path
+        from sync_app.core.sync_utils import site_scoped_path
         import json
-        path = app_path("attr_id_map.json")
+        path = site_scoped_path("attr_id_map.json")
         with open(path, "w", encoding="utf-8") as f:
             json.dump({str(k): int(v) for k, v in mapping.items() if v}, f, ensure_ascii=False, indent=2)
     except Exception as exc:

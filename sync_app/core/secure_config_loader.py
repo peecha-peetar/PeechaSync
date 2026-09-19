@@ -239,7 +239,19 @@ def save_secure_config(config_dict):
         file.write(encrypted_data)
 
 
-CONFIG_BACKUP_KEEP = 15
+# نکته‌یِ مهم (بعدِ یک گزارشِ واقعی): چون هر بارِ save_secure_config یه
+# بکاپِ جدید می‌سازه، و ذخیره فقط برایِ تغییراتِ واقعیِ کاربر نیست — کلی
+# نوشتنِ خودکار/بوک‌کیپینگِ پس‌زمینه هم هست (مثلِ AUTO_SYNC_RUNNING،
+# AUTO_NEXT_RUN_AT، LAST_ACTIVE_TAB، ابعادِ پنجره — که هر چند دقیقه/هر
+# چرخه‌یِ سینکِ خودکار می‌تونن نوشته بشن) — قبلاً «فقط ۱۵ تایِ آخر» باعث
+# می‌شد این نوشتن‌هایِ مکررِ بی‌ربط، بکاپ‌هایِ واقعاً مفید (قبل از یک
+# تغییرِ واقعیِ تنظیمات) رو در عرضِ چند ساعت pruned کنن — یعنی «چند روز
+# بعد اصلاً دسترسی نداریم». راه‌حل: نگه‌داریِ دولایه — تعدادی از
+# جدیدترین‌ها با جزئیاتِ کامل (ریزدانه، برایِ Undoی نزدیک)، به‌علاوه‌یِ
+# حداقل یک نسخه به‌ازایِ هر روز برایِ چند هفته‌یِ اخیر (درشت‌دانه، برایِ
+# دسترسیِ درازمدت) — مستقل از اینکه اون روز چندبار نوشته شده.
+CONFIG_BACKUP_KEEP_RECENT = 20
+CONFIG_BACKUP_KEEP_DAYS = 30
 
 
 def _backup_config_file(config_file: str) -> None:
@@ -266,21 +278,39 @@ def _backup_config_file(config_file: str) -> None:
 
 
 def _prune_old_backups(backup_dir: str, base_name: str) -> None:
-    """فقط آخرین CONFIG_BACKUP_KEEP نسخه رو نگه می‌داره، بقیه رو پاک می‌کنه."""
+    """دولایه نگه می‌داره: جدیدترین CONFIG_BACKUP_KEEP_RECENT تا (ریزدانه)،
+    به‌علاوه‌ی قدیمی‌ترین نسخه‌ی هر روز برای CONFIG_BACKUP_KEEP_DAYS روزِ
+    اخیر (درشت‌دانه، تا نوشتن‌هایِ مکررِ یک روز، بکاپِ همون روز رو کاملاً
+    از بین نبرن) — بقیه پاک می‌شن."""
     try:
-        entries = [
-            os.path.join(backup_dir, name)
-            for name in os.listdir(backup_dir)
+        names = [
+            name for name in os.listdir(backup_dir)
             if name.startswith(base_name + ".") and name.endswith(".bak")
         ]
     except FileNotFoundError:
         return
-    entries.sort(key=lambda p: os.path.getmtime(p), reverse=True)
-    for old_path in entries[CONFIG_BACKUP_KEEP:]:
-        try:
-            os.remove(old_path)
-        except OSError:
-            pass
+    entries = [(os.path.join(backup_dir, name), os.path.getmtime(os.path.join(backup_dir, name))) for name in names]
+    entries.sort(key=lambda e: e[1], reverse=True)  # جدیدترین اول
+
+    keep_paths = {path for path, _mtime in entries[:CONFIG_BACKUP_KEEP_RECENT]}
+
+    cutoff = datetime.now().timestamp() - (CONFIG_BACKUP_KEEP_DAYS * 86400)
+    seen_days = set()
+    for path, mtime in entries:  # جدیدترین اول -> جدیدترینِ هر روز نگه داشته می‌شه
+        if mtime < cutoff:
+            continue
+        day = datetime.fromtimestamp(mtime).date()
+        if day in seen_days:
+            continue
+        seen_days.add(day)
+        keep_paths.add(path)
+
+    for path, _mtime in entries:
+        if path not in keep_paths:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
 
 def list_config_backups(config_file: str) -> list[dict]:

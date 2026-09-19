@@ -365,9 +365,27 @@ class _CategoryOptionsLoader(QThread):
     def __init__(self, cfg):
         super().__init__()
         self.cfg = cfg
+        self.sepidar_groups: list[dict] | None = None
 
     def run(self):
         try:
+            from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+
+            if is_sepidar_provider(self.cfg):
+                from sync_app.core.scripts.sepidar.sepidar_categorysync import (
+                    fetch_sepidar_item_groups, group_label_chain,
+                )
+
+                groups = fetch_sepidar_item_groups(self.cfg)
+                by_id = {str(g["id"]): g for g in groups}
+                options = [
+                    (str(g["id"]), group_label_chain(g["id"], by_id))
+                    for g in sorted(groups, key=lambda g: g.get("title") or "")
+                ]
+                self.sepidar_groups = groups
+                self.done.emit(options, "")
+                return
+
             from sync_app.core.sql_connection_helper import open_sql_connection
 
             conn, _, _ = open_sql_connection(self.cfg, timeout=5)
@@ -457,6 +475,71 @@ class _ErpSimpleSkuLoader(QThread):
                 label = " | ".join(["ساده", code_field, name, f"{price:,.0f}"])
                 out.append((code, label))
             self.done.emit(out, "")
+        except Exception as exc:
+            self.done.emit([], str(exc))
+
+
+class _SepidarSyncedSkuLoader(QThread):
+    """معادلِ _ErpSimpleSkuLoader برایِ سپیدار/دشت — چون سپیدار جدولِ
+    Article نداره و sepidar_categorysync/sepidar_productsync فقط INSERT
+    دارن (نه SELECTِ آماده برایِ فهرست)، این‌جا مستقیم از رویِ
+    sepidar_product_map.json (SKUِ سایت → ItemID سپیدار) + محصولاتِ سایت
+    می‌سازدش — بدونِ هیچ کوئریِ SQL."""
+
+    done = pyqtSignal(list, str)  # [(sku, label), ...], error
+
+    def __init__(self, cfg, query: str, category_code: str = ""):
+        super().__init__()
+        self.cfg = cfg
+        self.query = query
+        self.category_code = category_code
+
+    def run(self):
+        try:
+            # نکته‌یِ مهم (رفعِ باگِ گزارش‌شده): قبلاً این‌جا فقط SKUهایِ
+            # از قبل سینک‌شده (کلیدهایِ sepidar_product_map.json) رو
+            # می‌گشت — یعنی اگه کاربر هنوز محصولی رو سینک نکرده بود (یا
+            # اصلاً هدفِ تطبیقِ ساختاری همینه: پیداکردنِ کالاهایِ هنوز
+            # سینک‌نشده)، لیست کاملاً خالی می‌موند. حالا عیناً مثلِ
+            # _ErpSimpleSkuLoaderِ دژاوو (که مستقیم از Article می‌خونه)،
+            # مستقیم از خودِ دیتابیسِ سپیدار (POS.Item، از طریقِ همون
+            # fetch_sepidar_products_for_syncِ استفاده‌شده در سینکِ واقعی)
+            # می‌خونه — صرف‌نظر از اینکه قبلاً سینک شده یا نه.
+            from sync_app.core.scripts.sepidar.sepidar_productsync import (
+                fetch_sepidar_products_for_sync, _expand_sepidar_groups_with_descendants,
+            )
+
+            selected = [str(g).strip() for g in (self.cfg.get("SEPIDAR_SELECTED_GROUPS") or []) if str(g).strip()]
+            category_code = str(self.category_code or "").strip()
+
+            scope_ids = None
+            if selected or category_code:
+                from sync_app.core.scripts.sepidar.sepidar_categorysync import fetch_sepidar_item_groups
+
+                groups = fetch_sepidar_item_groups(self.cfg)
+                base_ids = _expand_sepidar_groups_with_descendants(selected, groups) if selected else None
+                cat_ids = _expand_sepidar_groups_with_descendants([category_code], groups) if category_code else None
+                if base_ids is not None and cat_ids is not None:
+                    scope_ids = base_ids & cat_ids
+                else:
+                    scope_ids = base_ids if base_ids is not None else cat_ids
+
+            items = fetch_sepidar_products_for_sync(self.cfg, selected_group_ids=scope_ids)
+            needle = str(self.query or "").strip().lower()
+
+            out = []
+            for it in items:
+                sku = str(it.get("sku") or "").strip()
+                if not sku:
+                    continue
+                name = str(it.get("name") or "").strip()
+                if needle and needle not in sku.lower() and needle not in name.lower():
+                    continue
+                price = it.get("price") or 0
+                label = " | ".join(["ساده", sku, name or "—", f"{price:,.0f}" if price else "—"])
+                out.append((sku, label))
+            out.sort(key=lambda pair: pair[1])
+            self.done.emit(out[:200], "")
         except Exception as exc:
             self.done.emit([], str(exc))
 
@@ -557,6 +640,7 @@ class StructureReconciliationTab(QWidget):
         self._syncing_selection = False
         self.sv_suggestions: list[dict] = []
         self.fs_suggestions: list[dict] = []
+        self._sepidar_groups_for_filter: list[dict] | None = None
 
         from sync_app.core.integrations.erp_provider import erp_provider_label
 
@@ -570,12 +654,13 @@ class StructureReconciliationTab(QWidget):
     def _load_category_options(self):
         loader = _CategoryOptionsLoader(self.config)
         self._keep_loader(loader)
-        loader.done.connect(self._on_category_options_loaded)
+        loader.done.connect(lambda options, error, ldr=loader: self._on_category_options_loaded(options, error, ldr))
         loader.start()
 
-    def _on_category_options_loaded(self, options, error):
+    def _on_category_options_loaded(self, options, error, loader=None):
         if error:
             return
+        self._sepidar_groups_for_filter = getattr(loader, "sepidar_groups", None)
         for combo in (self.sv_category_filter, self.fs_category_filter):
             current = combo.currentData()
             combo.blockSignals(True)
@@ -600,7 +685,24 @@ class StructureReconciliationTab(QWidget):
         # زیرتب‌هایِ «همگام‌سازی»/«دستیار هوشمند» با همین objectName رفع شد.
         sub_tabs.tabBar().setObjectName("hubSubTabBar")
         sub_tabs.addTab(self._build_site_variation_section(), f"🧩 سایت متغیر / {self.erp_label} ساده")
-        sub_tabs.addTab(self._build_force_simple_section(), f"📦 {self.erp_label} متغیر / سایت ساده")
+
+        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+
+        force_simple_widget = self._build_force_simple_section()
+        # نگه‌داشتنِ یک ارجاعِ پایتونی روی self ضروریه — چون بدونِ addTab
+        # (پایینه)، این widget هیچ parentِ Qtای نداره، و بدونِ این ارجاع،
+        # به‌محضِ خروج از این متد garbage-collect می‌شه؛ اون‌وقت self.fs_table
+        # (که داخلِ همین widget ساخته شده) یه اشاره‌گرِ خراب می‌مونه و همین‌جا
+        # تویِ __init__، سرِ self._refresh_fs_table() با
+        # «RuntimeError: wrapped C/C++ object ... has been deleted» کرش
+        # می‌کنه — این‌جوری کلِ تبِ «همگام‌سازی» برایِ سپیدار/دشت هیچ‌وقت
+        # لود نمی‌شد (باگِ واقعیِ گزارش‌شده).
+        self._force_simple_widget = force_simple_widget
+        if not is_sepidar_provider(self.config):
+            # سپیدار/دشت هیچ‌وقت کالایِ متغیر نداره — این حالت («ERP متغیر /
+            # سایت ساده») براش اصلاً ممکن نیست. خودِ widget ساخته می‌شه
+            # (سازگاری با ارجاعاتِ داخلی)، فقط به تب اضافه نمی‌شه.
+            sub_tabs.addTab(force_simple_widget, f"📦 {self.erp_label} متغیر / سایت ساده")
         root.addWidget(sub_tabs)
 
     def _keep_loader(self, loader: QThread):
@@ -862,8 +964,14 @@ class StructureReconciliationTab(QWidget):
     def _sv_search_erp(self):
         self._reload_config()
         self.sv_status_label.setText(f"⏳ در حالِ جستجویِ کالاهایِ {self.erp_label}...")
+
+        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+
         category_code = self.sv_category_filter.currentData() or ""
-        loader = _ErpSimpleSkuLoader(self.config, self.sv_erp_search.text(), category_code)
+        if is_sepidar_provider(self.config):
+            loader = _SepidarSyncedSkuLoader(self.config, self.sv_erp_search.text(), category_code)
+        else:
+            loader = _ErpSimpleSkuLoader(self.config, self.sv_erp_search.text(), category_code)
         self._keep_loader(loader)
         loader.done.connect(self._on_sv_erp_results)
         loader.start()
@@ -873,13 +981,20 @@ class StructureReconciliationTab(QWidget):
             self.sv_status_label.setText(f"⚠️ جستجویِ {self.erp_label} ناموفق بود: {error}")
             return
         from sync_app.core.structure_mismatch_override import get_site_variation_target
-        from sync_app.core.product_woo_map_helper import load_product_woo_map
+        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
 
         # کالاهایِ سادهٔ ERP که از قبل با «تطبیق» معمولی (نه این ابزار) به یک
         # محصولِ سایت لینک شدن — اینا مشکلی ندارن، محصولِ ساده‌ی معمولی‌اند و
         # نیازی به تطبیقِ ساختاری ندارن؛ نباید کنارِ کالاهایِ واقعاً بی‌لینک
         # تویِ «فقط لینک‌نشده» بیفتن.
-        product_map = load_product_woo_map()
+        if is_sepidar_provider(self.config):
+            from sync_app.core.scripts.sepidar.sepidar_common import load_sepidar_map
+
+            product_map = load_sepidar_map("sepidar_product_map.json")
+        else:
+            from sync_app.core.product_woo_map_helper import load_product_woo_map
+
+            product_map = load_product_woo_map()
 
         structural_count = 0
         reconciled_count = 0
@@ -962,19 +1077,27 @@ class StructureReconciliationTab(QWidget):
             return False
 
         from sync_app.core.structure_mismatch_override import set_site_variation_target
-        from sync_app.core.product_woo_map_helper import load_product_woo_map, save_product_woo_map
-        from sync_app.core.product_woo_map_meta import register_product_link
 
         set_site_variation_target(sku, parent_id, variation_id, label=label, erp_label=erp_label)
-        # همین SKU رو در product_woo_map هم به محصولِ والدِ سایت وصل می‌کنیم —
-        # نه برایِ اینکه سینکِ عادی ازش استفاده کنه (سینک برایِ این SKU زودتر
-        # از این طریق رد می‌شه: get_site_variation_target)، بلکه فقط برایِ
-        # اینکه تبِ «محصولات» این SKU رو «لینک‌شده» نشون بده، نه «لینک‌نشده» —
-        # وگرنه کاربر گمون می‌کنه هنوز تطبیق نشده.
-        product_map = load_product_woo_map()
-        product_map[sku] = int(parent_id)
-        save_product_woo_map(product_map)
-        register_product_link(sku, int(parent_id), wc_label=label, manual=True)
+
+        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+
+        if not is_sepidar_provider(self.config):
+            # همین SKU رو در product_woo_map هم به محصولِ والدِ سایت وصل
+            # می‌کنیم — نه برایِ اینکه سینکِ عادی ازش استفاده کنه (سینک برایِ
+            # این SKU زودتر از این طریق رد می‌شه: get_site_variation_target)،
+            # بلکه فقط برایِ اینکه تبِ «محصولات» این SKU رو «لینک‌شده» نشون
+            # بده، نه «لینک‌نشده» — وگرنه کاربر گمون می‌کنه هنوز تطبیق نشده.
+            # برایِ سپیدار این بخش بی‌ربطه (product_woo_map مالِ دژاوو/هلوعه)
+            # — همون sepidar_product_map کافیه، ساختِ واقعیِ Item هم دفعه‌ی
+            # بعدِ اجرایِ sync_products خودکار انجام می‌شه.
+            from sync_app.core.product_woo_map_helper import load_product_woo_map, save_product_woo_map
+            from sync_app.core.product_woo_map_meta import register_product_link
+
+            product_map = load_product_woo_map()
+            product_map[sku] = int(parent_id)
+            save_product_woo_map(product_map)
+            register_product_link(sku, int(parent_id), wc_label=label, manual=True)
         if not silent:
             self._refresh_sv_table()
         return True
@@ -1034,7 +1157,7 @@ class StructureReconciliationTab(QWidget):
         if not site_entries or not erp_entries:
             QMessageBox.information(
                 self, "توجه",
-                "اول از هر دو طرف (سایت و ERP) جستجو کنید تا موردی برایِ پیشنهاد باشه.",
+                f"اول از هر دو طرف (سایت و {self.erp_label}) جستجو کنید تا موردی برایِ پیشنهاد باشه.",
             )
             return
 
@@ -1572,7 +1695,7 @@ class StructureReconciliationTab(QWidget):
         if not site_entries or not erp_entries:
             QMessageBox.information(
                 self, "توجه",
-                "اول از هر دو طرف (سایت و ERP) جستجو کنید تا موردی برایِ پیشنهاد باشه.",
+                f"اول از هر دو طرف (سایت و {self.erp_label}) جستجو کنید تا موردی برایِ پیشنهاد باشه.",
             )
             return
 

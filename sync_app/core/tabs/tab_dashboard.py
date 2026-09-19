@@ -150,6 +150,12 @@ def _fmt_money(value, suffix="﷼"):
         return f"{value} {suffix}"
 
 
+def _rtl_html(inner: str) -> str:
+    """QLabelِ حاویِ HTML (برخلافِ متنِ ساده) به setAlignment/setLayoutDirectionِ
+    خودِ ویجت توجه نمی‌کنه و بدونِ این wrapper چپ‌چین می‌مونه — تاییدشده با تست."""
+    return f'<div dir="rtl" align="right">{inner}</div>'
+
+
 def _site_host(url):
     try:
         host = urlparse(url).netloc or urlparse(url).path
@@ -205,6 +211,48 @@ class DashboardWorker(QObject):
                 "server": meta[1] if meta and len(meta) > 1 else self.config.get("SQL_SERVER", "—"),
                 "user": meta[2] if meta and len(meta) > 2 else "—",
             })
+
+            from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+
+            if is_sepidar_provider(self.config):
+                from sync_app.core.scripts.sepidar.sepidar_categorysync import fetch_sepidar_item_groups
+                # به‌جایِ fetch_sepidar_items (بدونِ گروه) از تابعِ سنگین‌ترِ
+                # fetch_sepidar_products_for_sync استفاده می‌شه چون
+                # _item_group_id لازمه — سپیدار از فازِ درختِ کاملِ
+                # دسته‌بندی به بعد واقعاً انتخابِ دامنه (SEPIDAR_SELECTED_GROUPS)
+                # داره، دیگه «دامنه = همه» فرضِ درستی نیست.
+                from sync_app.core.scripts.sepidar.sepidar_productsync import (
+                    fetch_sepidar_products_for_sync, _expand_sepidar_groups_with_descendants,
+                )
+
+                groups = fetch_sepidar_item_groups(self.config)
+                items = fetch_sepidar_products_for_sync(self.config)
+                # هر گروهِ ریشه (ParentGroupRef == -5) دقیقاً معادلِ سطحِ
+                # M_Group و بقیه معادلِ S_Groupه (طبقِ خودِ sepidar_categorysync)
+                # — همون دو لیبلِ موجودِ UI بدونِ هیچ تغییرِ رابطِ کاربری درست می‌مونن.
+                sql["main_groups"] = sum(1 for g in groups if g["parent_ref"] == -5)
+                sql["sub_groups"] = len(groups) - sql["main_groups"]
+                sql["articles"] = len(items)
+                selected = [
+                    str(g).strip() for g in self.config.get("SEPIDAR_SELECTED_GROUPS", []) if str(g).strip()
+                ]
+                if selected:
+                    scope_ids = _expand_sepidar_groups_with_descendants(selected, groups)
+                    sql["selected_groups"] = len(scope_ids)
+                    sql["filtered_articles"] = sum(
+                        1 for it in items if str(it.get("_item_group_id")) in scope_ids
+                    )
+                else:
+                    sql["selected_groups"] = len(groups)
+                    sql["filtered_articles"] = sql["articles"]
+                try:
+                    cur.execute("SELECT SUM(CAST(ISNULL(Quantity, 0) AS BIGINT)) FROM POS.ItemOpening")
+                    sql["total_stock"] = int(cur.fetchone()[0] or 0)
+                except Exception:
+                    sql["total_stock"] = 0
+                conn.close()
+                payload["sql"] = sql
+                return
 
             queries = {
                 "articles": "SELECT COUNT(*) FROM Article",
@@ -451,8 +499,14 @@ class DashboardWorker(QObject):
             self._load_sql(payload)
             self._load_woo(payload)
             try:
-                from sync_app.core.auto_sync_scope import compute_unlinked_counts
-                payload["link_health"] = compute_unlinked_counts(self.config)
+                from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+
+                if is_sepidar_provider(self.config):
+                    from sync_app.core.scripts.sepidar.sepidar_common import compute_sepidar_unlinked_counts
+                    payload["link_health"] = compute_sepidar_unlinked_counts(self.config)
+                else:
+                    from sync_app.core.auto_sync_scope import compute_unlinked_counts
+                    payload["link_health"] = compute_unlinked_counts(self.config)
             except Exception:
                 payload["link_health"] = None
             self.finished.emit(payload)
@@ -542,6 +596,7 @@ class HealthCard(QFrame):
 
         self.title_label = QLabel(title)
         self.title_label.setStyleSheet("font-weight: 700; color: #0f172a;")
+        self.title_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         header.addWidget(self.title_label)
         header.addStretch()
 
@@ -553,10 +608,12 @@ class HealthCard(QFrame):
         self.detail_label = QLabel("—")
         self.detail_label.setWordWrap(True)
         self.detail_label.setStyleSheet("color: #475569; line-height: 1.4;")
+        self.detail_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         layout.addWidget(self.detail_label)
 
         self.meta_label = QLabel("")
         self.meta_label.setStyleSheet("color: #94a3b8;")
+        self.meta_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         layout.addWidget(self.meta_label)
 
     def apply_theme(self, palette, font_base):
@@ -612,6 +669,39 @@ class DashboardTab(QWidget):
 
         return erp_provider_label(self._static_config)
 
+    def _refresh_erp_labels(self):
+        """متن/tooltipِ ویجت‌هایی که نامِ ERP رو تویِ خودشون دارن، موقعِ
+        ساختِ تب یک‌بار baked می‌شن (_init_ui فقط یک‌بار در عمرِ تب اجرا
+        می‌شه) و اگه این‌جا رفرش نشن، بعدِ سوئیچِ ERP همچنان نامِ providerِ
+        قبلی رو نشون می‌دن — چون خودِ نمونه‌یِ DashboardTab بعدِ سوئیچ از نو
+        ساخته نمی‌شه، فقط load_data() صدا زده می‌شه."""
+        self._static_config = load_secure_config(None) or {}
+        erp = self._erp_label()
+        if hasattr(self, "_hero_title"):
+            self._hero_title.setToolTip(f"نمای کلی وضعیت اتصال‌ها، داده‌های {erp} و آمار فروشگاه در یک صفحه")
+        if hasattr(self, "refresh_btn"):
+            self.refresh_btn.setToolTip(f"بارگذاری دوباره وضعیت {erp}، API فروشگاه، KPIها و جداول")
+        if hasattr(self, "_hero_sub"):
+            self._hero_sub.setText(f"نمای یکپارچه دیتابیس {erp} (SQL Server)، فروشگاه آنلاین و وضعیت همگام‌سازی")
+        if hasattr(self, "_health_sql"):
+            self._health_sql.title_label.setText(f"SQL Server — {erp}")
+        if hasattr(self, "_card_sql_products"):
+            self._card_sql_products.title_label.setText(f"کالاهای {erp}")
+            self._card_sql_products.setToolTip(f"تعداد کل کالاهای موجود در {erp} (جدول Article)")
+        if len(getattr(self, "_quick_buttons", [])) > 3:
+            self._quick_buttons[1].setText(f"⚖️ تطبیق {erp} ↔ سایت")
+            self._quick_buttons[3].setText(f"📂 دسته‌بندی {erp}")
+        if hasattr(self, "_insight_erp"):
+            self._insight_erp.setToolTip(f"اطلاعات سرور/دیتابیس {erp}، تعداد گروه‌ها و لیست قیمت فعال")
+        if hasattr(self, "_pending_table"):
+            self._pending_table["frame"].setToolTip(
+                f"سفارشاتی که هنوز پرداخت/تکمیل نشده‌اند و معمولاً در صف انتقال به {erp} هستند"
+            )
+        if hasattr(self, "footer_message"):
+            self.footer_message.setText(
+                f"💡 برای داده کامل، تنظیمات {erp} و فروشگاه را کامل کنید سپس «بازخوانی» بزنید."
+            )
+
     def apply_runtime_font(self, effective_font_size: int, is_bold: bool = False):
         """همگام با تغییر فونت/سایز در تنظیمات."""
         self._runtime_font_base = effective_font_size
@@ -619,10 +709,13 @@ class DashboardTab(QWidget):
         self._apply_dashboard_theme()
 
     def ensure_tab_data_loaded(self):
-        if self._initial_load_started:
+        if not self._initial_load_started:
+            self._initial_load_started = True
+            self.load_data()
             return
-        self._initial_load_started = True
-        self.load_data()
+        from sync_app.core.tab_operation_guard import consume_pending_sql_reload
+
+        consume_pending_sql_reload(self, self.load_data)
 
     def _init_ui(self):
         outer = QVBoxLayout(self)
@@ -655,6 +748,7 @@ class DashboardTab(QWidget):
         hero_title = QLabel("📊 مرکز فرمان پیچا")
         hero_title.setObjectName("dashHeroTitle")
         hero_top.addWidget(hero_title)
+        self._hero_title = hero_title
         hero_title.setToolTip(f"نمای کلی وضعیت اتصال‌ها، داده‌های {self._erp_label()} و آمار فروشگاه در یک صفحه")
         hero_top.addStretch()
 
@@ -673,6 +767,7 @@ class DashboardTab(QWidget):
         hero_sub.setWordWrap(True)
         hero_sub.setObjectName("dashHeroSub")
         hero_layout.addWidget(hero_sub)
+        self._hero_sub = hero_sub
 
         self.load_progress = QProgressBar()
         self.load_progress.setObjectName("dashLoadProgress")
@@ -1094,6 +1189,8 @@ class DashboardTab(QWidget):
         if self._thread and self._thread.isRunning():
             return
 
+        self._refresh_erp_labels()
+
         from sync_app.core.integrations.commerce_provider import is_prestashop, store_platform_label
 
         from sync_app.core.integrations.erp_provider import erp_provider_label
@@ -1150,12 +1247,19 @@ class DashboardTab(QWidget):
 
         self.status_label.setText(f"آخرین بروزرسانی: {loaded_at}")
 
-        map_count = len(load_product_woo_map() or {})
+        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+
+        if is_sepidar_provider(self._static_config):
+            from sync_app.core.scripts.sepidar.sepidar_common import load_sepidar_map
+
+            map_count = len(load_sepidar_map("sepidar_product_map.json") or {})
+        else:
+            map_count = len(load_product_woo_map() or {})
         if map_count > 0:
             recon_msg = f"{_fmt_num(map_count)} جفت محصول در product_woo_map ثبت شده است."
         else:
             recon_msg = "نگاشت محصول خالی است — برای سایت فعال، تب «تطبیق» را انجام دهید."
-        self._insight_recon.setText(f"<b>تطبیق</b><br>{recon_msg}")
+        self._insight_recon.setText(_rtl_html(f"<b>تطبیق</b><br>{recon_msg}"))
 
         # ── Health cards ─────────────────────────────
         if sql.get("ok"):
@@ -1237,22 +1341,22 @@ class DashboardTab(QWidget):
         self._refresh_settings_summary(cfg, woo)
         from sync_app.core.integrations.erp_provider import erp_provider_label
 
-        self._insight_erp.setText(
+        self._insight_erp.setText(_rtl_html(
             f"<b>{erp_provider_label(cfg)}</b><br>"
             f"گروه اصلی: {_fmt_num(sql.get('main_groups', '—'))} | "
             f"زیرگروه: {_fmt_num(sql.get('sub_groups', '—'))}<br>"
             f"لیست قیمت فعال: #{cfg.get('price_list', 1)}"
-        )
+        ))
         version_line = (
             f"ارز: {woo.get('currency') or '—'}" if woo.get("platform") == "prestashop"
             else f"نسخه WC: {woo.get('wc_version', '—')}"
         )
-        self._insight_wc.setText(
+        self._insight_wc.setText(_rtl_html(
             f"<b>فروشگاه</b><br>"
             f"محصولات: {_fmt_num(woo.get('total_products', '—'))} | "
             f"مشتریان: {_fmt_num(woo.get('total_customers', '—'))}<br>"
             f"{version_line}"
-        )
+        ))
         sync_ready = sql.get("ok") and wc_ok and sel > 0 and map_count > 0
         if sync_ready:
             sync_msg = f"آماده همگام‌سازی — {erp_provider_label(cfg)} و فروشگاه متصل، گروه‌ها انتخاب و تطبیق ثبت شده است."
@@ -1266,7 +1370,7 @@ class DashboardTab(QWidget):
             sync_msg = "برای همگام‌سازی کامل: اتصال SQL/فروشگاه را بررسی و در تب دسته‌بندی گروه انتخاب کنید."
             footer_state = "info"
             footer_msg = f"ℹ آخرین بروزرسانی: {loaded_at}"
-        self._insight_sync.setText(f"<b>همگام‌سازی</b><br>{sync_msg}")
+        self._insight_sync.setText(_rtl_html(f"<b>همگام‌سازی</b><br>{sync_msg}"))
         self._set_footer_status(footer_state, footer_msg)
 
         # ── Tables ─────────────────────────────────
@@ -1296,9 +1400,8 @@ class DashboardTab(QWidget):
 
         link_health = data.get("link_health")
         if link_health:
-            product_map_count = len(load_product_woo_map() or {})
             health_items = [
-                ("لینک‌شده", float(product_map_count)),
+                ("لینک‌شده", float(map_count)),
                 ("لینک‌نشده", float(link_health.get("products", 0))),
             ]
             self._health_chart.set_data(

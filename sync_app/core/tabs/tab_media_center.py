@@ -43,6 +43,7 @@ from sync_app.core.wc_sync_helper import (
     update_wc_product_images,
 )
 from sync_app.core.integrations.commerce_provider import is_prestashop
+from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
 
 # کلیدهایِ ذخیره‌یِ آخرین پوشه‌یِ انتخاب‌شده — تا کاربر هر بار مجبور نباشه
 # دوباره مسیر رو انتخاب کنه.
@@ -544,6 +545,41 @@ class MediaCenterTab(QWidget):
 
         def _worker():
             groups = scan_product_image_folder(folder)
+
+            if is_sepidar_provider(config):
+                from sync_app.core.scripts.sepidar.sepidar_common import load_sepidar_map
+                from sync_app.core.scripts.sepidar.sepidar_productsync import fetch_site_products
+
+                site_products = fetch_site_products(config)
+                skus = [str(p.get("sku") or "").strip() for p in site_products if p.get("sku")]
+                name_by_code = {str(p.get("sku") or "").strip(): str(p.get("name") or "").strip() for p in site_products}
+                lookup = build_product_code_lookup([(sku, "") for sku in skus])
+                product_map = load_sepidar_map("sepidar_product_map.json")
+
+                results = []
+                for file_code, all_items in groups.items():
+                    a_code = lookup.resolve(file_code)
+                    if not a_code:
+                        results.append((file_code, "—", "—", "—", len(all_items), "❌ کد ناشناس (در سایت نیست)", None))
+                        continue
+                    name = name_by_code.get(a_code, "—")
+                    if a_code not in product_map:
+                        results.append((file_code, name, a_code, "—", len(all_items), "⚠️ این کالا با سپیدار سینک نشده", None))
+                        continue
+
+                    items = filter_unuploaded_items(all_items)
+                    if not items:
+                        results.append(
+                            (file_code, name, a_code, "—", len(all_items), "✅ قبلاً منتقل شده (بدونِ تغییرِ جدید)", None)
+                        )
+                        continue
+                    if len(items) < len(all_items):
+                        status = f"✅ آماده‌ی آپلود ({len(items)} عکسِ جدید — {len(all_items) - len(items)} قبلاً منتقل شده)"
+                    else:
+                        status = "✅ آماده‌ی آپلود"
+                    results.append((file_code, name, a_code, "—", len(items), status, items))
+                return results
+
             conn, _, _ = open_sql_connection(config, timeout=8)
             cursor = conn.cursor()
             cursor.execute("SELECT A_Code, A_Code_C, A_Name FROM Article")
@@ -718,7 +754,12 @@ class MediaCenterTab(QWidget):
         append_mode = append_radio.isChecked()
 
         config = load_secure_config(None) or {}
-        product_map = load_product_woo_map()
+        if is_sepidar_provider(config):
+            from sync_app.core.scripts.sepidar.sepidar_common import load_sepidar_map
+
+            product_map = load_sepidar_map("sepidar_product_map.json")
+        else:
+            product_map = load_product_woo_map()
         matched_groups = dict(self._bulk_matched_groups)
 
         self.bulk_upload_btn.setEnabled(False)
@@ -1007,7 +1048,7 @@ class MediaCenterTab(QWidget):
     def _run_readiness_check(self):
         config = load_secure_config(None) or {}
         selected_groups = [str(g).strip() for g in config.get("SELECTED_SUB_GROUPS", []) if str(g).strip()]
-        if not selected_groups:
+        if not selected_groups and not is_sepidar_provider(config):
             QMessageBox.warning(
                 self, "گروهی انتخاب نشده",
                 "ابتدا در تب «دسته‌بندی‌ها» زیرگروه موردنظر را تیک بزنید.",
@@ -1034,6 +1075,10 @@ class MediaCenterTab(QWidget):
         run_in_thread(_worker, on_complete=_done, on_error=_fail)
 
     def _fetch_readiness_rows(self, config, selected_groups):
+        if is_sepidar_provider(config):
+            from sync_app.core.scripts.sepidar.sepidar_productsync import fetch_readiness_rows
+            return fetch_readiness_rows(config)
+
         from sync_app.core.erp_image_helper import resolve_erp_picture_path
         from sync_app.core.sync_utils import app_path
 

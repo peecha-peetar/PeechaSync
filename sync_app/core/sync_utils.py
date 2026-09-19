@@ -58,12 +58,18 @@ def app_path(*parts):
     return os.path.join(app_dir(), *parts)
 
 
-def _site_scope_key() -> str:
-    """شناسه‌ی یکتا برایِ «کدوم سایت/پلتفرمِ فروشگاهی الان فعاله» (پلتفرم +
-    آدرسِ سایت). برایِ namespace کردنِ فایل‌هایِ وضعیتِ سینک (نگاشتِ SKU↔ID،
-    نگاشتِ دسته‌بندی و مانندِ آن) که وگرنه وقتی یک پروفایل چند سایت/پلتفرمِ
-    مختلف داره (چند پریست یا چند WC_SITES/PS_SITES)، بینِ اونا به‌اشتباه به
-    اشتراک گذاشته می‌شن و دیتای یک سایت با سایتِ دیگه قاطی می‌شه."""
+def _site_scope_key(*, include_family: bool = True) -> str:
+    """شناسه‌ی یکتا برایِ «کدوم سایت/پلتفرمِ فروشگاهی + کدوم خانواده‌یِ
+    ERP الان فعاله» (پلتفرم + آدرسِ سایت + خانواده‌یِ schemaیِ ERP). برایِ
+    namespace کردنِ فایل‌هایِ وضعیتِ سینک (نگاشتِ SKU↔ID، نگاشتِ
+    دسته‌بندی و مانندِ آن) که وگرنه: (۱) وقتی یک پروفایل چند سایت/پلتفرمِ
+    مختلف داره (چند پریست یا چند WC_SITES/PS_SITES)، بینِ اونا به‌اشتباه
+    به اشتراک گذاشته می‌شن؛ (۲) وقتی همون یک سایت رو یک‌بار با یک ERP
+    (مثلاً دژاوو) و بعداً با ERPِ دیگه‌ای با schemaیِ متفاوت (مثلاً سپیدار)
+    سینک می‌کنن، کدِ کالایِ یک ERP به‌اشتباه به‌عنوانِ کدِ کالایِ ERPِ
+    دیگه خونده می‌شه (چون فقط رشته‌کد یکسانه، نه معنا). `include_family`
+    فقط برایِ محاسبه‌یِ مسیرِ legacy (پیش از افزودنِ خانواده‌یِ ERP به این
+    شناسه) در مهاجرتِ site_scoped_path استفاده می‌شه."""
     try:
         from sync_app.core.secure_config_loader import load_secure_config
         from sync_app.core.integrations.commerce_provider import store_platform
@@ -77,6 +83,10 @@ def _site_scope_key() -> str:
                 url = url[len(prefix):]
                 break
         raw = f"{platform}:{url}" if url else platform
+        if include_family:
+            from sync_app.core.integrations.erp_provider import erp_schema_family
+
+            raw = f"{raw}:{erp_schema_family(cfg)}"
     except Exception:
         raw = "default"
 
@@ -86,29 +96,39 @@ def _site_scope_key() -> str:
 
 
 def site_scoped_path(*parts):
-    """مسیرِ فایلِ وضعیتِ سینکِ مخصوصِ سایت/پلتفرمِ فعلی (namespaced) — برایِ
-    category_map.json، product_woo_map.json و مشابه.
+    """مسیرِ فایلِ وضعیتِ سینکِ مخصوصِ سایت/پلتفرم/خانواده‌یِ ERPِ فعلی
+    (namespaced) — برایِ category_map.json، product_woo_map.json و مشابه.
 
-    مهاجرت از نسخه‌ی قدیمیِ مسطح (پیش از این تغییر، وقتی این فایل‌ها بینِ
-    همه‌ی سایت‌هایِ یک پروفایل مشترک بودن): اولین سایتی که بعد از این
-    آپدیت واقعاً درخواستِ این مسیر رو بده، فایلِ قدیمی رو به مسیرِ
-    scopedِ خودش منتقل می‌کنه (move، نه copy) — تا فقط همون یک سایت
-    (که تقریباً همیشه سایتِ فعلاً فعاله) دیتایِ قبلی رو به ارث ببره و
-    سایت‌هایِ دیگه با نگاشتِ خالی/تازه شروع کنن. یه بکاپ از فایلِ قدیمی
-    هم کنارِ مسیرِ پروفایل نگه داشته می‌شه، برایِ احتیاط."""
+    دو مهاجرتِ یک‌باره‌یِ زنجیره‌ای، هر دو move (نه copy) با یک بکاپِ
+    کنارِ فایلِ اصلی:
+    ۱) از نسخه‌ی خیلی قدیمیِ مسطح (پیش از وجودِ site-scoping، وقتی این
+       فایل‌ها بینِ همه‌ی سایت‌هایِ یک پروفایل مشترک بودن).
+    ۲) از نسخه‌ی site-scopedِ بدونِ خانواده‌یِ ERP (پیش از افزودنِ
+       erp_schema_family به‌شناسه — یعنی همون مسیری که تا نسخه‌ی ۲.۳۰.۱۳۳
+       استفاده می‌شد). چون تا پیش از این، تنها ERPِ واقعاً پیاده‌شده
+       دژاوو/هلو بود، این مهاجرت عملاً یعنی «دیتایِ قبلیِ هر سایت به
+       خانواده‌ی دژاوو منتقل می‌شه» — دقیقاً همون چیزی که کاربرهایِ فعلی
+       انتظار دارن (هیچ دیتایی گم نمی‌شه)."""
     base = os.path.join(app_dir(), "sites", _site_scope_key())
     os.makedirs(base, exist_ok=True)
     target = os.path.join(base, *parts)
     if not os.path.exists(target):
-        legacy = os.path.join(app_dir(), *parts)
-        if os.path.isfile(legacy):
-            try:
-                import shutil
+        try:
+            import shutil
 
+            legacy = os.path.join(app_dir(), *parts)
+            if os.path.isfile(legacy):
                 shutil.copyfile(legacy, legacy + ".pre_site_scope_backup")
                 shutil.move(legacy, target)
-            except Exception:
-                pass
+            else:
+                legacy_scoped = os.path.join(
+                    app_dir(), "sites", _site_scope_key(include_family=False), *parts
+                )
+                if os.path.isfile(legacy_scoped):
+                    shutil.copyfile(legacy_scoped, legacy_scoped + ".pre_erp_family_scope_backup")
+                    shutil.move(legacy_scoped, target)
+        except Exception:
+            pass
     return target
 
 

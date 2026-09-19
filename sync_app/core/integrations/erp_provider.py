@@ -45,10 +45,13 @@ class SepidarProviderStub(BaseERPProvider):
     display_name = "سپیدار"
 
     def health_check(self):
-        return False, "اتصال سپیدار هنوز پیاده‌سازی نهایی نشده است."
+        from sync_app.core.secure_config_loader import load_secure_config
+        from sync_app.core.scripts.sepidar.sepidar_common import sepidar_health_check
+
+        return sepidar_health_check(load_secure_config(None) or {})
 
     def get_provider_hint(self):
-        return "حالت پیش‌نمایشی سپیدار فعال است (فقط زیرساخت)."
+        return "دیتابیسِ سپیدار وصل است — دسته/کالا/مشتری/فاکتور از سایت به سپیدار همگام می‌شود."
 
 
 class DashtProviderStub(BaseERPProvider):
@@ -56,10 +59,13 @@ class DashtProviderStub(BaseERPProvider):
     display_name = "دشت"
 
     def health_check(self):
-        return False, "اتصال دشت هنوز پیاده‌سازی نهایی نشده است."
+        from sync_app.core.secure_config_loader import load_secure_config
+        from sync_app.core.scripts.sepidar.sepidar_common import sepidar_health_check
+
+        return sepidar_health_check(load_secure_config(None) or {})
 
     def get_provider_hint(self):
-        return "حالت پیش‌نمایشی دشت فعال است (فقط زیرساخت)."
+        return "دیتابیسِ دشت (مشابهِ سپیدار) وصل است — دسته/کالا/مشتری/فاکتور از سایت همگام می‌شود."
 
 
 class GhiaasProviderStub(BaseERPProvider):
@@ -103,6 +109,24 @@ def normalize_erp_provider_key(provider_name) -> str:
 def get_provider(provider_name):
     key = normalize_erp_provider_key(provider_name)
     return _PROVIDER_CLASSES[key]()
+
+
+def erp_schema_family(config) -> str:
+    """خانواده‌یِ schemaیِ ERP — برایِ namespace کردنِ فایل‌هایِ وضعیتِ سینکِ
+    SKU-محور (نگاشتِ دسته‌بندی/محصول، override هایِ ساختاری و مانندِ آن).
+    دژاوو/هلو جدولِ Article/M_Group مشترک دارن (پس کدِ کالاشون معنایِ
+    یکسانی داره) — یک خانواده‌ن. سپیدار/دشت هم POS.Item/POS.ItemGroup
+    مشترک دارن — خانواده‌یِ دیگه‌ای‌ن. هر ERPِ دیگه‌ای که بعداً اضافه بشه
+    و schemaیِ کاملاً متفاوتی داره، باید این‌جا در خانواده‌یِ خودش
+    (یا خانواده‌یِ جدید) قرار بگیره، وگرنه کدهایِ کالاش با یک ERPِ
+    schema-متفاوتِ دیگه (که به‌طورِ تصادفی همون رشته‌کدها رو داره) قاطی
+    می‌شه."""
+    key = normalize_erp_provider_key((config or {}).get("ERP_PROVIDER"))
+    if key in ("dejavu", "holoo"):
+        return "dejavu"
+    if key in ("sepidar", "dasht"):
+        return "sepidar"
+    return key
 
 
 def erp_provider_label(config) -> str:

@@ -19,6 +19,7 @@ from sync_app.core.marketing_helper import (
     build_marketing_infos, no_sale_products, best_sellers, high_stock_low_sales,
     low_stock_warning, suggest_action, upcoming_occasions,
 )
+from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
 
 
 class MarketingTab(QWidget):
@@ -127,7 +128,7 @@ class MarketingTab(QWidget):
             )
             return
         selected_groups = [str(g).strip() for g in config.get("SELECTED_SUB_GROUPS", []) if str(g).strip()]
-        if not selected_groups:
+        if not selected_groups and not is_sepidar_provider(config):
             QMessageBox.warning(self, "گروهی انتخاب نشده", "ابتدا در تب «دسته‌بندی‌ها» زیرگروه موردنظر را تیک بزنید.")
             return
 
@@ -139,18 +140,26 @@ class MarketingTab(QWidget):
             report = build_sales_report(config, since_days=since_days)
             save_sales_report(report)
 
-            conn, _, _ = open_sql_connection(config, timeout=8)
-            cursor = conn.cursor()
-            like_conditions = " OR ".join(["A_Code LIKE ?" for _ in selected_groups])
-            cursor.execute(
-                f"SELECT A_Code, A_Name, Exist FROM Article WHERE {like_conditions}",
-                [f"{g}%" for g in selected_groups],
-            )
-            sql_products = [
-                {"sku": str(r[0]).strip(), "name": str(r[1]).strip(), "stock": int(r[2] or 0)}
-                for r in cursor.fetchall()
-            ]
-            conn.close()
+            if is_sepidar_provider(config):
+                from sync_app.core.scripts.sepidar.sepidar_productsync import fetch_products_for_display
+
+                sql_products = [
+                    {"sku": p["sku"], "name": p["name"], "stock": p["stock"]}
+                    for p in fetch_products_for_display(config)
+                ]
+            else:
+                conn, _, _ = open_sql_connection(config, timeout=8)
+                cursor = conn.cursor()
+                like_conditions = " OR ".join(["A_Code LIKE ?" for _ in selected_groups])
+                cursor.execute(
+                    f"SELECT A_Code, A_Name, Exist FROM Article WHERE {like_conditions}",
+                    [f"{g}%" for g in selected_groups],
+                )
+                sql_products = [
+                    {"sku": str(r[0]).strip(), "name": str(r[1]).strip(), "stock": int(r[2] or 0)}
+                    for r in cursor.fetchall()
+                ]
+                conn.close()
 
             return build_marketing_infos(sql_products, report), report
 

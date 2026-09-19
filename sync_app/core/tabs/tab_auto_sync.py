@@ -38,6 +38,12 @@ from sync_app.core.scripts import (
     sync_fullproduct,
     update_variations,
 )
+from sync_app.core.scripts.sepidar import (
+    sepidar_categorysync,
+    sepidar_customersync,
+    sepidar_ordersync,
+    sepidar_productsync,
+)
 from sync_app.core.secure_config_loader import load_secure_config, save_secure_config
 from sync_app.core.store_setup_guard import ensure_store_pages_ready
 from sync_app.core.log_catalog import LOG_TOPIC_TOKEN_MAP, read_sync_log_lines
@@ -142,8 +148,54 @@ AUTO_SYNC_JOBS: tuple[AutoSyncJob, ...] = (
         ordersync.main,
     ),
 )
+# ── جاب‌هایِ موازیِ سپیدار/دشت — کالایِ ساده، بدونِ ویژگی/متغیر، بدونِ
+# «سفارش» جدا (فاکتور مستقیم). AUTO_SYNC_JOBS بالا برایِ دژاوو/هلو کاملاً
+# دست‌نخورده می‌مونه؛ این تاپل فقط زمانی استفاده می‌شه که ERP_PROVIDER
+# روی سپیدار/دشت باشه (resolve_auto_sync_jobs پایین‌تر).
+SEPIDAR_AUTO_SYNC_JOBS: tuple[AutoSyncJob, ...] = (
+    AutoSyncJob(
+        "sepidar_categorysync",
+        "دسته‌بندی‌ها",
+        "📂",
+        "دسته‌بندیِ سایت از POS.ItemGroup",
+        sepidar_categorysync.main,
+    ),
+    AutoSyncJob(
+        "sepidar_productsync",
+        "محصولات",
+        "📦",
+        "کالایِ سادهٔ سپیدار → سایت",
+        sepidar_productsync.main,
+    ),
+    AutoSyncJob(
+        "sepidar_customersync",
+        "مشتریان",
+        "👥",
+        "طرف‌حسابِ مشتریانِ ثبت‌نامیِ سایت",
+        sepidar_customersync.main,
+    ),
+    AutoSyncJob(
+        "sepidar_ordersync",
+        "فاکتورها",
+        "🧾",
+        "انتقالِ سفارش‌هایِ «در حال انجام» به فاکتورِ فروشِ مستقیم",
+        sepidar_ordersync.main,
+    ),
+)
+
 AUTO_SYNC_JOB_ROW_HEIGHT = 64
 AUTO_SYNC_JOB_BY_KEY = {job.key: job for job in AUTO_SYNC_JOBS}
+AUTO_SYNC_JOB_BY_KEY.update({job.key: job for job in SEPIDAR_AUTO_SYNC_JOBS})
+
+
+def resolve_auto_sync_jobs(config: dict | None = None) -> "tuple[AutoSyncJob, ...]":
+    """لیستِ جاب‌هایِ فعال بر اساسِ ERP_PROVIDER — برایِ دژاوو/هلو دقیقاً
+    همون AUTO_SYNC_JOBS قبلی، بدونِ هیچ تغییری."""
+    from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+
+    if is_sepidar_provider(config or {}):
+        return SEPIDAR_AUTO_SYNC_JOBS
+    return AUTO_SYNC_JOBS
 
 
 class SyncWorker(QThread):
@@ -318,7 +370,8 @@ class AutoSyncTab(QWidget):
 
         jobs_header.addStretch(1)
 
-        jobs_title = QLabel(f"انتخاب ماژول‌های همگام‌سازی ({len(AUTO_SYNC_JOBS)} مورد)")
+        active_jobs = resolve_auto_sync_jobs(self.config)
+        jobs_title = QLabel(f"انتخاب ماژول‌های همگام‌سازی ({len(active_jobs)} مورد)")
         jobs_title.setObjectName("autoSyncJobsTitle")
         jobs_title.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         jobs_header.addWidget(jobs_title)
@@ -339,7 +392,7 @@ class AutoSyncTab(QWidget):
         from sync_app.core.product_mode import is_simple_only
         simple_only = is_simple_only()
         visible_jobs = [
-            job for job in AUTO_SYNC_JOBS
+            job for job in active_jobs
             if not (simple_only and job.key in ("update_variations", "Poshakproperties"))
         ]
         for job in visible_jobs:

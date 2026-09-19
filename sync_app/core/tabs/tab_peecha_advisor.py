@@ -22,6 +22,7 @@ from sync_app.core.product_woo_map_helper import load_product_woo_map
 from sync_app.core.media_center import product_readiness, is_valid_image_data, is_valid_image_file
 from sync_app.core.seo_helper import analyze_product_seo_live, analyze_ps_product_seo
 from sync_app.core.site_health_helper import run_all_checks, overall_health_score
+from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
 
 FIX_HINTS = {
     "اتصال SQL": "تب «⚙️ تنظیمات» → بخش SQL",
@@ -205,6 +206,19 @@ class PeechaAdvisorTab(QWidget):
 
     def _readiness_summary(self, config, selected_groups):
         """میانگین امتیاز آمادگی و تعداد محصولات ناقص — از روی SQL محلی."""
+        if is_sepidar_provider(config):
+            try:
+                from sync_app.core.scripts.sepidar.sepidar_productsync import fetch_readiness_rows
+
+                scores = [row[2] for row in fetch_readiness_rows(config)]
+                if not scores:
+                    return None, 0
+                avg = round(sum(scores) / len(scores))
+                weak = sum(1 for s in scores if s < 70)
+                return avg, weak
+            except Exception:
+                return None, 0
+
         if not selected_groups:
             return None, 0
         try:

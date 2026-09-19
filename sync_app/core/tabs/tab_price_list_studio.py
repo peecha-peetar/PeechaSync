@@ -438,3 +438,11 @@ class PriceListStudioTab(QWidget):
     def ensure_tab_data_loaded(self):
         if not self._categories and not self._brands:
             self._load_site_taxonomy()
+
+    def reload_site_scoped_caches(self):
+        """بعد از سوئیچِ سایت/پریست (بدونِ بستنِ تب) صدا زده می‌شه — چون
+        self._categories/self._brands (و کمبوباکسِ هدفِ هر ردیف) یک‌بار
+        موقعِ ساختِ تب لود شدن؛ بدونِ این رفرش، ذخیره‌یِ یک ردیفِ جدید
+        ممکنه idِ دسته‌بندی/برندِ سایتِ قبلی رو برایِ سایتِ جدید ثبت کنه."""
+        self.config = load_secure_config(None) or {}
+        self._load_site_taxonomy()
