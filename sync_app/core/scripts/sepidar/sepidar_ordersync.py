@@ -22,7 +22,19 @@ from sync_app.core.scripts.sepidar.sepidar_common import (
 from sync_app.core.scripts.sepidar.sepidar_customersync import resolve_party_ref
 
 _ORDER_MAP_FILE = "sepidar_order_map.json"
-_PRODUCT_MAP_FILE = "sepidar_product_map.json"
+
+
+def _resolve_sepidar_item_id(cursor, sku: str) -> int | None:
+    """ItemIDِ سپیدار مستقیم از POS.Item — عمداً از sepidar_product_map.json
+    استفاده نمی‌کنه، چون از فازِ ۲ (بازگشتِ جهتِ سینکِ محصول) اون فایل
+    sku→idِ سایت رو ذخیره می‌کنه، نه ItemIDِ داخلیِ سپیدار؛ استفاده‌ش این‌جا
+    باعثِ نقضِ FK_SaleInvoiceItem_Item می‌شد (idِ سایت به‌جایِ ItemID پاس
+    داده می‌شد)."""
+    if not sku:
+        return None
+    cursor.execute("SELECT TOP 1 ItemID FROM POS.Item WHERE Code = ?", (sku,))
+    row = cursor.fetchone()
+    return int(row[0]) if row and row[0] is not None else None
 
 
 def _mark_order_completed(order_id, config: dict) -> None:
@@ -83,7 +95,6 @@ def insert_invoice(order: dict, config: dict) -> None:
         _mark_order_completed(order_id, config)
         return
 
-    product_map = load_sepidar_map(_PRODUCT_MAP_FILE)
     conn = get_sepidar_connection(config)
     try:
         cursor = conn.cursor()
@@ -101,7 +112,7 @@ def insert_invoice(order: dict, config: dict) -> None:
             if qty <= 0:
                 continue
             sku = str(item.get("sku") or "").strip()
-            item_ref = product_map.get(sku)
+            item_ref = _resolve_sepidar_item_id(cursor, sku)
             if not item_ref:
                 # تطبیقِ ساختاری («سایت متغیر / سپیدار ساده»): اگه این خط
                 # مستقیم با SKUِ خودش پیدا نشد، شاید این واریانت با SKUِ
@@ -117,7 +128,7 @@ def insert_invoice(order: dict, config: dict) -> None:
 
                     overridden_sku = find_erp_sku_for_site_variation(site_parent_id, site_variation_id)
                     if overridden_sku:
-                        item_ref = product_map.get(overridden_sku)
+                        item_ref = _resolve_sepidar_item_id(cursor, overridden_sku)
             if not item_ref:
                 log.warning(f"⚠️ سفارش {order_id}: کالایِ '{sku}' در سپیدار سینک نشده — این خط رد شد.")
                 continue
