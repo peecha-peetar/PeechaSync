@@ -390,6 +390,7 @@ def _resolve_sepidar_product_category(item_group_id, groups_by_id: dict, erp_to_
 def build_sepidar_products_sync_preview(config: dict | None = None) -> list:
     """معادلِ build_products_sync_previewِ دژاوو (product_sync_guard.py) —
     قبل از ارسالِ واقعی، به کاربر نشون می‌ده چی قراره سینک بشه."""
+    from sync_app.core.currency_helper import erp_price_divisor
     from sync_app.core.product_sync_guard import ProductSyncPreviewRow
     from sync_app.core.scripts.sepidar.sepidar_categorysync import (
         fetch_sepidar_item_groups,
@@ -397,6 +398,7 @@ def build_sepidar_products_sync_preview(config: dict | None = None) -> list:
     )
 
     config = config or {}
+    price_div = erp_price_divisor(config)
     selected = [str(g).strip() for g in config.get("SEPIDAR_SELECTED_GROUPS", []) if str(g).strip()]
     if not selected:
         return []
@@ -421,6 +423,10 @@ def build_sepidar_products_sync_preview(config: dict | None = None) -> list:
         wc_cat_id = _resolve_sepidar_product_category(item.get("_item_group_id"), groups_by_id, erp_to_wc_category)
         group_code = str(item.get("_item_group_id") or "")
         price = _resolve_sepidar_item_price(item, group_code, config)
+        # مثلِ build_products_sync_previewِ دژاوو: قیمتِ نمایشی به واحدِ
+        # سایته (تومان/ریال)، نه ریالِ خامِ ERP — وگرنه پیش‌نمایش ۱۰برابرِ
+        # چیزی که واقعاً ارسال می‌شه نشون می‌داد.
+        site_price = price / price_div if price > 0 else 0
         notes = []
         if not wc_id:
             notes.append("هنوز در نگاشتِ سپیدار ثبت نشده — ممکن است با SKU در سایت پیدا شود یا محصول جدید ساخته شود")
@@ -428,7 +434,7 @@ def build_sepidar_products_sync_preview(config: dict | None = None) -> list:
             ProductSyncPreviewRow(
                 erp_sku=sku,
                 erp_name=item["name"] or sku,
-                price=str(int(price)) if price else "0",
+                price=str(int(site_price)) if site_price else "0",
                 stock=item["stock"],
                 category_label=str(wc_cat_id) if wc_cat_id else "—",
                 wc_id=wc_id,
@@ -476,7 +482,10 @@ def sync_products_from_erp(config: dict | None = None) -> dict:
     images_by_item = fetch_sepidar_item_images(config, item_ids=item_ids_in_scope) if item_ids_in_scope else {}
 
     from sync_app.core.article_price import apply_price_markup
+    from sync_app.core.currency_helper import erp_price_divisor
     from sync_app.core.stock_mode import resolve_stock_mode, apply_stock_mode_to_payload
+
+    price_div = erp_price_divisor(config)
     from sync_app.core.scripts.sync_fullproduct import (
         _sync_product_images_if_needed,
         _sync_product_images_if_needed_ps,
@@ -495,10 +504,15 @@ def sync_products_from_erp(config: dict | None = None) -> dict:
             group_code = str(item.get("_item_group_id") or "")
             raw_price = _resolve_sepidar_item_price(item, group_code, config)
             price = apply_price_markup(raw_price, config, is_sale=False, sku=sku)
+            # قیمتِ POS.Item همیشه به ریاله (مثلِ Article دژاوو) — باید مثلِ
+            # sync_fullproduct.py قبل از ارسال به سایت به واحدِ سایت
+            # (تومان/ریال طبقِ WC_CURRENCY_IS_TOMAN) تبدیل بشه، وگرنه رویِ
+            # سایتِ تومانی ۱۰برابرِ واقعی ثبت می‌شه.
+            site_price = price / price_div if price > 0 else 0
             payload = {
                 "name": item["name"] or sku,
                 "sku": sku,
-                "regular_price": str(int(price)) if price else "0",
+                "regular_price": str(int(site_price)) if site_price else "0",
                 "status": "publish",
             }
             stock_mode = resolve_stock_mode(sku, group_code, config)
