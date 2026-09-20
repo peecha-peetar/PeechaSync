@@ -39,20 +39,30 @@ def _resolve_sepidar_item_id(cursor, sku: str) -> int | None:
 
 def _mark_order_completed(order_id, config: dict) -> None:
     from sync_app.core.integrations.commerce_provider import is_prestashop
+    from sync_app.core.sync_utils import log
 
     if is_prestashop(config):
         # طبقِ همون تصمیمِ ordersync.py دژاوو برایِ پرستاشاپ: وضعیتِ سفارش
         # روی پرستاشاپ تغییر داده نمی‌شود، فقط در ERP ثبت می‌شود.
         return
     try:
-        import requests
-        from sync_app.core.wc_api_helper import wc_endpoint, get_wc_auth
+        # قبلاً اینجا مستقیم requests.put می‌زد — بدونِ verify= (پس همیشه
+        # SSL رو چک می‌کرد، حتی وقتی کاربر WC_VERIFY_SSL رو خاموش کرده
+        # بود) و بدونِ timeout، و خطا رو کاملاً بی‌صدا قورت می‌داد
+        # (except: pass) — دقیقاً همون الگویی که باعث می‌شد وضعیتِ سفارش
+        # در سایت به completed تغییر نکنه بدونِ هیچ نشونه‌ای تو لاگ. الان
+        # از همون wc_rest_requestِ مشترکِ کل برنامه استفاده می‌کنه (که
+        # verify/timeout/User-Agent رو درست از config می‌خونه) و مثلِ
+        # ordersync.py دژاوو نتیجه رو لاگ می‌کنه.
+        from sync_app.core.wc_sync_helper import wc_rest_request
 
-        ck, cs = get_wc_auth(config)
-        url = f"{wc_endpoint(config.get('WC_URL', ''), 'orders')}/{order_id}"
-        requests.put(url, auth=(ck, cs), json={"status": "completed"})
-    except Exception:
-        pass
+        resp = wc_rest_request(config, "PUT", f"orders/{order_id}", json_body={"status": "completed"})
+        if int(getattr(resp, "status_code", 0) or 0) >= 400:
+            log.error(f"❌ خطا در به‌روزرسانیِ وضعیتِ سفارش {order_id} در ووکامرس: HTTP {resp.status_code} — {resp.text[:300]}")
+        else:
+            log.info(f"✅ وضعیتِ سفارش {order_id} در ووکامرس به 'completed' تغییر کرد.")
+    except Exception as exc:
+        log.error(f"❌ خطا در به‌روزرسانیِ وضعیتِ سفارش {order_id} در ووکامرس: {exc}")
 
 
 def _fetch_orders(config: dict) -> list[dict]:
