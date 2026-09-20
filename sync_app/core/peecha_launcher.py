@@ -3591,10 +3591,17 @@ def _present_startup_window(window, label: str) -> None:
 
             hwnd = int(window.winId())
             user32 = ctypes.windll.user32
-            SW_SHOW, SW_RESTORE = 5, 9
+            SW_SHOW, SW_RESTORE, SW_SHOWMAXIMIZED = 5, 9, 3
             HWND_TOPMOST, HWND_NOTOPMOST = -1, -2
             SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW = 0x0002, 0x0001, 0x0040
-            user32.ShowWindow(hwnd, SW_RESTORE)
+            # SW_RESTORE رویِ یه پنجره‌یِ Maximized صریحاً می‌گه «به اندازه/موقعیتِ
+            # عادی برگرد» — یعنی همین‌جا، درست بعدِ اینکه Qt’s showMaximized()
+            # (چند خط بالاتر) پنجره رو درست Maximized نشون داده بود، این تماس
+            # بی‌قیدوشرط دوباره کوچیکش می‌کرد (باگِ «اول تمام‌صفحه باز می‌شه،
+            # بعد خودش جمع می‌شه» — چون این بلوک صرفاً برایِ رفعِ نامرئی‌موندنِ
+            # فرمِ لاگین/لایسنس اضافه شده بود و فرقی بینِ فرمِ Maximized و
+            # غیرِ Maximized نمی‌ذاشت).
+            user32.ShowWindow(hwnd, SW_SHOWMAXIMIZED if was_maximized else SW_RESTORE)
             user32.ShowWindow(hwnd, SW_SHOW)
             fg_ok = bool(user32.SetForegroundWindow(hwnd))
             user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)
