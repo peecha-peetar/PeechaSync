@@ -78,7 +78,13 @@ Write-Host ''
 
 foreach ($p in $profiles) {
     $taskName = "PeechaSync-AutoSync-$p"
-    $trValue = '"{0}" "{1}" --profile {2}' -f $pythonExe, $mainPath, $p
+    # پیچیدنِ اکشن تو یک powershell -WindowStyle Hidden — تا حتی اگه
+    # pythonw.exe رو پیدا نکرده باشیم (مثلاً توزیعِ embeddableِ پایتون که
+    # بعضی‌وقت‌ها pythonw.exe رو اصلاً نداره) و به python.exeِ کنسول‌دار
+    # برگشته باشیم، Task Scheduler هیچ‌وقت یه پنجره‌ی کنسولِ «python» رو
+    # هر ۱۵ دقیقه، برایِ هر پروفایل، رویِ صفحه‌ی کاربر فلَش نکنه.
+    $innerCmd = "& '$pythonExe' '$mainPath' --profile $p"
+    $trValue = "powershell.exe -WindowStyle Hidden -NoProfile -Command `"$innerCmd`""
 
     schtasks.exe /Create /F /SC MINUTE /MO $IntervalMinutes /TN $taskName /TR $trValue /RL LIMITED | Out-Null
     if ($LASTEXITCODE -eq 0) {

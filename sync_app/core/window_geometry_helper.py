@@ -95,6 +95,16 @@ def save_window_geometry(widget, config):
     return cfg
 
 
+# نسخه‌هایِ ۲.۳۰.۱۵۵ تا ۲.۳۰.۱۶۳ (باگِ مکانیزمش در ۲.۳۰.۱۶۳ رفع شد، ولی
+# دیتایِ ذخیره‌شده‌یِ قبلی همچنان خراب می‌مونه) هر بار موقعِ نمایشِ اولیه
+# Maximized رو خودکار پاک می‌کردن — یعنی APP_WINDOW_MAXIMIZED که هنگامِ
+# بستنِ برنامه ذخیره می‌شه، برایِ کاربرهایِ همون بازه همیشه False ذخیره
+# شده، صرف‌نظر از اینکه واقعاً چی می‌خواستن. این کلید فقط یک‌بار (بعدِ این
+# نسخه) به‌جایِ اعتمادِ کورکورانه به آن مقدار، Maximized رو فرض می‌کنه؛
+# بعدش دیگه دست‌نمی‌زنه — انتخابِ واقعیِ کاربر از این به بعد کاملاً محترمه.
+_MAXIMIZE_HEAL_KEY = "APP_WINDOW_MAX_HEAL_164"
+
+
 def apply_window_geometry(widget, config):
     """ geometry از config؛ خارج صفحه بود وسط """
     cfg = config or {}
@@ -113,6 +123,17 @@ def apply_window_geometry(widget, config):
         return
 
     maximized = bool(cfg.get("APP_WINDOW_MAXIMIZED"))
+
+    if not maximized and not cfg.get(_MAXIMIZE_HEAL_KEY):
+        maximized = True
+        try:
+            from sync_app.core.secure_config_loader import save_secure_config
+
+            healed_cfg = dict(cfg)
+            healed_cfg[_MAXIMIZE_HEAL_KEY] = True
+            save_secure_config(healed_cfg)
+        except Exception:
+            pass
 
     if is_geometry_usable(x, y, w, h):
         x, y, w, h = clamp_geometry(x, y, w, h)
