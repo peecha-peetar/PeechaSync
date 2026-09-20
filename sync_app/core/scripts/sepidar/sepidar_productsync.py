@@ -304,6 +304,31 @@ def fetch_sepidar_products_for_sync(config: dict | None = None, selected_group_i
     return rows
 
 
+def fetch_sepidar_item_images(config: dict | None = None, item_ids=None) -> dict:
+    """{item_id: [(item_image_id, blob, "")]} — پیش‌واکشیِ تصاویرِ POS.ItemImage
+    برایِ پوشِ واقعیِ تصویر حینِ سینک (نه فقط نمایش/آپلودِ دستیِ تبِ
+    محصولات که fetch_sepidar_products_for_sync پوششش می‌ده) — هم‌الگویِ
+    پیش‌واکشیِ HLOpictures در sync_fullproduct.py. item_ids: اگه داده
+    بشه، فقط تصاویرِ همون کالاها واکشی می‌شن."""
+    conn = get_sepidar_connection(config or {})
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT ItemRef, ItemImageID, Image FROM POS.ItemImage ORDER BY ItemRef, ItemImageID")
+        rows = cursor.fetchall()
+    finally:
+        conn.close()
+
+    out: dict[int, list[tuple]] = {}
+    for r in rows:
+        if r[0] is None or r[1] is None or not r[2]:
+            continue
+        item_id = int(r[0])
+        if item_ids is not None and item_id not in item_ids:
+            continue
+        out.setdefault(item_id, []).append((int(r[1]), bytes(r[2]), ""))
+    return out
+
+
 def _resolve_existing_sepidar_product_id(wcapi, sku: str, product_map: dict):
     """معادلِ محلیِ resolve_existing_product_id دژاوو — عمداً reuse نشده،
     چون اون تابع داخلش چندجا save_product_woo_map (فایلِ دژاوو) رو هاردکد
@@ -421,7 +446,7 @@ def sync_products_from_erp(config: dict | None = None) -> dict:
     "total"} — سازگار با tab_products.py’s _products_sync_done بدونِ
     تغییر. بدونِ ThreadPoolExecutor/کشِ hashِ دژاوو (سادگیِ فازِ ۲؛
     می‌تونه فازِ بعدی بهینه بشه)."""
-    from sync_app.core.integrations.commerce_provider import build_store_api
+    from sync_app.core.integrations.commerce_provider import build_store_api, is_prestashop
     from sync_app.core.scripts.sepidar.sepidar_categorysync import (
         fetch_sepidar_item_groups,
         _reconcile_sepidar_category_map,
@@ -445,9 +470,17 @@ def sync_products_from_erp(config: dict | None = None) -> dict:
     product_map = load_sepidar_map(_MAP_FILE)
     wcapi = build_store_api(config)
     disabled = set(config.get("DISABLED_PRODUCT_SKUS") or [])
+    ps_mode = is_prestashop(config)
+
+    item_ids_in_scope = {it["_item_id"] for it in items if it.get("_item_id") is not None}
+    images_by_item = fetch_sepidar_item_images(config, item_ids=item_ids_in_scope) if item_ids_in_scope else {}
 
     from sync_app.core.article_price import apply_price_markup
     from sync_app.core.stock_mode import resolve_stock_mode, apply_stock_mode_to_payload
+    from sync_app.core.scripts.sync_fullproduct import (
+        _sync_product_images_if_needed,
+        _sync_product_images_if_needed_ps,
+    )
 
     ok = 0
     failed_skus: list[str] = []
@@ -484,6 +517,14 @@ def sync_products_from_erp(config: dict | None = None) -> dict:
                     raise RuntimeError(f"ایجادِ محصول ناموفق: {data}")
 
             product_map[sku] = int(new_id)
+
+            erp_images = images_by_item.get(item.get("_item_id")) or []
+            if erp_images:
+                if ps_mode:
+                    _sync_product_images_if_needed_ps(config, sku, new_id, erp_images)
+                else:
+                    _sync_product_images_if_needed(wcapi, sku, new_id, {}, erp_images, config)
+
             ok += 1
         except Exception as exc:
             log.error(f"❌ خطا در سینکِ محصولِ '{sku}': {exc}")
