@@ -385,11 +385,12 @@ def build_sepidar_products_sync_preview(config: dict | None = None) -> list:
     groups_by_id = {str(g["id"]): g for g in groups}
     erp_to_wc_category = _reconcile_sepidar_category_map(config)
     product_map = load_sepidar_map(_MAP_FILE)
+    disabled = set(config.get("DISABLED_PRODUCT_SKUS") or [])
 
     previews = []
     for item in items:
         sku = item["sku"]
-        if not sku:
+        if not sku or sku in disabled:
             continue
         wc_id = int(product_map.get(sku) or 0) or None
         wc_cat_id = _resolve_sepidar_product_category(item.get("_item_group_id"), groups_by_id, erp_to_wc_category)
@@ -443,6 +444,7 @@ def sync_products_from_erp(config: dict | None = None) -> dict:
     erp_to_wc_category = _reconcile_sepidar_category_map(config)
     product_map = load_sepidar_map(_MAP_FILE)
     wcapi = build_store_api(config)
+    disabled = set(config.get("DISABLED_PRODUCT_SKUS") or [])
 
     from sync_app.core.article_price import apply_price_markup
     from sync_app.core.stock_mode import resolve_stock_mode, apply_stock_mode_to_payload
@@ -452,7 +454,7 @@ def sync_products_from_erp(config: dict | None = None) -> dict:
 
     for item in items:
         sku = item["sku"]
-        if not sku:
+        if not sku or sku in disabled:
             continue
         try:
             existing_id, product_map = _resolve_existing_sepidar_product_id(wcapi, sku, product_map)
@@ -488,8 +490,9 @@ def sync_products_from_erp(config: dict | None = None) -> dict:
             failed_skus.append(sku)
 
     save_sepidar_map(_MAP_FILE, product_map)
-    log.info(f"✅ محصولِ سپیدار (ERP→سایت): {ok} از {len(items)} سینک شد.")
-    return {"ok": ok, "failed": len(failed_skus), "failed_skus": failed_skus, "total": len(items)}
+    attempted_total = sum(1 for it in items if it.get("sku") and it["sku"] not in disabled)
+    log.info(f"✅ محصولِ سپیدار (ERP→سایت): {ok} از {attempted_total} سینک شد.")
+    return {"ok": ok, "failed": len(failed_skus), "failed_skus": failed_skus, "total": attempted_total}
 
 
 def main(config: dict | None = None) -> dict:
