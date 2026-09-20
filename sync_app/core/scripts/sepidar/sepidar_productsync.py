@@ -242,7 +242,7 @@ def fetch_sepidar_products_for_sync(config: dict | None = None, selected_group_i
         cursor = conn.cursor()
         price_cols_sql = ", ".join(f"sp.{c}" for c in _SEPIDAR_PRICE_COLUMNS)
         cursor.execute(
-            f"SELECT i.ItemID, i.Code, i.Title, {price_cols_sql} "
+            f"SELECT i.ItemID, i.Code, i.Title, i.Description, {price_cols_sql} "
             "FROM POS.Item i LEFT JOIN POS.ItemSalePrice sp ON sp.ItemRef = i.ItemID"
         )
         item_rows = cursor.fetchall()
@@ -284,12 +284,13 @@ def fetch_sepidar_products_for_sync(config: dict | None = None, selected_group_i
         erp_images = [(blob, "") for blob in images_by_item.get(item_id, [])]
         first_blob = erp_images[0][0] if erp_images else b""
         price_columns = {
-            col: (float(r[3 + i]) if r[3 + i] is not None else 0.0)
+            col: (float(r[4 + i]) if r[4 + i] is not None else 0.0)
             for i, col in enumerate(_SEPIDAR_PRICE_COLUMNS)
         }
         rows.append({
             "sku": str(r[1] or "").strip(),
             "name": str(r[2] or "").strip(),
+            "description": str(r[3] or "").strip(),
             "price": price_columns["DefaultPrice"],
             "_price_columns": price_columns,
             "stock": stock_by_item.get(item_id, 0),
@@ -515,6 +516,9 @@ def sync_products_from_erp(config: dict | None = None) -> dict:
                 "regular_price": str(int(site_price)) if site_price else "0",
                 "status": "publish",
             }
+            description = str(item.get("description") or "").strip()
+            if description:
+                payload["description"] = description
             stock_mode = resolve_stock_mode(sku, group_code, config)
             apply_stock_mode_to_payload(payload, stock_mode, int(item["stock"]))
             if wc_cat_id:
