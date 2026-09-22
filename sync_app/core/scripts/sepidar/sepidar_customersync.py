@@ -211,9 +211,13 @@ def sync_customers(config: dict | None = None) -> dict:
         cursor = conn.cursor()
         for c in customers:
             billing = dict(c.get("billing") or {})
-            billing.setdefault("first_name", c.get("first_name") or "")
-            billing.setdefault("last_name", c.get("last_name") or "")
-            billing.setdefault("email", c.get("email") or "")
+            # billing.email/first_name/last_name همیشه کلیدشون هست ولی اغلب
+            # رشته‌یِ خالی (نه missing) — setdefault روشون کار نمی‌کرد، پس
+            # همیشه key نهایی خالی می‌موند و resolve_party_ref هیچ‌کدوم رو
+            # پیدا نمی‌کرد (نتیجه: «۰ مورد بررسی/ساخته شد»).
+            billing["first_name"] = c.get("first_name") or billing.get("first_name") or ""
+            billing["last_name"] = c.get("last_name") or billing.get("last_name") or ""
+            billing["email"] = c.get("email") or billing.get("email") or ""
             party_ref = resolve_party_ref(billing, config, cursor)
             if party_ref:
                 created += 1

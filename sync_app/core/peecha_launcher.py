@@ -3505,6 +3505,13 @@ class _LoadingSplash(QWidget):
 
 
 def _present_startup_window(window, label: str) -> None:
+    # باید همین اول، قبل از هر move()ای، خونده بشه — چون move() رویِ یه
+    # پنجره‌یِ Maximized خودِ Qt رو مجبور می‌کنه فلگِ Maximized رو پاک کنه
+    # (نمی‌شه هم Maximized بود هم به یه مختصاتِ دلخواه منتقل شد). قبلاً این
+    # مقدار بعد از move() خونده می‌شد و همیشه False درمی‌اومد — دقیقاً باگِ
+    # «برنامه تمام‌صفحه باز نمی‌شه».
+    was_maximized = bool(window.windowState() & Qt.WindowMaximized)
+
     app = QApplication.instance()
     splash = getattr(app, "_peecha_splash", None) if app is not None else None
     if splash is not None:
@@ -3517,7 +3524,10 @@ def _present_startup_window(window, label: str) -> None:
                 pass
         app._peecha_splash = None
 
-    if app is not None and app.primaryScreen() is not None:
+    # وسط‌چین‌کردن فقط برایِ پنجره‌یِ غیرِ Maximized معنا داره — رویِ پنجره‌یِ
+    # Maximized هم بی‌اثره (کلِ صفحه رو پر کرده) و هم (طبقِ بالا) خودش باعثِ
+    # از دست رفتنِ Maximized می‌شد.
+    if not was_maximized and app is not None and app.primaryScreen() is not None:
         geo = app.primaryScreen().availableGeometry()
         frame = window.frameGeometry()
         frame.moveCenter(geo.center())
@@ -3545,8 +3555,19 @@ def _present_startup_window(window, label: str) -> None:
     # حتی تویِ Alt+Tab). showNormal() این حالتِ به‌ارث‌رسیده رو صریحاً پاک
     # می‌کنه — برخلافِ تغییرِ windowFlags، فقط windowState رو عوض می‌کنه و
     # نیازی به بازساختِ handleِ نیتیو نداره، پس با نکته‌ی بالا تداخلی نداره.
+    # showNormal() هم Minimized رو پاک می‌کنه هم Maximized رو — یعنی برایِ
+    # فرمِ اصلی (که apply_window_geometry قبل از این تابع، طبقِ تنظیماتِ
+    # ذخیره‌شده یا اولین‌اجرا، showMaximized() صداش زده بود)، این خط دوباره
+    # پنجره رو به حالتِ عادی/کوچیک برمی‌گردوند — دقیقاً باگِ گزارش‌شده‌یِ
+    # «برنامه تمام‌صفحه باز نمی‌شه». پس فقط اگه از قبل Maximized نبوده،
+    # showNormal() صدا زده می‌شه؛ وگرنه با showMaximized() همون حالت حفظ
+    # می‌شه (Minimized بازم پاک می‌مونه، چون خودِ Maximized/Minimized دوتا
+    # فلگِ متفاوتن).
     window.setWindowState(window.windowState() & ~Qt.WindowMinimized)
-    window.showNormal()
+    if was_maximized:
+        window.showMaximized()
+    else:
+        window.showNormal()
     window.raise_()
     window.activateWindow()
     if app is not None:
@@ -3570,10 +3591,17 @@ def _present_startup_window(window, label: str) -> None:
 
             hwnd = int(window.winId())
             user32 = ctypes.windll.user32
-            SW_SHOW, SW_RESTORE = 5, 9
+            SW_SHOW, SW_RESTORE, SW_SHOWMAXIMIZED = 5, 9, 3
             HWND_TOPMOST, HWND_NOTOPMOST = -1, -2
             SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW = 0x0002, 0x0001, 0x0040
-            user32.ShowWindow(hwnd, SW_RESTORE)
+            # SW_RESTORE رویِ یه پنجره‌یِ Maximized صریحاً می‌گه «به اندازه/موقعیتِ
+            # عادی برگرد» — یعنی همین‌جا، درست بعدِ اینکه Qt’s showMaximized()
+            # (چند خط بالاتر) پنجره رو درست Maximized نشون داده بود، این تماس
+            # بی‌قیدوشرط دوباره کوچیکش می‌کرد (باگِ «اول تمام‌صفحه باز می‌شه،
+            # بعد خودش جمع می‌شه» — چون این بلوک صرفاً برایِ رفعِ نامرئی‌موندنِ
+            # فرمِ لاگین/لایسنس اضافه شده بود و فرقی بینِ فرمِ Maximized و
+            # غیرِ Maximized نمی‌ذاشت).
+            user32.ShowWindow(hwnd, SW_SHOWMAXIMIZED if was_maximized else SW_RESTORE)
             user32.ShowWindow(hwnd, SW_SHOW)
             fg_ok = bool(user32.SetForegroundWindow(hwnd))
             user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)

@@ -242,7 +242,7 @@ def fetch_sepidar_products_for_sync(config: dict | None = None, selected_group_i
         cursor = conn.cursor()
         price_cols_sql = ", ".join(f"sp.{c}" for c in _SEPIDAR_PRICE_COLUMNS)
         cursor.execute(
-            f"SELECT i.ItemID, i.Code, i.Title, {price_cols_sql} "
+            f"SELECT i.ItemID, i.Code, i.Title, i.Description, {price_cols_sql} "
             "FROM POS.Item i LEFT JOIN POS.ItemSalePrice sp ON sp.ItemRef = i.ItemID"
         )
         item_rows = cursor.fetchall()
@@ -284,12 +284,13 @@ def fetch_sepidar_products_for_sync(config: dict | None = None, selected_group_i
         erp_images = [(blob, "") for blob in images_by_item.get(item_id, [])]
         first_blob = erp_images[0][0] if erp_images else b""
         price_columns = {
-            col: (float(r[3 + i]) if r[3 + i] is not None else 0.0)
+            col: (float(r[4 + i]) if r[4 + i] is not None else 0.0)
             for i, col in enumerate(_SEPIDAR_PRICE_COLUMNS)
         }
         rows.append({
             "sku": str(r[1] or "").strip(),
             "name": str(r[2] or "").strip(),
+            "description": str(r[3] or "").strip(),
             "price": price_columns["DefaultPrice"],
             "_price_columns": price_columns,
             "stock": stock_by_item.get(item_id, 0),
@@ -302,6 +303,31 @@ def fetch_sepidar_products_for_sync(config: dict | None = None, selected_group_i
             "_item_group_id": item_group_id,
         })
     return rows
+
+
+def fetch_sepidar_item_images(config: dict | None = None, item_ids=None) -> dict:
+    """{item_id: [(item_image_id, blob, "")]} — پیش‌واکشیِ تصاویرِ POS.ItemImage
+    برایِ پوشِ واقعیِ تصویر حینِ سینک (نه فقط نمایش/آپلودِ دستیِ تبِ
+    محصولات که fetch_sepidar_products_for_sync پوششش می‌ده) — هم‌الگویِ
+    پیش‌واکشیِ HLOpictures در sync_fullproduct.py. item_ids: اگه داده
+    بشه، فقط تصاویرِ همون کالاها واکشی می‌شن."""
+    conn = get_sepidar_connection(config or {})
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT ItemRef, ItemImageID, Image FROM POS.ItemImage ORDER BY ItemRef, ItemImageID")
+        rows = cursor.fetchall()
+    finally:
+        conn.close()
+
+    out: dict[int, list[tuple]] = {}
+    for r in rows:
+        if r[0] is None or r[1] is None or not r[2]:
+            continue
+        item_id = int(r[0])
+        if item_ids is not None and item_id not in item_ids:
+            continue
+        out.setdefault(item_id, []).append((int(r[1]), bytes(r[2]), ""))
+    return out
 
 
 def _resolve_existing_sepidar_product_id(wcapi, sku: str, product_map: dict):
@@ -365,6 +391,7 @@ def _resolve_sepidar_product_category(item_group_id, groups_by_id: dict, erp_to_
 def build_sepidar_products_sync_preview(config: dict | None = None) -> list:
     """معادلِ build_products_sync_previewِ دژاوو (product_sync_guard.py) —
     قبل از ارسالِ واقعی، به کاربر نشون می‌ده چی قراره سینک بشه."""
+    from sync_app.core.currency_helper import erp_price_divisor
     from sync_app.core.product_sync_guard import ProductSyncPreviewRow
     from sync_app.core.scripts.sepidar.sepidar_categorysync import (
         fetch_sepidar_item_groups,
@@ -372,6 +399,7 @@ def build_sepidar_products_sync_preview(config: dict | None = None) -> list:
     )
 
     config = config or {}
+    price_div = erp_price_divisor(config)
     selected = [str(g).strip() for g in config.get("SEPIDAR_SELECTED_GROUPS", []) if str(g).strip()]
     if not selected:
         return []
@@ -385,16 +413,21 @@ def build_sepidar_products_sync_preview(config: dict | None = None) -> list:
     groups_by_id = {str(g["id"]): g for g in groups}
     erp_to_wc_category = _reconcile_sepidar_category_map(config)
     product_map = load_sepidar_map(_MAP_FILE)
+    disabled = set(config.get("DISABLED_PRODUCT_SKUS") or [])
 
     previews = []
     for item in items:
         sku = item["sku"]
-        if not sku:
+        if not sku or sku in disabled:
             continue
         wc_id = int(product_map.get(sku) or 0) or None
         wc_cat_id = _resolve_sepidar_product_category(item.get("_item_group_id"), groups_by_id, erp_to_wc_category)
         group_code = str(item.get("_item_group_id") or "")
         price = _resolve_sepidar_item_price(item, group_code, config)
+        # مثلِ build_products_sync_previewِ دژاوو: قیمتِ نمایشی به واحدِ
+        # سایته (تومان/ریال)، نه ریالِ خامِ ERP — وگرنه پیش‌نمایش ۱۰برابرِ
+        # چیزی که واقعاً ارسال می‌شه نشون می‌داد.
+        site_price = price / price_div if price > 0 else 0
         notes = []
         if not wc_id:
             notes.append("هنوز در نگاشتِ سپیدار ثبت نشده — ممکن است با SKU در سایت پیدا شود یا محصول جدید ساخته شود")
@@ -402,7 +435,7 @@ def build_sepidar_products_sync_preview(config: dict | None = None) -> list:
             ProductSyncPreviewRow(
                 erp_sku=sku,
                 erp_name=item["name"] or sku,
-                price=str(int(price)) if price else "0",
+                price=str(int(site_price)) if site_price else "0",
                 stock=item["stock"],
                 category_label=str(wc_cat_id) if wc_cat_id else "—",
                 wc_id=wc_id,
@@ -420,7 +453,7 @@ def sync_products_from_erp(config: dict | None = None) -> dict:
     "total"} — سازگار با tab_products.py’s _products_sync_done بدونِ
     تغییر. بدونِ ThreadPoolExecutor/کشِ hashِ دژاوو (سادگیِ فازِ ۲؛
     می‌تونه فازِ بعدی بهینه بشه)."""
-    from sync_app.core.integrations.commerce_provider import build_store_api
+    from sync_app.core.integrations.commerce_provider import build_store_api, is_prestashop
     from sync_app.core.scripts.sepidar.sepidar_categorysync import (
         fetch_sepidar_item_groups,
         _reconcile_sepidar_category_map,
@@ -443,16 +476,28 @@ def sync_products_from_erp(config: dict | None = None) -> dict:
     erp_to_wc_category = _reconcile_sepidar_category_map(config)
     product_map = load_sepidar_map(_MAP_FILE)
     wcapi = build_store_api(config)
+    disabled = set(config.get("DISABLED_PRODUCT_SKUS") or [])
+    ps_mode = is_prestashop(config)
+
+    item_ids_in_scope = {it["_item_id"] for it in items if it.get("_item_id") is not None}
+    images_by_item = fetch_sepidar_item_images(config, item_ids=item_ids_in_scope) if item_ids_in_scope else {}
 
     from sync_app.core.article_price import apply_price_markup
+    from sync_app.core.currency_helper import erp_price_divisor
     from sync_app.core.stock_mode import resolve_stock_mode, apply_stock_mode_to_payload
+
+    price_div = erp_price_divisor(config)
+    from sync_app.core.scripts.sync_fullproduct import (
+        _sync_product_images_if_needed,
+        _sync_product_images_if_needed_ps,
+    )
 
     ok = 0
     failed_skus: list[str] = []
 
     for item in items:
         sku = item["sku"]
-        if not sku:
+        if not sku or sku in disabled:
             continue
         try:
             existing_id, product_map = _resolve_existing_sepidar_product_id(wcapi, sku, product_map)
@@ -460,12 +505,20 @@ def sync_products_from_erp(config: dict | None = None) -> dict:
             group_code = str(item.get("_item_group_id") or "")
             raw_price = _resolve_sepidar_item_price(item, group_code, config)
             price = apply_price_markup(raw_price, config, is_sale=False, sku=sku)
+            # قیمتِ POS.Item همیشه به ریاله (مثلِ Article دژاوو) — باید مثلِ
+            # sync_fullproduct.py قبل از ارسال به سایت به واحدِ سایت
+            # (تومان/ریال طبقِ WC_CURRENCY_IS_TOMAN) تبدیل بشه، وگرنه رویِ
+            # سایتِ تومانی ۱۰برابرِ واقعی ثبت می‌شه.
+            site_price = price / price_div if price > 0 else 0
             payload = {
                 "name": item["name"] or sku,
                 "sku": sku,
-                "regular_price": str(int(price)) if price else "0",
+                "regular_price": str(int(site_price)) if site_price else "0",
                 "status": "publish",
             }
+            description = str(item.get("description") or "").strip()
+            if description:
+                payload["description"] = description
             stock_mode = resolve_stock_mode(sku, group_code, config)
             apply_stock_mode_to_payload(payload, stock_mode, int(item["stock"]))
             if wc_cat_id:
@@ -482,14 +535,23 @@ def sync_products_from_erp(config: dict | None = None) -> dict:
                     raise RuntimeError(f"ایجادِ محصول ناموفق: {data}")
 
             product_map[sku] = int(new_id)
+
+            erp_images = images_by_item.get(item.get("_item_id")) or []
+            if erp_images:
+                if ps_mode:
+                    _sync_product_images_if_needed_ps(config, sku, new_id, erp_images)
+                else:
+                    _sync_product_images_if_needed(wcapi, sku, new_id, {}, erp_images, config)
+
             ok += 1
         except Exception as exc:
             log.error(f"❌ خطا در سینکِ محصولِ '{sku}': {exc}")
             failed_skus.append(sku)
 
     save_sepidar_map(_MAP_FILE, product_map)
-    log.info(f"✅ محصولِ سپیدار (ERP→سایت): {ok} از {len(items)} سینک شد.")
-    return {"ok": ok, "failed": len(failed_skus), "failed_skus": failed_skus, "total": len(items)}
+    attempted_total = sum(1 for it in items if it.get("sku") and it["sku"] not in disabled)
+    log.info(f"✅ محصولِ سپیدار (ERP→سایت): {ok} از {attempted_total} سینک شد.")
+    return {"ok": ok, "failed": len(failed_skus), "failed_skus": failed_skus, "total": attempted_total}
 
 
 def main(config: dict | None = None) -> dict:
