@@ -87,37 +87,51 @@ def _name_match_ratio(a_text: str, b_text: str) -> float:
 
 
 def _suggest_matches(site_items, erp_items, *, min_name_ratio: float = _MIN_NAME_MATCH_RATIO):
-    """site_items/erp_items: [(key, sku, display_text), ...] — کلید هرچی
-    باشه (فقط باید یکتا و hashable باشه). هر طرف حداکثر یک‌بار استفاده
-    می‌شه (اولین/بهترین تطبیق برنده‌ست). اولویت: کدِ کاملاً یکسان → شباهتِ
-    زیررشته‌ایِ کد (حداقل ۴ کاراکتر) → شباهتِ متنیِ نام (SequenceMatcher) →
-    (فقط اگه هیچ‌کدومِ بالا جواب نداد) کدِ مشابه با نادیده‌گرفتنِ حرف/
-    خط‌تیره/صفرِ اضافه — مثلِ «S3001»/«003001»/«-3001» در برابرِ «3001».
-    خروجی: [(site_key, erp_key, erp_sku, reason), ...]"""
+    """site_items: [(key, sku, display_text), ...]. erp_items: همون شکل،
+    ولی یک عنصرِ چهارمِ اختیاری هم می‌تونه داشته باشه — «کدِ دستی» (مثلِ
+    A_Code_C دژاوو) — یک کدِ جایگزین که ممکنه SKUِ سایت باهاش یکی باشه،
+    نه با کدِ اصلی. کلید هرچی باشه (فقط باید یکتا و hashable باشه). هر
+    طرف حداکثر یک‌بار استفاده می‌شه (اولین/بهترین تطبیق برنده‌ست). اولویت:
+    کدِ کاملاً یکسان (اصلی یا دستی) → شباهتِ زیررشته‌ایِ کد (حداقل ۴
+    کاراکتر، اصلی یا دستی) → شباهتِ متنیِ نام (SequenceMatcher) → (فقط اگه
+    هیچ‌کدومِ بالا جواب نداد) کدِ مشابه با نادیده‌گرفتنِ حرف/خط‌تیره/صفرِ
+    اضافه — مثلِ «S3001»/«003001»/«-3001» در برابرِ «3001».
+    خروجی: [(site_key, erp_key, erp_sku, reason), ...] — erp_sku همیشه
+    کدِ اصلیه (نه کدِ دستی)، چون همون چیزیه که واقعاً برایِ تطبیق/اعمال
+    استفاده می‌شه."""
     from sync_app.core.reconciliation_service import _normalize_code_loose
 
     used_erp_keys = set()
 
+    def _erp_manual_code(item) -> str:
+        return str(item[3] if len(item) > 3 else "").strip().lower()
+
     def _pick_by_sku(site_sku_norm):
-        for erp_key, erp_sku, _erp_text in erp_items:
+        for item in erp_items:
+            erp_key, erp_sku = item[0], item[1]
             if erp_key in used_erp_keys:
                 continue
             erp_sku_norm = str(erp_sku or "").strip().lower()
             if erp_sku_norm and erp_sku_norm == site_sku_norm:
                 return erp_key, erp_sku, "کدِ یکسان"
+            manual_norm = _erp_manual_code(item)
+            if manual_norm and manual_norm == site_sku_norm:
+                return erp_key, erp_sku, "کدِ دستی یکسان"
         return None
 
     def _pick_by_sku_substring(site_sku_norm):
         if len(site_sku_norm) < 4:
             return None
-        for erp_key, erp_sku, _erp_text in erp_items:
+        for item in erp_items:
+            erp_key, erp_sku = item[0], item[1]
             if erp_key in used_erp_keys:
                 continue
             erp_sku_norm = str(erp_sku or "").strip().lower()
-            if not erp_sku_norm:
-                continue
-            if site_sku_norm in erp_sku_norm or erp_sku_norm in site_sku_norm:
+            if erp_sku_norm and (site_sku_norm in erp_sku_norm or erp_sku_norm in site_sku_norm):
                 return erp_key, erp_sku, "شباهتِ کد"
+            manual_norm = _erp_manual_code(item)
+            if manual_norm and (site_sku_norm in manual_norm or manual_norm in site_sku_norm):
+                return erp_key, erp_sku, "شباهتِ کدِ دستی"
         return None
 
     def _pick_by_name(site_text):
@@ -125,7 +139,8 @@ def _suggest_matches(site_items, erp_items, *, min_name_ratio: float = _MIN_NAME
             return None
         best_ratio = 0.0
         best = None
-        for erp_key, erp_sku, erp_text in erp_items:
+        for item in erp_items:
+            erp_key, erp_sku, erp_text = item[0], item[1], item[2]
             if erp_key in used_erp_keys:
                 continue
             ratio = _name_match_ratio(site_text, erp_text)
@@ -140,9 +155,13 @@ def _suggest_matches(site_items, erp_items, *, min_name_ratio: float = _MIN_NAME
         if not site_sku_loose:
             return None
         candidates = [
-            (erp_key, erp_sku)
-            for erp_key, erp_sku, _erp_text in erp_items
-            if erp_key not in used_erp_keys and _normalize_code_loose(erp_sku) == site_sku_loose
+            (item[0], item[1])
+            for item in erp_items
+            if item[0] not in used_erp_keys
+            and (
+                _normalize_code_loose(item[1]) == site_sku_loose
+                or (len(item) > 3 and item[3] and _normalize_code_loose(item[3]) == site_sku_loose)
+            )
         ]
         if len(candidates) != 1:
             return None
@@ -473,7 +492,7 @@ class _ErpSimpleSkuLoader(QThread):
                 # تشخیص بده و ممکنه کالایِ اشتباه رو تطبیق بده.
                 code_field = f"{code} (دستی: {manual_code})" if manual_code else code
                 label = " | ".join(["ساده", code_field, name, f"{price:,.0f}"])
-                out.append((code, label))
+                out.append((code, label, manual_code))
             self.done.emit(out, "")
         except Exception as exc:
             self.done.emit([], str(exc))
@@ -999,7 +1018,16 @@ class StructureReconciliationTab(QWidget):
         structural_count = 0
         reconciled_count = 0
         entries = []
-        for sku, label in options:
+        manual_codes: dict[str, str] = {}
+        for option in options:
+            sku, label = option[0], option[1]
+            # عنصرِ سومِ اختیاری (فقط دژاووعه — کدِ دستیِ A_Code_C): جدا از
+            # entries نگه‌داشته می‌شه (نه تویِ خودِ تاپل) چون
+            # _populate_list_with_matchesِ مشترک بینِ هر ۴ لیست، انتظارِ
+            # دقیقاً ۴ عضو در هر ردیف رو داره.
+            manual_code = str(option[2] if len(option) > 2 else "").strip()
+            if manual_code:
+                manual_codes[sku] = manual_code
             if get_site_variation_target(sku) is not None:
                 state = _MATCH_STRUCTURAL
                 tooltip = "قبلاً تطبیق داده شده"
@@ -1013,6 +1041,7 @@ class StructureReconciliationTab(QWidget):
                 tooltip = ""
             entries.append((label, sku, state, tooltip))
         self._sv_erp_entries = entries
+        self._sv_erp_manual_codes = manual_codes
         self._render_sv_erp_list()
         self.sv_status_label.setText(
             f"✅ {len(options)} کالایِ {self.erp_label} پیدا شد — {structural_count} تطبیقِ ساختاری، "
@@ -1167,13 +1196,17 @@ class StructureReconciliationTab(QWidget):
             if state == _MATCH_NONE
         ]
         erp_label_by_sku: dict[str, str] = {}
+        manual_codes = getattr(self, "_sv_erp_manual_codes", {})
         erp_items = []
         for label, sku, state, _tooltip in erp_entries:
             # فقط SKUهایِ واقعاً بی‌لینک — نه STRUCTURAL (قبلاً از همین ابزار
             # تطبیق شده) و نه RECONCILED (قبلاً از تطبیقِ عادی لینک شده).
             if state != _MATCH_NONE:
                 continue
-            erp_items.append((sku, sku, label))
+            # کدِ دستی (فقط دژاوو) رو هم به‌عنوانِ عنصرِ چهارم پاس می‌دیم — تا
+            # _suggest_matches بتونه SKUِ سایتی که با کدِ دستی (نه کدِ اصلی)
+            # یکیه رو هم خودکار تشخیص بده.
+            erp_items.append((sku, sku, label, manual_codes.get(sku, "")))
             erp_label_by_sku[sku] = label
 
         if not site_items or not erp_items:
