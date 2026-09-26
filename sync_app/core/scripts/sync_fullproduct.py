@@ -326,6 +326,110 @@ def _apply_site_variation_override(
     )
 
 
+def _sync_variation_image_if_needed(wcapi, sku, parent_id, variation_id, erp_images, raw_config):
+    """معادلِ _sync_product_images_if_needed برایِ یک SKUِ سادهٔ ERP که طبقِ
+    تطبیقِ ساختاری (تبِ «تطبیقِ ساختاری») به یک واریانتِ خاصِ سایت لینک شده —
+    نه یک محصولِ مستقل. عکسِ همین SKU باید فقط رویِ همون واریانتِ خاص بنشینه،
+    نه گالریِ والد (که بینِ همه‌یِ واریانت‌های خواهر/برادر مشترکه). واریانتِ
+    ووکامرس فقط یک فیلدِ تصویرِ تک‌مقداری داره — پس فقط اولین تصویر (بر
+    اساسِ کوچک‌ترینِ hlo_id، برایِ نتیجه‌یِ پایدار/تکرارپذیر) استفاده می‌شه."""
+    from sync_app.core.erp_image_helper import load_transferred_image_ids, mark_images_transferred
+
+    if not erp_images:
+        return
+
+    already_transferred = set(load_transferred_image_ids().get(str(sku).strip(), []))
+    new_erp_images = sorted(
+        (img for img in erp_images if img[0] not in already_transferred), key=lambda t: t[0],
+    )
+    if not new_erp_images:
+        return
+
+    hlo_id, blob, path = new_erp_images[0]
+    try:
+        from sync_app.core.erp_image_helper import stage_erp_images
+        from sync_app.core.smart_publish import apply_default_pipeline
+        from sync_app.core.wc_sync_helper import wp_upload_media_ex
+
+        rels = stage_erp_images(f"{sku}_hlo{hlo_id}", blob, path, raw_config)
+        if not rels:
+            return
+        abs_path = app_path_from_rel(rels[0])
+        if not os.path.isfile(abs_path):
+            return
+
+        site_url = str(raw_config.get("WC_URL") or "").strip().rstrip("/")
+        product_url = f"{site_url}/?p={int(parent_id)}" if site_url else ""
+        final_path = apply_default_pipeline(abs_path, raw_config, code=sku, product_url=product_url)
+
+        with open(final_path, "rb") as f:
+            img_data = f.read()
+        ok, media_id, _url, err = wp_upload_media_ex(
+            raw_config, img_data, os.path.basename(final_path), fallback_stem=sku, label=f"تصویر {sku}",
+        )
+        if not ok or not media_id:
+            log.warning(f"⚠️ آپلودِ تصویرِ واریانتِ سایت برایِ {sku} (hlo_id={hlo_id}) ناموفق: {err}")
+            return
+
+        resp = wcapi.put(f"products/{int(parent_id)}/variations/{int(variation_id)}", {"image": {"id": media_id}})
+        wc_parse_json(resp, f"اتصالِ تصویرِ واریانتِ سایت برایِ {sku}")
+        mark_images_transferred(sku, [hlo_id])
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+
+        log.info(
+            f"🖼️ [{sku}] عکسِ {erp_provider_label(raw_config)} طبقِ تطبیقِ ساختاری، فقط به‌عنوانِ عکسِ "
+            f"واریانتِ #{variation_id} از محصولِ #{parent_id} سایت ست شد (نه گالریِ والد)."
+        )
+    except Exception as exc:
+        log.warning(f"⚠️ انتقالِ تصویرِ واریانتِ سایت برایِ {sku} با خطا مواجه شد: {exc}")
+
+
+def _sync_variation_image_if_needed_ps(config, sku, parent_id, variation_id, erp_images):
+    """معادلِ پرستاشاپیِ _sync_variation_image_if_needed — از ps_set_combination_image
+    (که این ترکیب رو مستقیم به یک تصویرِ گالری وصل می‌کنه) استفاده می‌کنه تا
+    عکس فقط رویِ همون ترکیبِ خاص بنشینه، نه رویِ کلِ محصولِ والد."""
+    from sync_app.core.erp_image_helper import load_transferred_image_ids, mark_images_transferred, stage_erp_images
+    from sync_app.core.ps_variation_helper import ps_set_combination_image
+
+    if not erp_images:
+        return
+
+    already_transferred = set(load_transferred_image_ids("prestashop").get(str(sku).strip(), []))
+    new_erp_images = sorted(
+        (img for img in erp_images if img[0] not in already_transferred), key=lambda t: t[0],
+    )
+    if not new_erp_images:
+        return
+
+    hlo_id, blob, path = new_erp_images[0]
+    try:
+        from sync_app.core.smart_publish import apply_default_pipeline
+
+        rels = stage_erp_images(f"{sku}_hlo{hlo_id}", blob, path, config)
+        if not rels:
+            return
+        abs_path = app_path_from_rel(rels[0])
+        if not os.path.isfile(abs_path):
+            return
+
+        site_url = str(config.get("PS_URL") or "").strip().rstrip("/")
+        product_url = f"{site_url}/index.php?id_product={int(parent_id)}&controller=product" if site_url else ""
+        final_path = apply_default_pipeline(abs_path, config, code=sku, product_url=product_url)
+
+        with open(final_path, "rb") as f:
+            img_data = f.read()
+        ps_set_combination_image(config, int(parent_id), int(variation_id), img_data, os.path.basename(final_path))
+        mark_images_transferred(sku, [hlo_id], "prestashop")
+        from sync_app.core.integrations.erp_provider import erp_provider_label
+
+        log.info(
+            f"🖼️ [{sku}] عکسِ {erp_provider_label(config)} طبقِ تطبیقِ ساختاری، فقط به‌عنوانِ عکسِ "
+            f"ترکیبِ #{variation_id} از محصولِ #{parent_id} سایت ست شد (نه گالریِ والد)."
+        )
+    except Exception as exc:
+        log.warning(f"⚠️ انتقالِ تصویرِ ترکیبِ سایت برایِ {sku} با خطا مواجه شد: {exc}")
+
+
 def _sync_product_images_if_needed(wcapi, sku, saved_pid, upsert_data, erp_images, raw_config):
     """
     erp_images: لیستی از (hlo_id, blob, path) — hlo_id شناسه‌ی یکتای همون
@@ -906,6 +1010,16 @@ def main():
                     wcapi, raw_config, sku, matched_group, site_variation_target,
                     raw_price, raw_sale, stock_quantity, price_div,
                 )
+                parent_id = site_variation_target["parent_product_id"]
+                variation_id = site_variation_target["variation_id"]
+                if ps_mode:
+                    _sync_variation_image_if_needed_ps(
+                        raw_config, sku, parent_id, variation_id, erp_images_by_sku.get(sku, []),
+                    )
+                else:
+                    _sync_variation_image_if_needed(
+                        wcapi, sku, parent_id, variation_id, erp_images_by_sku.get(sku, []), raw_config,
+                    )
                 with stats_lock:
                     stats["ok"] += 1
             except Exception as e:
@@ -918,6 +1032,11 @@ def main():
 
         has_variants = _has_variations(conn, sku, variable_codes)
         stock_quantity = combined_stock_for_primary(sku, int(row[7] or 0), raw_config, _stock_lookup)
+        # منبعِ تصویر — طبقِ پیش‌فرض همون کدِ خودِ محصوله، ولی اگه طبقِ
+        # override زیرِ این، یک زیرواریانتِ مشخص به‌عنوانِ نمایندهٔ محصولِ
+        # سادهٔ سایت انتخاب بشه، عکسِ همون زیرواریانتِ خاص (نه عکسِ خودِ
+        # کدِ متغیرِ والد) باید عکسِ اصلیِ محصولِ سادهٔ سایت بشه.
+        image_source_sku = sku
 
         if has_variants:
             from sync_app.core.structure_mismatch_override import get_force_simple_source
@@ -945,6 +1064,7 @@ def main():
                     )
                     if chosen:
                         has_variants = False
+                        image_source_sku = forced_source_sku
                         raw_price = float(chosen.get("regular_price") or 0) or raw_price
                         price = str(int(raw_price / price_div)) if raw_price > 0 else "0"
                         chosen_sale = chosen.get("sale_price")
@@ -1077,7 +1197,7 @@ def main():
         # آپلود ناموفق بود، همچنان «تغییریافته» حساب بشه و دوباره تلاش بشه.
         already_transferred_ids = set(_transferred_images_map.get(str(sku).strip(), []))
         image_ids = sorted(
-            hlo_id for hlo_id, _, _ in erp_images_by_sku.get(sku, [])
+            hlo_id for hlo_id, _, _ in erp_images_by_sku.get(image_source_sku, [])
             if hlo_id not in already_transferred_ids
         )
         hash_payload = {
@@ -1157,11 +1277,11 @@ def main():
 
             if ps_mode:
                 _sync_product_images_if_needed_ps(
-                    raw_config, sku, saved_pid, erp_images_by_sku.get(sku, [])
+                    raw_config, sku, saved_pid, erp_images_by_sku.get(image_source_sku, [])
                 )
             else:
                 _sync_product_images_if_needed(
-                    wcapi, sku, saved_pid, upsert_data, erp_images_by_sku.get(sku, []), raw_config
+                    wcapi, sku, saved_pid, upsert_data, erp_images_by_sku.get(image_source_sku, []), raw_config
                 )
 
             kind = "متغیر" if has_variants else "ساده"
