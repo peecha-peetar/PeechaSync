@@ -428,7 +428,8 @@ class CustomerTab(SitePreviewLoaderMixin, SyncTab):
                     or (phone_norm and phone_norm in linked_keys)
                 )
                 link_badge = "🔗 " if is_linked else ""
-                display = f"{link_badge}{name}{guest_tag} | کد: #{cid} | ایمیل: {email}"
+                phone_display = phone or "—"
+                display = f"{link_badge}{name}{guest_tag} | کد: #{cid} | موبایل: {phone_display} | ایمیل: {email}"
                 items.append(display)
                 date_created = customer.get("date_created") or ""
                 records.append({

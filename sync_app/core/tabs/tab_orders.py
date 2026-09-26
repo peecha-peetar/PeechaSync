@@ -532,6 +532,29 @@ class OrderTab(SitePreviewLoaderMixin, SyncTab):
                 return {"kind": "message", "items": ["ℹ️ سفارشی روی سایت یافت نشد."], "ids": []}
 
             synced_ids = _load_synced_order_ids(cfg)
+            # وقتی سفارش مهمان/دستی بدونِ پرکردنِ فرمِ صورتحساب ثبت شده،
+            # billing.first_name/last_name خالیه — ولی اگه به یک حسابِ
+            # مشتریِ ثبت‌نام‌شده (customer_id) وصله، اسمِ همون حساب رو
+            # به‌عنوانِ fallback می‌گیریم (با کشِ محلی، چون چند سفارش از
+            # یک مشتریِ تکراری معمولاً پیش می‌آد).
+            customer_name_cache: dict[int, str] = {}
+
+            def _wc_customer_name(customer_id: int) -> str:
+                if customer_id not in customer_name_cache:
+                    resolved = ""
+                    try:
+                        resp = wc_rest_request(cfg, "GET", f"customers/{customer_id}", timeout=timeout)
+                        if int(getattr(resp, "status_code", 0) or 0) < 400:
+                            data = resp.json() or {}
+                            billing_c = data.get("billing") or {}
+                            first_c = str(data.get("first_name") or billing_c.get("first_name") or "").strip()
+                            last_c = str(data.get("last_name") or billing_c.get("last_name") or "").strip()
+                            resolved = f"{first_c} {last_c}".strip()
+                    except Exception:
+                        resolved = ""
+                    customer_name_cache[customer_id] = resolved
+                return customer_name_cache[customer_id]
+
             items = []
             ids = []
             for order in orders:
@@ -540,7 +563,12 @@ class OrderTab(SitePreviewLoaderMixin, SyncTab):
                 total = order.get("total", "0")
                 currency = order.get("currency", "")
                 billing = order.get("billing", {}) or {}
-                name = (f"{billing.get('first_name', '')} {billing.get('last_name', '')}").strip() or "مشتری"
+                name = (f"{billing.get('first_name', '')} {billing.get('last_name', '')}").strip()
+                if not name:
+                    customer_id = int(order.get("customer_id") or 0)
+                    if customer_id:
+                        name = _wc_customer_name(customer_id)
+                name = name or "مشتری"
                 try:
                     numeric_id = int(order_id)
                 except Exception:
