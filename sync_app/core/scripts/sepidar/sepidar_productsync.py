@@ -447,6 +447,58 @@ def build_sepidar_products_sync_preview(config: dict | None = None) -> list:
     return previews
 
 
+def _apply_sepidar_site_variation_override(
+    wcapi, config, sku, target, site_price, stock, stock_mode, *, ps_mode: bool,
+) -> None:
+    """این SKU در سپیدار یه کالایِ ساده‌ی مستقله، ولی طبقِ override دستیِ
+    کاربر (تبِ «تطبیقِ ساختاری») در واقع یه واریانتِ یه محصولِ متغیرِ سایته
+    — پس به‌جایِ ساختن/به‌روزرسانیِ یه محصولِ جدا، فقط قیمت/موجودیِ همون
+    واریانتِ شناخته‌شده رویِ سایت آپدیت می‌شه. عیناً هم‌الگویِ
+    _apply_site_variation_overrideِ دژاوو (sync_fullproduct.py) — قبلِ این
+    فیکس، sync_products_from_erp اصلاً این overrideِ رو چک نمی‌کرد و برایِ
+    این SKUها یه محصولِ مستقلِ جدا می‌ساخت/آپدیت می‌کرد."""
+    from sync_app.core.stock_mode import apply_stock_mode_to_payload
+    from sync_app.core.sync_utils import log
+
+    parent_id = int(target["parent_product_id"])
+    variation_id = int(target["variation_id"])
+    price_str = str(int(site_price)) if site_price else "0"
+
+    if ps_mode:
+        from sync_app.core.ps_sync_helper import ps_get_product, ps_set_stock_quantity
+        from sync_app.core.ps_variation_helper import ps_update_combination
+
+        parent = ps_get_product(config, parent_id)
+        if not parent:
+            log.error(f"❌ [{sku}] محصولِ والدِ سایت #{parent_id} (طبقِ override) پیدا نشد — به‌روزرسانی رد شد.")
+            return
+        try:
+            base_price = float(parent.get("regular_price") or 0)
+        except (TypeError, ValueError):
+            base_price = 0.0
+        price_impact = float(site_price or 0) - base_price
+        ps_update_combination(config, variation_id, price_impact=price_impact)
+
+        stock_payload = apply_stock_mode_to_payload({}, stock_mode, stock)
+        if stock_payload.get("manage_stock"):
+            qty = int(stock_payload.get("stock_quantity") or 0)
+            out_of_stock = 1 if qty <= 0 else 0
+        elif stock_payload.get("stock_status") == "instock":
+            qty, out_of_stock = 9999, 0
+        else:
+            qty, out_of_stock = 0, 1
+        ps_set_stock_quantity(config, parent_id, qty, product_attribute_id=variation_id, out_of_stock=out_of_stock)
+    else:
+        patch = {"regular_price": price_str}
+        apply_stock_mode_to_payload(patch, stock_mode, stock)
+        wcapi.put(f"products/{parent_id}/variations/{variation_id}", patch)
+
+    log.info(
+        f"🔀 [{sku}] بر اساسِ override دستی، به‌عنوانِ واریانتِ #{variation_id} از محصولِ #{parent_id} "
+        "سایت به‌روزرسانی شد (نه محصولِ مستقل)."
+    )
+
+
 def sync_products_from_erp(config: dict | None = None) -> dict:
     """POS.Item → محصولِ سایت. جهتِ درستِ ERP→سایت (مثلِ
     sync_fullproduct.mainِ دژاوو). خروجی: {"ok","failed","failed_skus",
@@ -492,6 +544,8 @@ def sync_products_from_erp(config: dict | None = None) -> dict:
         _sync_product_images_if_needed_ps,
     )
 
+    from sync_app.core.structure_mismatch_override import get_site_variation_target
+
     ok = 0
     failed_skus: list[str] = []
 
@@ -500,6 +554,24 @@ def sync_products_from_erp(config: dict | None = None) -> dict:
         if not sku or sku in disabled:
             continue
         try:
+            site_variation_target = get_site_variation_target(sku)
+            if site_variation_target:
+                # این SKU در سپیدار یه کالایِ ساده‌ی مستقله، ولی طبقِ تطبیقِ
+                # دستیِ کاربر (تبِ «تطبیقِ ساختاری») در واقع یه واریانتِ یه
+                # محصولِ متغیرِ سایته — نه محصولِ جدا. کاملاً از مسیرِ عادیِ
+                # ساخت/به‌روزرسانیِ محصول رد می‌شیم.
+                group_code = str(item.get("_item_group_id") or "")
+                raw_price = _resolve_sepidar_item_price(item, group_code, config)
+                price = apply_price_markup(raw_price, config, is_sale=False, sku=sku)
+                site_price = price / price_div if price > 0 else 0
+                stock_mode = resolve_stock_mode(sku, group_code, config)
+                _apply_sepidar_site_variation_override(
+                    wcapi, config, sku, site_variation_target, site_price,
+                    int(item["stock"]), stock_mode, ps_mode=ps_mode,
+                )
+                ok += 1
+                continue
+
             existing_id, product_map = _resolve_existing_sepidar_product_id(wcapi, sku, product_map)
             wc_cat_id = _resolve_sepidar_product_category(item.get("_item_group_id"), groups_by_id, erp_to_wc_category)
             group_code = str(item.get("_item_group_id") or "")
