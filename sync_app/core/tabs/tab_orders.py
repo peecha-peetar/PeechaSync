@@ -549,8 +549,9 @@ class OrderTab(SitePreviewLoaderMixin, SyncTab):
         for order in orders:
             status_label = "پرداخت‌شده" if order.get("valid") else "در انتظار پرداخت"
             ids.append(order["id"])
+            name = str(order.get("customer_name") or "").strip() or f"مشتری #{order.get('customer_id') or '-'}"
             items.append(
-                f"مشتری #{order.get('customer_id') or '-'} | کد سفارش: #{order['id']} | "
+                f"{name} | کد سفارش: #{order['id']} | "
                 f"وضعیت: {status_label} | مبلغ: {order.get('total_paid')}"
             )
         return {"kind": "orders", "items": items, "ids": ids}

@@ -128,6 +128,8 @@ def ps_list_paid_order_ids(config, *, timeout=None) -> list[int]:
 
 def ps_list_recent_orders_preview(config, *, limit: int = 20, timeout=None) -> list[dict]:
     """آخرین سفارش‌ها (هر وضعیتی) — برای پیش‌نمایش تب سفارشات، نه sync واقعی."""
+    from sync_app.core.ps_customer_helper import ps_get_customer
+
     cfg = config or {}
     resp = ps_call(
         "دریافت سفارش‌های اخیر",
@@ -139,15 +141,38 @@ def ps_list_recent_orders_preview(config, *, limit: int = 20, timeout=None) -> l
     )
     data = _response_json(resp, "دریافت سفارش‌های اخیر")
     rows = _unwrap_list(data, "orders")
+    # منبعِ سفارشِ خامِ پرستاشاپ (برخلافِ billingِ ووکامرس) اسمِ مشتری رو
+    # مستقیم نداره — فقط id_customer. مثلِ ps_get_order (سینکِ واقعی)،
+    # با یک fetchِ جدا از customers/{id} حلش می‌کنیم؛ ولی چون معمولاً چند
+    # سفارش از یک مشتریِ تکراری میاد، با یک کشِ محلی از fetchِ تکراری
+    # جلوگیری می‌کنیم.
+    customer_name_cache: dict[int, str] = {}
+
+    def _customer_name(customer_id: int) -> str:
+        if customer_id not in customer_name_cache:
+            name = ""
+            try:
+                customer = ps_get_customer(cfg, customer_id, timeout=timeout)
+                billing = (customer or {}).get("billing") or {}
+                first = str(billing.get("first_name") or "").strip()
+                last = str(billing.get("last_name") or "").strip()
+                name = f"{first} {last}".strip()
+            except Exception:
+                name = ""
+            customer_name_cache[customer_id] = name
+        return customer_name_cache[customer_id]
+
     out = []
     for row in rows:
         if not isinstance(row, dict) or not row.get("id"):
             continue
+        customer_id = int(row.get("id_customer") or 0)
         out.append({
             "id": int(row["id"]),
             "valid": str(row.get("valid") or "0") == "1",
             "total_paid": row.get("total_paid") or "0",
-            "customer_id": int(row.get("id_customer") or 0),
+            "customer_id": customer_id,
+            "customer_name": _customer_name(customer_id) if customer_id else "",
             "date_add": str(row.get("date_add") or "")[:10],
         })
     return out
