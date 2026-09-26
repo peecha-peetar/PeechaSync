@@ -46,6 +46,43 @@ SMS_TEMPLATES = [
 ]
 
 
+def _load_linked_customer_keys(config: dict) -> set:
+    """مجموعه‌یِ ایمیل (lower)/موبایلِ نرمال‌شده‌یِ مشتریانی که از قبل در
+    ERP ثبت شده‌ن — برایِ نشونه‌گذاریِ «لینک‌شده»/فیلترِ لینک‌شده-نشده در
+    پیش‌نمایشِ مشتریانِ سایت. عیناً هم‌منطقِ چکِ ایمیل/موبایلی که
+    resolve_order_customer_code (دژاوو)/resolve_party_ref (سپیدار) هنگامِ
+    سینکِ واقعی استفاده می‌کنن — این‌جا فقط برایِ نمایشه، بدونِ نوشتن."""
+    from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+
+    keys: set = set()
+    if is_sepidar_provider(config):
+        from sync_app.core.scripts.sepidar.sepidar_common import load_sepidar_map
+
+        customer_map = load_sepidar_map("sepidar_customer_map.json")
+        keys.update(str(k).strip().lower() for k in customer_map.keys() if str(k or "").strip())
+        return keys
+
+    try:
+        from sync_app.core.sql_connection_helper import open_sql_connection
+
+        conn, _, _ = open_sql_connection(config, timeout=10)
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT Email_Address, C_Mobile FROM Customer")
+            for row in cursor.fetchall():
+                email = str(row[0] or "").strip().lower()
+                mobile = str(row[1] or "").strip()
+                if email:
+                    keys.add(email)
+                if mobile:
+                    keys.add(mobile)
+        finally:
+            conn.close()
+    except Exception:
+        pass
+    return keys
+
+
 def _fmt_customer_date(raw: str) -> str:
     if not raw:
         return "—"
@@ -164,11 +201,22 @@ class CustomerTab(SitePreviewLoaderMixin, SyncTab):
 
         customer_search_row = QHBoxLayout()
         self.customer_search_input = QLineEdit()
-        self.customer_search_input.setPlaceholderText("🔍 جستجو در نام، ایمیل یا موبایل...")
+        self.customer_search_input.setPlaceholderText(
+            "🔍 جستجویِ زنده — نام، نامِ خانوادگی، ایمیل، موبایل، تاریخِ ایجاد..."
+        )
         self.customer_search_input.setLayoutDirection(Qt.RightToLeft)
         self.customer_search_input.setMinimumHeight(36)
         self.customer_search_input.textChanged.connect(lambda _=None: self._render_customers_list())
         customer_search_row.addWidget(self.customer_search_input, 1)
+
+        self.customer_link_filter = QComboBox()
+        self.customer_link_filter.setLayoutDirection(Qt.RightToLeft)
+        self.customer_link_filter.setMinimumHeight(36)
+        self.customer_link_filter.addItem("همه", "all")
+        self.customer_link_filter.addItem("🔗 لینک‌شده", "linked")
+        self.customer_link_filter.addItem("لینک‌نشده", "unlinked")
+        self.customer_link_filter.currentIndexChanged.connect(lambda _=None: self._render_customers_list())
+        customer_search_row.addWidget(self.customer_link_filter)
         self._customer_selection_toggle = attach_selection_toggle(
             customer_search_row,
             self,
@@ -351,29 +399,46 @@ class CustomerTab(SitePreviewLoaderMixin, SyncTab):
                     "ids": [], "records": [],
                 }
 
+            linked_keys = _load_linked_customer_keys(cfg)
+
             items = [f"نمایش بر اساس: {mode_label}"]
             ids = []
             records = []
             for customer in customers[:40]:
                 cid = customer.get("id", "-")
                 email = customer.get("email", "-")
-                first = customer.get("first_name", "")
-                last = customer.get("last_name", "")
+                billing = customer.get("billing") or {}
+                # first_name/last_nameِ سطحِ بالا (پروفایلِ حساب) اغلب برایِ
+                # حساب‌هایی که فقط موقعِ چک‌اوت ساخته شدن خالیه — billing
+                # (فرمِ صورتحساب) قابلِ‌اعتمادتره؛ دقیقاً همون الگویی که
+                # customer_creation.py’s sync_customer از قبل استفاده می‌کنه.
+                first = customer.get("first_name", "") or billing.get("first_name", "")
+                last = customer.get("last_name", "") or billing.get("last_name", "")
                 name = (f"{first} {last}").strip() or customer.get("username", "مشتری")
                 guest_tag = " (مهمان)" if customer.get("_guest") else ""
-                phone = str((customer.get("billing") or {}).get("phone") or "").strip()
+                phone = str(billing.get("phone") or "").strip()
                 try:
                     ids.append(int(cid))
                 except Exception:
                     pass
-                display = f"{name}{guest_tag} | کد: #{cid} | ایمیل: {email}"
+                email_norm = str(email or "").strip().lower()
+                phone_norm = phone
+                is_linked = bool(
+                    (email_norm and email_norm in linked_keys)
+                    or (phone_norm and phone_norm in linked_keys)
+                )
+                link_badge = "🔗 " if is_linked else ""
+                display = f"{link_badge}{name}{guest_tag} | کد: #{cid} | ایمیل: {email}"
                 items.append(display)
+                date_created = customer.get("date_created") or ""
                 records.append({
                     "id": cid, "name": name, "email": email, "phone": phone,
                     "guest": bool(customer.get("_guest")), "display": display,
-                    "billing": customer.get("billing") or {},
+                    "billing": billing,
                     "shipping": customer.get("shipping") or {},
-                    "date_created": customer.get("date_created") or "",
+                    "date_created": date_created,
+                    "date_created_fa": _fmt_customer_date(date_created),
+                    "linked": is_linked,
                 })
 
             if len(customers) > 40:
@@ -444,9 +509,20 @@ class CustomerTab(SitePreviewLoaderMixin, SyncTab):
                 self.customers_list.addItem(make_rtl_item(text))
 
             search = (self.customer_search_input.text() or "").strip().lower()
+            link_filter = self.customer_link_filter.currentData() or "all"
             shown = 0
             for record in self._customer_records:
-                haystack = f"{record.get('name', '')} {record.get('email', '')} {record.get('phone', '')}".lower()
+                if link_filter == "linked" and not record.get("linked"):
+                    continue
+                if link_filter == "unlinked" and record.get("linked"):
+                    continue
+                # جستجو رویِ نام (نام+نامِ خانوادگی با هم)، ایمیل، موبایل، و
+                # تاریخِ ایجاد (هم به فرمتِ شمسیِ نمایشی، هم رشته‌یِ خامِ ISO)
+                # — تا با بخشی از تاریخ هم بشه فیلتر کرد.
+                haystack = " ".join(
+                    str(record.get(field) or "")
+                    for field in ("name", "email", "phone", "date_created_fa", "date_created")
+                ).lower()
                 if search and search not in haystack:
                     continue
                 item = make_rtl_item(record.get("display") or record.get("name") or "")
@@ -457,8 +533,8 @@ class CustomerTab(SitePreviewLoaderMixin, SyncTab):
                 self.customers_list.addItem(item)
                 shown += 1
 
-            if search and self._customer_records and shown == 0:
-                self.customers_list.addItem(make_rtl_item("چیزی با این جستجو پیدا نشد."))
+            if self._customer_records and shown == 0 and (search or link_filter != "all"):
+                self.customers_list.addItem(make_rtl_item("چیزی با این جستجو/فیلتر پیدا نشد."))
         finally:
             self.customers_list.blockSignals(False)
 

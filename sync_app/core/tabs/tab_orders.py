@@ -29,6 +29,45 @@ from sync_app.core.scripts import ordersync
 # وضعیت‌هایِ سفارشِ ووکامرس — کدهایِ انگلیسیِ خودِ WooCommerce، برایِ
 # نمایش هم تویِ کمبویِ فیلتر و هم تویِ ردیفِ خودِ سفارش به فارسی ترجمه
 # می‌شن (قبلاً ردیفِ سفارش وضعیت رو خامِ انگلیسی نشون می‌داد).
+def _load_synced_order_ids(config: dict) -> set:
+    """مجموعه‌یِ کدِ سفارش‌هایِ سایتی که از قبل به فاکتور/سفارشِ ERP
+    تبدیل شده‌ن — برایِ نشونه‌گذاریِ «همگام‌شده» در پیش‌نمایشِ سفارشاتِ
+    سایت. عیناً هم‌منطقِ چکِ RqIndex2 (دژاوو)/sepidar_order_map.json
+    (سپیدار) که insert_order/insert_invoke هنگامِ سینکِ واقعی استفاده
+    می‌کنن — این‌جا فقط برایِ نمایشه، بدونِ نوشتن."""
+    from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+
+    ids: set = set()
+    if is_sepidar_provider(config):
+        from sync_app.core.scripts.sepidar.sepidar_common import load_sepidar_map
+
+        order_map = load_sepidar_map("sepidar_order_map.json")
+        for k in order_map.keys():
+            try:
+                ids.add(int(k))
+            except (TypeError, ValueError):
+                continue
+        return ids
+
+    try:
+        from sync_app.core.sql_connection_helper import open_sql_connection
+
+        conn, _, _ = open_sql_connection(config, timeout=10)
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT RqIndex2 FROM RqTitle WHERE RqIndex2 IS NOT NULL")
+            for row in cursor.fetchall():
+                try:
+                    ids.add(int(row[0]))
+                except (TypeError, ValueError):
+                    continue
+        finally:
+            conn.close()
+    except Exception:
+        pass
+    return ids
+
+
 ORDER_STATUS_LABELS = {
     "any": "همه",
     "processing": "در حال انجام",
@@ -492,6 +531,7 @@ class OrderTab(SitePreviewLoaderMixin, SyncTab):
             if not orders:
                 return {"kind": "message", "items": ["ℹ️ سفارشی روی سایت یافت نشد."], "ids": []}
 
+            synced_ids = _load_synced_order_ids(cfg)
             items = []
             ids = []
             for order in orders:
@@ -506,7 +546,8 @@ class OrderTab(SitePreviewLoaderMixin, SyncTab):
                 except Exception:
                     continue
                 ids.append(numeric_id)
-                items.append(f"{name} | کد سفارش: #{order_id} | وضعیت: {status} | مبلغ: {total} {currency}")
+                sync_badge = "🔗 " if numeric_id in synced_ids else ""
+                items.append(f"{sync_badge}{name} | کد سفارش: #{order_id} | وضعیت: {status} | مبلغ: {total} {currency}")
 
             return {"kind": "orders", "items": items, "ids": ids}
         except Exception as e:
@@ -544,14 +585,16 @@ class OrderTab(SitePreviewLoaderMixin, SyncTab):
         if not orders:
             return {"kind": "message", "items": ["ℹ️ سفارشی روی سایت یافت نشد."], "ids": []}
 
+        synced_ids = _load_synced_order_ids(cfg)
         items = []
         ids = []
         for order in orders:
             status_label = "پرداخت‌شده" if order.get("valid") else "در انتظار پرداخت"
             ids.append(order["id"])
             name = str(order.get("customer_name") or "").strip() or f"مشتری #{order.get('customer_id') or '-'}"
+            sync_badge = "🔗 " if order["id"] in synced_ids else ""
             items.append(
-                f"{name} | کد سفارش: #{order['id']} | "
+                f"{sync_badge}{name} | کد سفارش: #{order['id']} | "
                 f"وضعیت: {status_label} | مبلغ: {order.get('total_paid')}"
             )
         return {"kind": "orders", "items": items, "ids": ids}
