@@ -652,10 +652,11 @@ def _batch_payload_from_var(var, vid=None, config=None, a_code=""):
         "attributes": _variation_attributes_name_only(var),
     }
     # قیمت فقط وقتی واریانت از قبل رویِ سایت موجوده (update، یعنی vid ست
-    # شده) طبقِ چک‌باکسِ «قیمتِ محصول» قابلِ‌غیرفعال‌سازی‌ست — واریانتِ تازه
+    # شده) طبقِ چک‌باکسِ جداگانه‌یِ «قیمتِ متغیر» (SYNC_FIELD_VARIATION_PRICE
+    # — مستقل از «قیمتِ محصول») قابلِ‌غیرفعال‌سازی‌ست — واریانتِ تازه
     # (create) بدونِ قیمت رویِ ووکامرس بی‌معنیه، پس همیشه قیمتِ فعلی رو
     # می‌گیره (دقیقاً هم‌الگویِ رفتارِ «نام» در _apply_field_sync_config).
-    if not vid or is_field_enabled(config or {}, "SYNC_FIELD_PRODUCT_PRICE"):
+    if not vid or is_field_enabled(config or {}, "SYNC_FIELD_VARIATION_PRICE"):
         payload["regular_price"] = var.get("regular_price")
     sku = str(var.get("sku") or "").strip()
     if is_field_enabled(config or {}, "SYNC_FIELD_VARIATION_STOCK"):
@@ -922,7 +923,7 @@ def sync_variation_prices_quick(
         matched_vids.add(vid)
         wc_sku = str((by_id.get(vid) or {}).get("sku") or "").strip()
         patch = {"id": vid}
-        sync_price = is_field_enabled(config or {}, "SYNC_FIELD_PRODUCT_PRICE")
+        sync_price = is_field_enabled(config or {}, "SYNC_FIELD_VARIATION_PRICE")
         price = str(var.get("regular_price") or "0")
         sale = str(var.get("sale_price") or "").strip()
         if sync_price:

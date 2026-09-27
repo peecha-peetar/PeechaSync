@@ -273,12 +273,12 @@ def _apply_site_variation_override(
     شناخته‌شده روی سایت آپدیت می‌شه."""
     parent_id = int(target["parent_product_id"])
     variation_id = int(target["variation_id"])
-    # طبقِ همون چک‌باکسِ موجودِ «قیمتِ محصول» در تنظیمات (SYNC_FIELD_PRODUCT_PRICE)
-    # — قبلاً این تابع بدونِ توجه به این تنظیم همیشه قیمتِ واریانتِ سایت رو
-    # از رویِ قیمتِ دیتابیس رونویسی می‌کرد؛ برایِ کاربرهایی که سایتِ آماده
-    # دارن و قیمتِ دیتابیس رو هنوز نمی‌خوان منتقل کنن (چک‌باکس رو خاموش
-    # کردن)، این باعثِ رونویسیِ ناخواستهٔ قیمتِ واریانت می‌شد.
-    sync_price = is_field_enabled(config, "SYNC_FIELD_PRODUCT_PRICE")
+    # چک‌باکسِ جداگانه‌یِ «قیمتِ متغیر» (SYNC_FIELD_VARIATION_PRICE) — عمداً
+    # از «قیمتِ محصول» (SYNC_FIELD_PRODUCT_PRICE، مخصوصِ محصولِ ساده/قیمتِ
+    # پایه‌یِ محصولِ متغیر) جداست، چون کاربر ممکنه بخواد قیمتِ محصولِ ساده
+    # منتقل بشه ولی قیمتِ خودِ واریانت‌ها (که رویِ سایت از قبل درست تنظیم
+    # شده) دست‌نخورده بمونه، یا برعکس.
+    sync_price = is_field_enabled(config, "SYNC_FIELD_VARIATION_PRICE")
 
     if is_prestashop(config):
         from sync_app.core.ps_sync_helper import ps_set_stock_quantity

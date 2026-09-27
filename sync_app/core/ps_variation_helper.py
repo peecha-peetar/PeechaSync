@@ -524,7 +524,7 @@ def ps_sync_product_variations(
     from sync_app.core.field_sync_config import is_field_enabled
 
     stock_field_enabled = is_field_enabled(config or {}, "SYNC_FIELD_VARIATION_STOCK")
-    price_field_enabled = is_field_enabled(config or {}, "SYNC_FIELD_PRODUCT_PRICE")
+    price_field_enabled = is_field_enabled(config or {}, "SYNC_FIELD_VARIATION_PRICE")
 
     # پیش‌واکشیِ یک‌جای موجودیِ همه‌ی ترکیب‌های این محصول — به‌جای یک GET جدا
     # به‌ازای هر واریانت (که سرعت سینک رو خیلی پایین می‌آورد)؛ فقط برای
