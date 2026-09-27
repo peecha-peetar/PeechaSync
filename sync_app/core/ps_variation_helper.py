@@ -524,6 +524,7 @@ def ps_sync_product_variations(
     from sync_app.core.field_sync_config import is_field_enabled
 
     stock_field_enabled = is_field_enabled(config or {}, "SYNC_FIELD_VARIATION_STOCK")
+    price_field_enabled = is_field_enabled(config or {}, "SYNC_FIELD_PRODUCT_PRICE")
 
     # پیش‌واکشیِ یک‌جای موجودیِ همه‌ی ترکیب‌های این محصول — به‌جای یک GET جدا
     # به‌ازای هر واریانت (که سرعت سینک رو خیلی پایین می‌آورد)؛ فقط برای
@@ -603,10 +604,17 @@ def ps_sync_product_variations(
             existing_combo = existing_by_ref.get(sku)
             if existing_combo:
                 combo_id = int(existing_combo["id"])
+                # قیمت فقط طبقِ چک‌باکسِ «قیمتِ محصول» به‌روزرسانی می‌شه —
+                # price_impact=None به ps_update_combination می‌گه قیمتِ
+                # فعلیِ ترکیب رو دست‌نزنه (دقیقاً هم‌الگویِ رفتارِ ووکامرس).
                 ps_update_combination(
-                    config, combo_id, price_impact=price_impact, option_value_ids=option_ids, timeout=timeout,
+                    config, combo_id,
+                    price_impact=price_impact if price_field_enabled else None,
+                    option_value_ids=option_ids, timeout=timeout,
                 )
             else:
+                # واریانتِ تازه بدونِ قیمت رویِ پرستاشاپ بی‌معنیه — مثلِ
+                # ووکامرس، برایِ ساختِ اولیه همیشه قیمت ست می‌شه.
                 is_default = not has_default
                 combo_id = ps_create_combination(
                     config, product_id, reference=sku, price_impact=price_impact,
@@ -620,8 +628,9 @@ def ps_sync_product_variations(
                     out_of_stock=stock_out_of_stock, known_row=stock_rows_by_attr.get(combo_id), timeout=timeout,
                 )
             ok_count += 1
+            price_label = f"{var_price:g}" if price_field_enabled or not existing_combo else "دست‌نخورده (فیلد قیمت غیرفعال)"
             stock_label = str(stock_qty) if stock_field_enabled else "دست‌نخورده (فیلد موجودی غیرفعال)"
-            log.info(f"▸ [{a_code}] واریانت {sku} → قیمت={var_price:g} / موجودی={stock_label}")
+            log.info(f"▸ [{a_code}] واریانت {sku} → قیمت={price_label} / موجودی={stock_label}")
         except Exception as exc:
             log.error(f"❌ واریانت {sku} روی پرستاشاپ: {exc}")
             failed_count += 1

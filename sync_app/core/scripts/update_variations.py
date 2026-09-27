@@ -648,10 +648,15 @@ def _variation_attributes_name_only(var):
 
 def _batch_payload_from_var(var, vid=None, config=None, a_code=""):
     payload = {
-        "regular_price": var.get("regular_price"),
         "status": "publish",
         "attributes": _variation_attributes_name_only(var),
     }
+    # قیمت فقط وقتی واریانت از قبل رویِ سایت موجوده (update، یعنی vid ست
+    # شده) طبقِ چک‌باکسِ «قیمتِ محصول» قابلِ‌غیرفعال‌سازی‌ست — واریانتِ تازه
+    # (create) بدونِ قیمت رویِ ووکامرس بی‌معنیه، پس همیشه قیمتِ فعلی رو
+    # می‌گیره (دقیقاً هم‌الگویِ رفتارِ «نام» در _apply_field_sync_config).
+    if not vid or is_field_enabled(config or {}, "SYNC_FIELD_PRODUCT_PRICE"):
+        payload["regular_price"] = var.get("regular_price")
     sku = str(var.get("sku") or "").strip()
     if is_field_enabled(config or {}, "SYNC_FIELD_VARIATION_STOCK"):
         from sync_app.core.stock_mode import resolve_variation_stock_mode, apply_stock_mode_to_payload
@@ -898,6 +903,7 @@ def sync_variation_prices_quick(
     updates: list[dict] = []
     matched_vids: set[int] = set()
     unmatched: list[str] = []
+    skipped_no_change = 0
 
     for var in variations:
         sku = str(var.get("sku") or "").strip()
@@ -915,30 +921,47 @@ def sync_variation_prices_quick(
 
         matched_vids.add(vid)
         wc_sku = str((by_id.get(vid) or {}).get("sku") or "").strip()
+        patch = {"id": vid}
+        sync_price = is_field_enabled(config or {}, "SYNC_FIELD_PRODUCT_PRICE")
         price = str(var.get("regular_price") or "0")
-        patch = {
-            "id": vid,
-            "regular_price": price,
-        }
+        sale = str(var.get("sale_price") or "").strip()
+        if sync_price:
+            patch["regular_price"] = price
+            if sale and sale != "0":
+                patch["sale_price"] = sale
         if is_field_enabled(config or {}, "SYNC_FIELD_VARIATION_STOCK"):
             from sync_app.core.stock_mode import resolve_variation_stock_mode, apply_stock_mode_to_payload
             selected_groups = [str(g).strip() for g in (config or {}).get("SELECTED_SUB_GROUPS", []) if str(g).strip()]
             matched_group = next((g for g in selected_groups if a_code.startswith(g)), "")
             v_mode = resolve_variation_stock_mode(wc_sku or sku, a_code, matched_group, config or {})
             apply_stock_mode_to_payload(patch, v_mode, int(var.get("stock_quantity") or 0))
-        sale = str(var.get("sale_price") or "").strip()
-        if sale and sale != "0":
-            patch["sale_price"] = sale
         dejavu_meta = var.get("dejavu_meta") or []
         if dejavu_meta:
             patch["meta_data"] = list(dejavu_meta)
+        if len(patch) <= 1:
+            # فقط id — یعنی هم قیمت هم موجودی (و متایی) خاموش بودن، چیزی
+            # برایِ این واریانت تغییر نکرده — از ارسالِ یک PUTِ بی‌اثر رد می‌شیم.
+            # با این‌حال این واریانت «تطبیق‌یافته و رسیدگی‌شده» حساب می‌شه (نه
+            # ناموفق) — وگرنه تابعِ صداکننده چون quick_saved کمتر از تعدادِ کل
+            # می‌شه، اشتباهاً می‌ره سراغِ مسیرِ کاملِ واریانت (که این چک‌باکس
+            # رو رعایت نمی‌کنه) و دوباره قیمت/موجودیِ خاموش‌شده رو می‌فرسته.
+            skipped_no_change += 1
+            continue
         updates.append(patch)
         log.info(
-            f"▸ [{a_code}] #{vid} ({wc_sku or sku}) → قیمت={price}"
-            + (f" / ویژه={sale}" if sale and sale != "0" else "")
+            f"▸ [{a_code}] #{vid} ({wc_sku or sku})"
+            + (f" → قیمت={price}" if sync_price else "")
+            + (f" / ویژه={sale}" if sync_price and sale and sale != "0" else "")
         )
 
     if not updates:
+        if skipped_no_change:
+            log.info(
+                f"ℹ️ [{a_code}] {skipped_no_change} واریانت تطبیق داشت ولی چیزی برایِ ارسال نبود "
+                "(قیمت/موجودیِ متغیر خاموشه)."
+            )
+            _prune_orphan_variations(wcapi, product_id, a_code, variations, config=config)
+            return skipped_no_change
         log.warning(
             f"⚠️ [{a_code}] تطبیق واریانت برای قیمت پیدا نشد"
             + (f" — نمونه: {', '.join(unmatched[:4])}" if unmatched else "")
@@ -947,8 +970,8 @@ def sync_variation_prices_quick(
 
     body = {"update": updates}
     result = _batch_variations(wcapi, product_id, body, "قیمت سریع", a_code)
-    saved = _count_batch_ok(result, "update")
-    log.info(f"✅ [{a_code}] قیمت {saved}/{len(updates)} واریانت → Woo #{product_id}")
+    saved = _count_batch_ok(result, "update") + skipped_no_change
+    log.info(f"✅ [{a_code}] قیمت {saved}/{len(updates) + skipped_no_change} واریانت → Woo #{product_id}")
     _prune_orphan_variations(wcapi, product_id, a_code, variations, config=config)
     return saved
 
