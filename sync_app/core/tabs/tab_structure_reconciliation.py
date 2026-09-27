@@ -40,7 +40,8 @@ from sync_app.core.secure_config_loader import load_secure_config
 
 log = logging.getLogger("SyncApp")
 
-_SEARCH_PAGE_SIZE = 20
+_SEARCH_PAGE_SIZE = 100  # حداکثرِ per_page/limitِ مجازِ ووکامرس/پرستاشاپ در هر درخواست
+_SEARCH_MAX_PAGES = 20  # سقفِ ایمنی — حداکثر ۲۰۰۰ محصولِ سایت در هر جستجو (وگرنه فروشگاه‌هایِ خیلی بزرگ کاربر رو منتظر می‌ذارن)
 _COLOR_MATCHED = QColor("#dcfce7")  # هم‌رنگِ «قبلاً تطبیق داده شده» در تبِ تطبیقِ معمولی
 _COLOR_RECONCILED = QColor("#dbeafe")  # لینک‌شده از «تطبیق» معمولی (نه تطبیقِ ساختاری)
 
@@ -86,16 +87,25 @@ def _name_match_ratio(a_text: str, b_text: str) -> float:
     return max(seq_ratio, jaccard)
 
 
-def _suggest_matches(site_items, erp_items, *, min_name_ratio: float = _MIN_NAME_MATCH_RATIO):
+def _suggest_matches(
+    site_items, erp_items, *, min_name_ratio: float = _MIN_NAME_MATCH_RATIO, manual_code_only: bool = False,
+):
     """site_items: [(key, sku, display_text), ...]. erp_items: همون شکل،
     ولی یک عنصرِ چهارمِ اختیاری هم می‌تونه داشته باشه — «کدِ دستی» (مثلِ
     A_Code_C دژاوو) — یک کدِ جایگزین که ممکنه SKUِ سایت باهاش یکی باشه،
     نه با کدِ اصلی. کلید هرچی باشه (فقط باید یکتا و hashable باشه). هر
-    طرف حداکثر یک‌بار استفاده می‌شه (اولین/بهترین تطبیق برنده‌ست). اولویت:
-    کدِ کاملاً یکسان (اصلی یا دستی) → شباهتِ زیررشته‌ایِ کد (حداقل ۴
-    کاراکتر، اصلی یا دستی) → شباهتِ متنیِ نام (SequenceMatcher) → (فقط اگه
-    هیچ‌کدومِ بالا جواب نداد) کدِ مشابه با نادیده‌گرفتنِ حرف/خط‌تیره/صفرِ
-    اضافه — مثلِ «S3001»/«003001»/«-3001» در برابرِ «3001».
+    طرف حداکثر یک‌بار استفاده می‌شه (اولین/بهترین تطبیق برنده‌ست).
+
+    اولویتِ پیش‌فرض (manual_code_only=False): کدِ کاملاً یکسان (اصلی یا
+    دستی) → شباهتِ زیررشته‌ایِ کد (حداقل ۴ کاراکتر، اصلی یا دستی) →
+    شباهتِ متنیِ نام (SequenceMatcher) → (فقط اگه هیچ‌کدومِ بالا جواب
+    نداد) کدِ مشابه با نادیده‌گرفتنِ حرف/خط‌تیره/صفرِ اضافه.
+
+    manual_code_only=True: طبقِ درخواستِ کاربر (کدِ اصلیِ Article خودکار/
+    ترتیبیه و هیچ ربطی به SKUِ سایت نداره، پس تطبیقِ خودکار بر اساسش یا
+    بر اساسِ شباهتِ نام فقط تطبیقِ اشتباه می‌ساخت) — فقط کدِ دستی (اصلی/
+    substring/loose) به‌عنوانِ شناسه چک می‌شه؛ نه کدِ اصلی، نه نام. کالایی
+    که کدِ دستی ندارد، اصلاً پیشنهاد نمی‌شود (باید دستی تطبیق داده شود).
     خروجی: [(site_key, erp_key, erp_sku, reason), ...] — erp_sku همیشه
     کدِ اصلیه (نه کدِ دستی)، چون همون چیزیه که واقعاً برایِ تطبیق/اعمال
     استفاده می‌شه."""
@@ -111,9 +121,10 @@ def _suggest_matches(site_items, erp_items, *, min_name_ratio: float = _MIN_NAME
             erp_key, erp_sku = item[0], item[1]
             if erp_key in used_erp_keys:
                 continue
-            erp_sku_norm = str(erp_sku or "").strip().lower()
-            if erp_sku_norm and erp_sku_norm == site_sku_norm:
-                return erp_key, erp_sku, "کدِ یکسان"
+            if not manual_code_only:
+                erp_sku_norm = str(erp_sku or "").strip().lower()
+                if erp_sku_norm and erp_sku_norm == site_sku_norm:
+                    return erp_key, erp_sku, "کدِ یکسان"
             manual_norm = _erp_manual_code(item)
             if manual_norm and manual_norm == site_sku_norm:
                 return erp_key, erp_sku, "کدِ دستی یکسان"
@@ -126,15 +137,18 @@ def _suggest_matches(site_items, erp_items, *, min_name_ratio: float = _MIN_NAME
             erp_key, erp_sku = item[0], item[1]
             if erp_key in used_erp_keys:
                 continue
-            erp_sku_norm = str(erp_sku or "").strip().lower()
-            if erp_sku_norm and (site_sku_norm in erp_sku_norm or erp_sku_norm in site_sku_norm):
-                return erp_key, erp_sku, "شباهتِ کد"
+            if not manual_code_only:
+                erp_sku_norm = str(erp_sku or "").strip().lower()
+                if erp_sku_norm and (site_sku_norm in erp_sku_norm or erp_sku_norm in site_sku_norm):
+                    return erp_key, erp_sku, "شباهتِ کد"
             manual_norm = _erp_manual_code(item)
             if manual_norm and (site_sku_norm in manual_norm or manual_norm in site_sku_norm):
                 return erp_key, erp_sku, "شباهتِ کدِ دستی"
         return None
 
     def _pick_by_name(site_text):
+        if manual_code_only:
+            return None
         if not _normalize_match_text(site_text):
             return None
         best_ratio = 0.0
@@ -159,7 +173,7 @@ def _suggest_matches(site_items, erp_items, *, min_name_ratio: float = _MIN_NAME
             for item in erp_items
             if item[0] not in used_erp_keys
             and (
-                _normalize_code_loose(item[1]) == site_sku_loose
+                (not manual_code_only and _normalize_code_loose(item[1]) == site_sku_loose)
                 or (len(item) > 3 and item[3] and _normalize_code_loose(item[3]) == site_sku_loose)
             )
         ]
@@ -190,55 +204,69 @@ def _suggest_matches(site_items, erp_items, *, min_name_ratio: float = _MIN_NAME
 # ----------------------------------------------------------------------
 def _search_site_products(cfg, query: str) -> list[dict]:
     """جستجویِ محصولاتِ سایت با نام/کد — شکلِ خروجی هم‌الگویِ WC:
-    [{"id", "sku", "name", "type", "price"}, ...]."""
+    [{"id", "sku", "name", "type", "price"}, ...].
+
+    قبلاً فقط یک صفحه (۲۰ محصول) واکشی می‌شد — یعنی برایِ فروشگاهی با
+    صدها محصولِ متغیر، اکثرِ واریانت‌ها (که از رویِ همین لیستِ محصولات
+    باز می‌شن) هیچ‌وقت به لیستِ جستجو نمی‌رسیدن. حالا تا سقفِ
+    _SEARCH_MAX_PAGES صفحه (هر صفحه با حداکثرِ مجازِ per_page/limit خودِ
+    پلتفرم) واکشی می‌شه."""
     from sync_app.core.integrations.commerce_provider import is_prestashop
 
     query = str(query or "").strip()
+    out: list[dict] = []
     if is_prestashop(cfg):
         from sync_app.core.ps_sync_helper import ps_rest_request, _response_json, _unwrap_list
 
-        params = {"display": "full", "limit": f"0,{_SEARCH_PAGE_SIZE}"}
-        if query:
-            params["filter[name]"] = f"%{query}%"
-        resp = ps_rest_request(cfg, "GET", "products", params=params, timeout=30)
-        data = _response_json(resp, "جستجویِ محصولاتِ سایت")
-        rows = _unwrap_list(data, "products")
-        out = []
-        for row in rows:
-            if not isinstance(row, dict) or not row.get("id"):
-                continue
-            name = row.get("name")
-            if isinstance(name, list):
-                name = next((n.get("value") for n in name if isinstance(n, dict)), "") or ""
-            elif isinstance(name, dict):
-                name = name.get("value") or ""
-            out.append({
-                "id": int(row["id"]), "sku": str(row.get("reference") or ""),
-                "name": str(name or ""), "type": "simple",
-                "price": str(row.get("price") or ""),
-            })
+        for page in range(_SEARCH_MAX_PAGES):
+            offset = page * _SEARCH_PAGE_SIZE
+            params = {"display": "full", "limit": f"{offset},{_SEARCH_PAGE_SIZE}"}
+            if query:
+                params["filter[name]"] = f"%{query}%"
+            resp = ps_rest_request(cfg, "GET", "products", params=params, timeout=30)
+            data = _response_json(resp, "جستجویِ محصولاتِ سایت")
+            rows = _unwrap_list(data, "products")
+            if not rows:
+                break
+            for row in rows:
+                if not isinstance(row, dict) or not row.get("id"):
+                    continue
+                name = row.get("name")
+                if isinstance(name, list):
+                    name = next((n.get("value") for n in name if isinstance(n, dict)), "") or ""
+                elif isinstance(name, dict):
+                    name = name.get("value") or ""
+                out.append({
+                    "id": int(row["id"]), "sku": str(row.get("reference") or ""),
+                    "name": str(name or ""), "type": "simple",
+                    "price": str(row.get("price") or ""),
+                })
+            if len(rows) < _SEARCH_PAGE_SIZE:
+                break
         return out
 
     from sync_app.core.wc_sync_helper import apply_network_overrides, build_wcapi
 
     apply_network_overrides(cfg)
     wcapi = build_wcapi(cfg)
-    params = {"per_page": _SEARCH_PAGE_SIZE}
-    if query:
-        params["search"] = query
-    resp = wcapi.get("products", params=params)
-    data = resp.json()
-    if not isinstance(data, list):
-        return []
-    out = []
-    for row in data:
-        if not isinstance(row, dict) or not row.get("id"):
-            continue
-        out.append({
-            "id": int(row["id"]), "sku": str(row.get("sku") or ""),
-            "name": str(row.get("name") or ""), "type": str(row.get("type") or "simple"),
-            "price": str(row.get("price") or ""),
-        })
+    for page in range(1, _SEARCH_MAX_PAGES + 1):
+        params = {"per_page": _SEARCH_PAGE_SIZE, "page": page}
+        if query:
+            params["search"] = query
+        resp = wcapi.get("products", params=params)
+        data = resp.json()
+        if not isinstance(data, list) or not data:
+            break
+        for row in data:
+            if not isinstance(row, dict) or not row.get("id"):
+                continue
+            out.append({
+                "id": int(row["id"]), "sku": str(row.get("sku") or ""),
+                "name": str(row.get("name") or ""), "type": str(row.get("type") or "simple"),
+                "price": str(row.get("price") or ""),
+            })
+        if len(data) < _SEARCH_PAGE_SIZE:
+            break
     return out
 
 
@@ -471,7 +499,11 @@ class _ErpSimpleSkuLoader(QThread):
                     where_bits.append("A_Code LIKE ?")
                     params.append(f"{category_code}%")
                 sql = (
-                    "SELECT TOP 200 A_Code, A_Name, Sel_Price, Sel_Price2, Sel_Price3, "
+                    # قبلاً TOP 200 بود — برایِ کاتالوگ‌هایِ چند صدتایی (مثلِ
+                    # ۸۸۷ کالایِ سادهٔ گزارش‌شده)، خیلی از کالاها اصلاً به
+                    # لیستِ جستجو نمی‌رسیدن. سقفِ بالاترِ ۵۰۰۰ عملاً برایِ
+                    # کاتالوگ‌هایِ معمول بدونِ محدودیتِ واقعی‌ست.
+                    "SELECT TOP 5000 A_Code, A_Name, Sel_Price, Sel_Price2, Sel_Price3, "
                     f"Sel_Price4, Sel_Price5, A_Code_C FROM Article WHERE {' AND '.join(where_bits)}"
                 )
                 cursor.execute(sql, params)
@@ -558,7 +590,9 @@ class _SepidarSyncedSkuLoader(QThread):
                 label = " | ".join(["ساده", sku, name or "—", f"{price:,.0f}" if price else "—"])
                 out.append((sku, label))
             out.sort(key=lambda pair: pair[1])
-            self.done.emit(out[:200], "")
+            # قبلاً out[:200] بود — همون سقفِ ناکافیِ سمتِ دژاوو، برایِ
+            # یکدستی به همون ۵۰۰۰ افزایش یافت.
+            self.done.emit(out[:5000], "")
         except Exception as exc:
             self.done.emit([], str(exc))
 
@@ -851,7 +885,7 @@ class StructureReconciliationTab(QWidget):
         site_col.addWidget(QLabel("واریانت‌هایِ سایت:"))
         self.sv_site_list = QListWidget()
         self.sv_site_list.setLayoutDirection(Qt.RightToLeft)
-        self.sv_site_list.setMinimumHeight(240)
+        self.sv_site_list.setMinimumHeight(320)
         site_col.addWidget(self.sv_site_list, 1)
         columns.addLayout(site_col, 1)
 
@@ -882,7 +916,7 @@ class StructureReconciliationTab(QWidget):
         erp_col.addWidget(QLabel(f"کالاهایِ سادهٔ {self.erp_label}:"))
         self.sv_erp_list = QListWidget()
         self.sv_erp_list.setLayoutDirection(Qt.RightToLeft)
-        self.sv_erp_list.setMinimumHeight(240)
+        self.sv_erp_list.setMinimumHeight(320)
         erp_col.addWidget(self.sv_erp_list, 1)
         columns.addLayout(erp_col, 1)
 
@@ -905,7 +939,8 @@ class StructureReconciliationTab(QWidget):
         self.sv_suggest_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
         self.sv_suggest_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
         self.sv_suggest_table.verticalHeader().setVisible(False)
-        self.sv_suggest_table.setMaximumHeight(180)
+        self.sv_suggest_table.setMinimumHeight(220)
+        self.sv_suggest_table.setMaximumHeight(360)
         self.sv_suggest_table.setVisible(False)
         v.addWidget(self.sv_suggest_table)
 
@@ -1215,7 +1250,15 @@ class StructureReconciliationTab(QWidget):
             )
             return
 
-        matches = _suggest_matches(site_items, erp_items)
+        from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
+
+        # طبقِ درخواستِ کاربر: کدِ اصلیِ Article (دژاوو) خودکار/ترتیبیه و
+        # هیچ ربطی به SKUِ سایت نداره — فقط کدِ دستی (A_Code_C) باید
+        # شناسه‌یِ معتبر برایِ تطبیقِ خودکار باشه (نه نام، نه کدِ اصلی).
+        # سپیدار/دشت این مفهوم رو اصلاً ندارن (SKU خودش تنها شناسه‌ست)،
+        # پس اونجا رفتارِ چندمعیاریِ قبلی دست‌نخورده می‌مونه.
+        manual_code_only = not is_sepidar_provider(self.config)
+        matches = _suggest_matches(site_items, erp_items, manual_code_only=manual_code_only)
         self.sv_suggestions = [
             {
                 "site_data": site_data,
@@ -1416,7 +1459,7 @@ class StructureReconciliationTab(QWidget):
         site_col.addWidget(QLabel("محصولاتِ سایت:"))
         self.fs_site_list = QListWidget()
         self.fs_site_list.setLayoutDirection(Qt.RightToLeft)
-        self.fs_site_list.setMinimumHeight(240)
+        self.fs_site_list.setMinimumHeight(320)
         site_col.addWidget(self.fs_site_list, 1)
         columns.addLayout(site_col, 1)
 
@@ -1447,7 +1490,7 @@ class StructureReconciliationTab(QWidget):
         erp_col.addWidget(QLabel(f"زیرواریانت‌هایِ {self.erp_label}:"))
         self.fs_erp_list = QListWidget()
         self.fs_erp_list.setLayoutDirection(Qt.RightToLeft)
-        self.fs_erp_list.setMinimumHeight(240)
+        self.fs_erp_list.setMinimumHeight(320)
         erp_col.addWidget(self.fs_erp_list, 1)
         columns.addLayout(erp_col, 1)
 
@@ -1470,7 +1513,8 @@ class StructureReconciliationTab(QWidget):
         self.fs_suggest_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
         self.fs_suggest_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
         self.fs_suggest_table.verticalHeader().setVisible(False)
-        self.fs_suggest_table.setMaximumHeight(180)
+        self.fs_suggest_table.setMinimumHeight(220)
+        self.fs_suggest_table.setMaximumHeight(360)
         self.fs_suggest_table.setVisible(False)
         v.addWidget(self.fs_suggest_table)
 
