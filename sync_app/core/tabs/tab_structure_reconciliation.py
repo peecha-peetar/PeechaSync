@@ -202,7 +202,7 @@ def _suggest_matches(
 # ----------------------------------------------------------------------
 # Loaderهایِ پس‌زمینه — سمتِ سایت
 # ----------------------------------------------------------------------
-def _search_site_products(cfg, query: str) -> list[dict]:
+def _search_site_products(cfg, query: str, *, product_type: str | None = None) -> list[dict]:
     """جستجویِ محصولاتِ سایت با نام/کد — شکلِ خروجی هم‌الگویِ WC:
     [{"id", "sku", "name", "type", "price"}, ...].
 
@@ -210,7 +210,15 @@ def _search_site_products(cfg, query: str) -> list[dict]:
     صدها محصولِ متغیر، اکثرِ واریانت‌ها (که از رویِ همین لیستِ محصولات
     باز می‌شن) هیچ‌وقت به لیستِ جستجو نمی‌رسیدن. حالا تا سقفِ
     _SEARCH_MAX_PAGES صفحه (هر صفحه با حداکثرِ مجازِ per_page/limit خودِ
-    پلتفرم) واکشی می‌شه."""
+    پلتفرم) واکشی می‌شه.
+
+    product_type (فقط ووکامرس — پرستاشاپ فیلترِ نوع نداره): مثلاً
+    "variable"/"simple" — بدونِ این فیلتر، صفحه‌بندی صرفاً وسطِ همه‌یِ
+    محصولاتِ فروشگاه (ساده+متغیر، بدونِ ترتیبِ خاص) پیش می‌ره؛ اگه محصولاتِ
+    متغیر اقلیتِ کوچیکی از کاتالوگ باشن، حتی با سقفِ بالایِ صفحات هم
+    ممکنه هیچ‌وقت بهشون نرسیم. با این فیلتر، سرورِ ووکامرس خودش فقط
+    نوعِ درخواستی رو برمی‌گردونه — یعنی همون سقفِ صفحات، عملاً چند برابر
+    محصولِ مرتبط رو پوشش می‌ده."""
     from sync_app.core.integrations.commerce_provider import is_prestashop
 
     query = str(query or "").strip()
@@ -253,6 +261,8 @@ def _search_site_products(cfg, query: str) -> list[dict]:
         params = {"per_page": _SEARCH_PAGE_SIZE, "page": page}
         if query:
             params["search"] = query
+        if product_type:
+            params["type"] = product_type
         resp = wcapi.get("products", params=params)
         data = resp.json()
         if not isinstance(data, list) or not data:
@@ -354,7 +364,11 @@ class _SiteProductSearchLoader(QThread):
 
     def run(self):
         try:
-            products = _search_site_products(self.cfg, self.query)
+            # فیلترِ نوعِ سمتِ سرور — وگرنه صفحه‌بندی وسطِ همه‌یِ محصولاتِ
+            # فروشگاه (ساده+متغیر) پیش می‌ره و اگه محصولاتِ متغیر بخشِ
+            # بزرگی از کاتالوگ باشن، سهمِ محصولاتِ سادهٔ واقعی از سقفِ
+            # صفحاتِ محدود به‌شدت کم می‌شه.
+            products = _search_site_products(self.cfg, self.query, product_type="simple")
             # ترتیبِ ثابت — همون چیزی که تبِ «تطبیق» استفاده می‌کنه:
             # نوع | کد | نام | قیمتِ اصلی.
             out = [
@@ -383,7 +397,11 @@ class _SiteVariationSearchLoader(QThread):
 
     def run(self):
         try:
-            products = _search_site_products(self.cfg, self.query)
+            # فیلترِ نوعِ سمتِ سرور (رفعِ باگِ گزارش‌شده: از ۸۰۰ واریانت فقط
+            # ۶۰ تا شناسایی می‌شد) — بدونِ این فیلتر، سقفِ صفحاتِ محدود
+            # بیشترش صرفِ محصولاتِ سادهٔ نامرتبط می‌شد و اصلاً به محصولاتِ
+            # متغیرِ واقعی نمی‌رسید.
+            products = _search_site_products(self.cfg, self.query, product_type="variable")
             out = []
             for p in products:
                 variations = _list_site_variations_for_product(self.cfg, p)
