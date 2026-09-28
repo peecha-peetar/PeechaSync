@@ -287,6 +287,54 @@ def mark_order_completed(order_id):
         log.error(f"❌ خطا در آپدیت وضعیت سفارش {order_id} در ووکامرس: {e}")
 
 
+_column_max_length_cache: dict[tuple[str, str], int | None] = {}
+
+
+def _column_max_length(cursor, table: str, column: str) -> int | None:
+    """حداکثرِ طولِ واقعیِ ستون (از INFORMATION_SCHEMA، نه فرض) — کش‌شده
+    چون این تابع در هر سفارش چندبار صدا زده می‌شه ولی طولِ ستون بینِ
+    سفارش‌ها ثابته. اگه کوئری با خطا مواجه بشه (مثلاً دسترسیِ ناکافی)،
+    None برمی‌گرده — یعنی هیچ کوتاه‌سازی‌ای انجام نمی‌شه (رفتارِ قبلی)."""
+    key = (table, column)
+    if key in _column_max_length_cache:
+        return _column_max_length_cache[key]
+    max_len = None
+    try:
+        cursor.execute(
+            "SELECT CHARACTER_MAXIMUM_LENGTH FROM INFORMATION_SCHEMA.COLUMNS "
+            "WHERE TABLE_NAME = ? AND COLUMN_NAME = ?",
+            (table, column),
+        )
+        row = cursor.fetchone()
+        if row and row[0] is not None:
+            n = int(row[0])
+            if n > 0:
+                max_len = n
+    except Exception:
+        max_len = None
+    _column_max_length_cache[key] = max_len
+    return max_len
+
+
+def _fit_to_column(cursor, table: str, column: str, value, *, order_id=None) -> str:
+    """مقدارِ رشته‌ای رو به حداکثرِ طولِ واقعیِ ستونِ دیتابیس کوتاه می‌کنه —
+    رفعِ خطایِ SQL Server 22001 «String or binary data would be
+    truncated» که قبلاً باعثِ رول‌بک/شکستِ کاملِ ثبتِ سفارش می‌شد (مثلاً
+    وقتی نامِ کالا/کدِ دستی طولانی‌تر از ستونِ RqDetailِ این نسخهٔ دیتابیس
+    بود، یا کامنتِ سایز/رنگِ چندین واریانتِ یک کد در یک سفارش رویِ هم
+    جمع می‌شد و طولانی می‌شد)."""
+    text = str(value or "")
+    max_len = _column_max_length(cursor, table, column)
+    if max_len and len(text) > max_len:
+        log.warning(
+            f"⚠️ سفارش {order_id}: مقدارِ ستونِ {table}.{column} ({len(text)} کاراکتر) "
+            f"از حداکثرِ مجازِ دیتابیس ({max_len} کاراکتر) بیشتره — کوتاه شد تا خطایِ "
+            "SQL رخ نده (ممکنه لازم باشه بعداً دستی در دژاوو تصحیح کنید)."
+        )
+        return text[:max_len]
+    return text
+
+
 # ---------------------------------------------------------
 # 📌 درج سفارش در دژاوو
 # ---------------------------------------------------------
@@ -309,6 +357,7 @@ def insert_order(order):
             return
 
         customer_code = resolve_order_customer_code(order, config, cursor)
+        customer_code = _fit_to_column(cursor, "RqTitle", "R_CusCode", customer_code, order_id=order_id)
 
         # درج در RqTitle و گرفتن RqIndex
         cursor.execute("""
@@ -395,6 +444,15 @@ def insert_order(order):
             if not r_commen:
                 r_commen = variants[0].get("item_name") or a_name or ""
 
+            # کوتاه‌سازیِ دفاعی طبقِ حداکثرِ طولِ واقعیِ هر ستون — وگرنه یک
+            # کدِ دستیِ نامتعارف‌طولانی، یا نامِ کالا، یا کامنتِ سایز/رنگِ
+            # چندین واریانتِ یک کد در یک سفارش (که رویِ هم جمع می‌شه)، کلِ
+            # سفارش رو با خطایِ SQL 22001 رول‌بک می‌کرد.
+            a_code_ins = _fit_to_column(cursor, "RqDetail", "R_ArCode", a_code, order_id=order_id)
+            a_code_c_ins = _fit_to_column(cursor, "RqDetail", "R_ArCode_C", a_code_c, order_id=order_id)
+            a_name_ins = _fit_to_column(cursor, "RqDetail", "R_ArName", a_name, order_id=order_id)
+            r_commen_ins = _fit_to_column(cursor, "RqDetail", "R_Commen", r_commen, order_id=order_id)
+
             cursor.execute("""
                 INSERT INTO RqDetail (
                     RqIndex, RqType,
@@ -410,9 +468,9 @@ def insert_order(order):
                         0, NULL, ?)
             """, (
                 rqindex_id,
-                a_code, a_code_c,
-                a_name, total_qty, total_qty,
-                total_cost, r_commen, detail_index
+                a_code_ins, a_code_c_ins,
+                a_name_ins, total_qty, total_qty,
+                total_cost, r_commen_ins, detail_index
             ))
 
             for variant in variants:

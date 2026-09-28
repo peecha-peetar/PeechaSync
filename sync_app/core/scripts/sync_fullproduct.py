@@ -273,25 +273,35 @@ def _apply_site_variation_override(
     شناخته‌شده روی سایت آپدیت می‌شه."""
     parent_id = int(target["parent_product_id"])
     variation_id = int(target["variation_id"])
+    # چک‌باکسِ جداگانه‌یِ «قیمتِ متغیر» (SYNC_FIELD_VARIATION_PRICE) — عمداً
+    # از «قیمتِ محصول» (SYNC_FIELD_PRODUCT_PRICE، مخصوصِ محصولِ ساده/قیمتِ
+    # پایه‌یِ محصولِ متغیر) جداست، چون کاربر ممکنه بخواد قیمتِ محصولِ ساده
+    # منتقل بشه ولی قیمتِ خودِ واریانت‌ها (که رویِ سایت از قبل درست تنظیم
+    # شده) دست‌نخورده بمونه، یا برعکس.
+    sync_price = is_field_enabled(config, "SYNC_FIELD_VARIATION_PRICE")
 
     if is_prestashop(config):
-        from sync_app.core.ps_sync_helper import ps_get_product, ps_set_stock_quantity
-        from sync_app.core.ps_variation_helper import ps_update_combination
+        from sync_app.core.ps_sync_helper import ps_set_stock_quantity
 
-        parent = ps_get_product(config, parent_id)
-        if not parent:
-            log.error(
-                f"❌ [{sku}] محصولِ والدِ سایت #{parent_id} (طبقِ override) پیدا نشد — "
-                "به‌روزرسانی رد شد."
-            )
-            return
-        try:
-            base_price = float(parent.get("regular_price") or 0)
-        except (TypeError, ValueError):
-            base_price = 0.0
-        variant_price = float(raw_price or 0) / max(float(price_div or 1), 1.0)
-        price_impact = variant_price - base_price
-        ps_update_combination(config, variation_id, price_impact=price_impact)
+        price_impact = None
+        if sync_price:
+            from sync_app.core.ps_sync_helper import ps_get_product
+            from sync_app.core.ps_variation_helper import ps_update_combination
+
+            parent = ps_get_product(config, parent_id)
+            if not parent:
+                log.error(
+                    f"❌ [{sku}] محصولِ والدِ سایت #{parent_id} (طبقِ override) پیدا نشد — "
+                    "به‌روزرسانی رد شد."
+                )
+                return
+            try:
+                base_price = float(parent.get("regular_price") or 0)
+            except (TypeError, ValueError):
+                base_price = 0.0
+            variant_price = float(raw_price or 0) / max(float(price_div or 1), 1.0)
+            price_impact = variant_price - base_price
+            ps_update_combination(config, variation_id, price_impact=price_impact)
         if is_field_enabled(config, "SYNC_FIELD_VARIATION_STOCK"):
             from sync_app.core.stock_mode import resolve_variation_stock_mode, STOCK_MODE_ALWAYS, STOCK_MODE_DOWNLOAD, STOCK_MODE_OUT_OF_STOCK
 
@@ -303,21 +313,29 @@ def _apply_site_variation_override(
             else:
                 qty, out_of_stock = max(0, int(stock_quantity or 0)), 0
             ps_set_stock_quantity(config, parent_id, qty, product_attribute_id=variation_id, out_of_stock=out_of_stock)
+        elif price_impact is None:
+            log.info(f"ℹ️ [{sku}] هر دو فیلدِ «قیمت» و «موجودیِ متغیر» خاموشن — چیزی برایِ این واریانت ارسال نشد.")
+            return
         log.info(
             f"🔀 [{sku}] بر اساسِ override دستی، به‌عنوانِ ترکیبِ #{variation_id} از محصولِ #{parent_id} "
             "سایت به‌روزرسانی شد (نه محصولِ مستقل)."
         )
         return
 
-    patch = {"regular_price": str(int(raw_price / price_div)) if raw_price > 0 else "0"}
-    sale_str = woo_sale_price_str(raw_price, raw_sale, price_div)
-    if sale_str:
-        patch["sale_price"] = sale_str
+    patch = {}
+    if sync_price:
+        patch["regular_price"] = str(int(raw_price / price_div)) if raw_price > 0 else "0"
+        sale_str = woo_sale_price_str(raw_price, raw_sale, price_div)
+        if sale_str:
+            patch["sale_price"] = sale_str
     if is_field_enabled(config, "SYNC_FIELD_VARIATION_STOCK"):
         from sync_app.core.stock_mode import resolve_variation_stock_mode, apply_stock_mode_to_payload
 
         v_mode = resolve_variation_stock_mode(sku, sku, matched_group, config)
         apply_stock_mode_to_payload(patch, v_mode, stock_quantity)
+    if not patch:
+        log.info(f"ℹ️ [{sku}] هر دو فیلدِ «قیمت» و «موجودیِ متغیر» خاموشن — چیزی برایِ این واریانت ارسال نشد.")
+        return
     resp = wcapi.put(f"products/{parent_id}/variations/{variation_id}", patch)
     wc_parse_json(resp, f"بروزرسانیِ واریانتِ سایت برایِ {sku}")
     log.info(

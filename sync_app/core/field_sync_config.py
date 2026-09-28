@@ -35,6 +35,7 @@ ATTRIBUTE_FIELDS = [
 
 # متغیر (واریانت)
 VARIATION_FIELDS = [
+    ("SYNC_FIELD_VARIATION_PRICE", "قیمت متغیر (Variation Price)", True),
     ("SYNC_FIELD_VARIATION_STOCK", "موجودی متغیر (Variation Stock)", True),
 ]
 
