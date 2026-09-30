@@ -376,7 +376,45 @@ def fetch_variations_from_db(
             if is_variation_enabled(str(v.get("sku") or ""), config)
         ]
         attr_map = build_attr_map_from_variations(variations, size_label, color_label, dim3_label)
+
+    variations, attr_map = _apply_attribute_value_links(variations, attr_map)
     return variations, attr_map
+
+
+def _apply_attribute_value_links(variations: list[dict], attr_map: dict) -> tuple[list[dict], dict]:
+    """قبلِ برگشتنِ نتیجه، مقدارهایِ ERP را با لینکِ دستیِ کاربر (اگه
+    تنظیم شده باشه) جایگزین می‌کند — مثلاً ERPِ «سرخ» را به termِ سایتِ
+    «قرمز» تبدیل می‌کند، تا نه termِ تکراری ساخته بشه نه چیزی به‌اشتباه
+    rename بشه. تکِ نقطه‌یِ مشترک برایِ همه‌یِ صداکننده‌ها (Woo/PrestaShop/
+    تطبیقِ ساختاری) — چون همه از همین تابع variations/attr_map می‌گیرن."""
+    try:
+        from sync_app.core.attribute_value_links import load_value_links, resolve_value_link
+    except Exception:
+        return variations, attr_map
+
+    links = load_value_links()
+    if not links:
+        return variations, attr_map
+
+    new_attr_map = {}
+    for name, opts in (attr_map or {}).items():
+        new_attr_map[name] = sorted({
+            resolve_value_link(links, name, opt) for opt in (opts or []) if opt
+        })
+
+    for var in variations or []:
+        for attr in var.get("attributes") or []:
+            if not isinstance(attr, dict):
+                continue
+            name = attr.get("name") or ""
+            option = attr.get("option") or ""
+            if not option:
+                continue
+            linked = resolve_value_link(links, name, option)
+            if linked != option:
+                attr["option"] = linked
+
+    return variations, new_attr_map
 
 
 def _fetch_terms_for_attribute(wcapi, attr_name, meta):
