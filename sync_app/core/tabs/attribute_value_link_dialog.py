@@ -138,13 +138,26 @@ class AttributeValueLinkDialog(QDialog):
         root.addWidget(hint)
 
         top_row = QHBoxLayout()
-        attr_label = QLabel("ویژگی:")
+        attr_label = QLabel("ویژگیِ نرم‌افزار:")
         self.attr_combo = QComboBox()
         self.attr_combo.setLayoutDirection(Qt.RightToLeft)
-        self.attr_combo.setMinimumWidth(220)
-        self.attr_combo.currentIndexChanged.connect(self._render_value_lists)
+        self.attr_combo.setMinimumWidth(180)
+        self.attr_combo.currentIndexChanged.connect(self._on_erp_attr_changed)
         top_row.addWidget(attr_label)
         top_row.addWidget(self.attr_combo)
+
+        site_attr_label = QLabel("ویژگیِ فروشگاه:")
+        self.site_attr_combo = QComboBox()
+        self.site_attr_combo.setLayoutDirection(Qt.RightToLeft)
+        self.site_attr_combo.setMinimumWidth(180)
+        self.site_attr_combo.setToolTip(
+            "اگه نامِ ویژگی در فروشگاه با نامِ ویژگی در نرم‌افزار یکی نیست، "
+            "این‌جا دستی انتخاب کنید کدوم ویژگیِ فروشگاه معادلشه."
+        )
+        self.site_attr_combo.currentIndexChanged.connect(self._render_value_lists)
+        top_row.addWidget(site_attr_label)
+        top_row.addWidget(self.site_attr_combo)
+
         top_row.addStretch(1)
         self.reload_btn = QPushButton("🔄 بازخوانی")
         self.reload_btn.clicked.connect(self._start_load)
@@ -237,9 +250,15 @@ class AttributeValueLinkDialog(QDialog):
             self.status_label.setText("هیچ ویژگی‌ای در نرم‌افزار پیدا نشد.")
             return
 
-        self.status_label.setText(
-            f"{len(erp_attrs)} ویژگی در نرم‌افزار، {len(site_attrs)} ویژگی در فروشگاه."
-        )
+        if not site_attrs:
+            self.status_label.setText(
+                "⚠️ هیچ ویژگی‌ای از فروشگاه دریافت نشد — اتصالِ فروشگاه یا "
+                "تنظیماتِ API را بررسی کنید (یا اول از تبِ «ویژگی‌ها» سینکشون کنید)."
+            )
+        else:
+            self.status_label.setText(
+                f"{len(erp_attrs)} ویژگی در نرم‌افزار، {len(site_attrs)} ویژگی در فروشگاه."
+            )
 
         current = self.attr_combo.currentData()
         self.attr_combo.blockSignals(True)
@@ -247,6 +266,13 @@ class AttributeValueLinkDialog(QDialog):
         for name in sorted(erp_attrs.keys()):
             self.attr_combo.addItem(name, name)
         self.attr_combo.blockSignals(False)
+
+        self.site_attr_combo.blockSignals(True)
+        self.site_attr_combo.clear()
+        self.site_attr_combo.addItem("— انتخاب کنید —", "")
+        for name in sorted(site_attrs.keys()):
+            self.site_attr_combo.addItem(name, name)
+        self.site_attr_combo.blockSignals(False)
 
         restored = False
         if current:
@@ -257,13 +283,27 @@ class AttributeValueLinkDialog(QDialog):
         if not restored and self.attr_combo.count():
             self.attr_combo.setCurrentIndex(0)
 
+        self._auto_select_site_attr()
         self._render_value_lists()
 
-    def _current_site_attr_name(self) -> str | None:
+    def _on_erp_attr_changed(self):
+        self._auto_select_site_attr()
+        self._render_value_lists()
+
+    def _auto_select_site_attr(self):
+        """موقعِ تغییرِ ویژگیِ نرم‌افزار، اگه یک ویژگیِ هم‌نام/نزدیک در فروشگاه
+        پیدا شد، خودکار انتخابش می‌کنه — ولی کاربر همیشه می‌تونه دستی عوضش
+        کنه (این فقط یک پیشنهاد است، نه یک محدودیت)."""
         attr_name = self.attr_combo.currentData()
-        if not attr_name:
-            return None
-        return _find_site_attr_match(attr_name, self._site_attrs.keys())
+        guess = _find_site_attr_match(attr_name, self._site_attrs.keys()) if attr_name else None
+        self.site_attr_combo.blockSignals(True)
+        if guess:
+            idx = self.site_attr_combo.findData(guess)
+            if idx >= 0:
+                self.site_attr_combo.setCurrentIndex(idx)
+        else:
+            self.site_attr_combo.setCurrentIndex(0)
+        self.site_attr_combo.blockSignals(False)
 
     def _render_value_lists(self):
         self.erp_list.clear()
@@ -275,16 +315,17 @@ class AttributeValueLinkDialog(QDialog):
         from sync_app.core.attribute_value_links import list_value_links_for_attr
 
         erp_values = self._erp_attrs.get(attr_name) or []
-        site_attr_name = self._current_site_attr_name()
+        site_attr_name = self.site_attr_combo.currentData() or None
         site_values = self._site_attrs.get(site_attr_name, []) if site_attr_name else []
         site_keys = {_match_key(v): v for v in site_values}
         links = list_value_links_for_attr(attr_name)
 
-        if not site_attr_name:
+        if self._site_attrs and not site_attr_name:
             self.status_label.setText(
-                f"⚠️ ویژگیِ «{attr_name}» هنوز در فروشگاه نیست — اول از تبِ «ویژگی‌ها» سینکش کنید."
+                f"⚠️ ویژگیِ فروشگاهِ معادلِ «{attr_name}» خودکار پیدا نشد — از کشویِ "
+                "«ویژگیِ فروشگاه» بالا دستی انتخاب کنید."
             )
-        else:
+        elif site_attr_name:
             self.status_label.setText(
                 f"ویژگیِ فروشگاه: «{site_attr_name}» — {len(erp_values)} مقدارِ نرم‌افزار، "
                 f"{len(site_values)} مقدارِ فروشگاه."
