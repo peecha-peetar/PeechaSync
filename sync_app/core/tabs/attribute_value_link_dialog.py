@@ -3,9 +3,10 @@
 (مثلاً ERP «سرخ»، فروشگاه «قرمز» یا «Red») و تطبیقِ خودکار (که فقط
 متنِ دقیقاً یکسان را می‌شناسد) نمی‌تواند این دو را یکی تشخیص دهد.
 
-کاربر این‌جا صریحاً می‌گوید «این مقدارِ ERP دقیقاً همین termِ فروشگاهه»
-— از سینکِ بعدی، همیشه همون term استفاده می‌شه (نه ساختِ تکراری، نه
-تغییرِ نامِ اشتباهِ یک termِ نامرتبط)."""
+مثلِ صفحه‌یِ اصلیِ «تطبیق»، مقدارهایِ نرم‌افزار و فروشگاه دو ستونِ کنارِ
+هم هستن — کاربر یکی از هر طرف انتخاب می‌کنه و «🔗 لینک» می‌زنه؛ از
+سینکِ بعدی، همیشه همون term استفاده می‌شه (نه ساختِ تکراری، نه تغییرِ
+نامِ اشتباهِ یک termِ نامرتبط)."""
 
 from __future__ import annotations
 
@@ -15,14 +16,14 @@ from PyQt5.QtWidgets import (
     QDialog,
     QHBoxLayout,
     QLabel,
+    QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QPushButton,
-    QSizePolicy,
-    QTableWidget,
-    QTableWidgetItem,
     QVBoxLayout,
-    QWidget,
 )
+
+from sync_app.core.rtl_item_delegate import RightAlignedItemDelegate
 
 
 def _match_key(text) -> str:
@@ -112,13 +113,13 @@ class _LoadWorker(QThread):
 
 
 class AttributeValueLinkDialog(QDialog):
-    """انتخابِ یک ویژگی، دیدنِ مقدارهایِ ERPِ آن، و لینکِ دستیِ هرکدام به
-    یک termِ موجودِ فروشگاه (یا حذفِ لینکِ قبلی)."""
+    """انتخابِ یک ویژگی، دیدنِ مقدارهایِ ERP در یک ستون و مقدارهایِ
+    فروشگاه در ستونِ دیگر، و لینک/حذفِ‌لینکِ دستیِ نظیر‌به‌نظیر."""
 
     def __init__(self, parent, config: dict):
         super().__init__(parent)
         self.setWindowTitle("تطبیقِ دستیِ مقدارهایِ ویژگی")
-        self.resize(760, 560)
+        self.resize(780, 560)
         self.setLayoutDirection(Qt.RightToLeft)
         self.config = config or {}
         self._erp_attrs: dict[str, list[str]] = {}
@@ -128,9 +129,9 @@ class AttributeValueLinkDialog(QDialog):
 
         hint = QLabel(
             "وقتی مقدارِ یک ویژگی در نرم‌افزار و فروشگاه هم‌معنی ولی هم‌نویسه "
-            "نیستن (مثلاً «سرخ» در نرم‌افزار و «قرمز» در فروشگاه)، این‌جا "
-            "می‌تونید صریحاً بگید کدوم مقدارِ ERP دقیقاً معادلِ کدوم termِ "
-            "فروشگاهه — از سینکِ بعدی، این تطبیقِ دستی همیشه رعایت می‌شه."
+            "نیستن (مثلاً «سرخ» در نرم‌افزار و «قرمز» در فروشگاه)، یکی از هر "
+            "ستون رو انتخاب کنید و «🔗 لینک» بزنید — از سینکِ بعدی، این "
+            "تطبیقِ دستی همیشه رعایت می‌شه."
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color:#475569; font-size:12px;")
@@ -141,7 +142,7 @@ class AttributeValueLinkDialog(QDialog):
         self.attr_combo = QComboBox()
         self.attr_combo.setLayoutDirection(Qt.RightToLeft)
         self.attr_combo.setMinimumWidth(220)
-        self.attr_combo.currentIndexChanged.connect(self._render_values_table)
+        self.attr_combo.currentIndexChanged.connect(self._render_value_lists)
         top_row.addWidget(attr_label)
         top_row.addWidget(self.attr_combo)
         top_row.addStretch(1)
@@ -154,16 +155,49 @@ class AttributeValueLinkDialog(QDialog):
         self.status_label.setStyleSheet("color:#64748b; font-size:11px;")
         root.addWidget(self.status_label)
 
-        self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(["مقدارِ ERP", "وضعیت", "termِ فروشگاه", "اقدام"])
-        self.table.horizontalHeader().setStretchLastSection(False)
-        self.table.setColumnWidth(0, 200)
-        self.table.setColumnWidth(1, 160)
-        self.table.setColumnWidth(2, 220)
-        self.table.setColumnWidth(3, 120)
-        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.table.setSelectionMode(QTableWidget.NoSelection)
-        root.addWidget(self.table, 1)
+        # دقیقاً هم‌الگویِ صفحه‌یِ اصلیِ «تطبیق»: نرم‌افزار سمتِ چپ، فروشگاه
+        # سمتِ راست (LeftToRight صریح، مستقل از راست‌چین‌بودنِ کلِ دیالوگ).
+        lists_row = QHBoxLayout()
+        lists_row.setDirection(QHBoxLayout.LeftToRight)
+
+        erp_col = QVBoxLayout()
+        erp_title = QLabel("🗄️ مقدارهایِ نرم‌افزار")
+        erp_title.setAlignment(Qt.AlignRight)
+        erp_col.addWidget(erp_title)
+        self.erp_list = QListWidget()
+        self.erp_list.setLayoutDirection(Qt.RightToLeft)
+        self.erp_list.setMinimumHeight(280)
+        self.erp_list.setSelectionMode(QListWidget.SingleSelection)
+        self.erp_list.setItemDelegate(RightAlignedItemDelegate(self.erp_list))
+        erp_col.addWidget(self.erp_list)
+        lists_row.addLayout(erp_col, 1)
+
+        mid_col = QVBoxLayout()
+        mid_col.addStretch(1)
+        self.link_btn = QPushButton("🔗 لینک")
+        self.link_btn.setToolTip("مقدارِ انتخاب‌شده از هر دو ستون را به هم لینک می‌کند.")
+        self.link_btn.clicked.connect(self._link_selected)
+        mid_col.addWidget(self.link_btn)
+        self.unlink_btn = QPushButton("❌ حذفِ لینک")
+        self.unlink_btn.setToolTip("لینکِ دستیِ مقدارِ انتخاب‌شده از ستونِ نرم‌افزار را برمی‌دارد.")
+        self.unlink_btn.clicked.connect(self._unlink_selected)
+        mid_col.addWidget(self.unlink_btn)
+        mid_col.addStretch(1)
+        lists_row.addLayout(mid_col, 0)
+
+        site_col = QVBoxLayout()
+        site_title = QLabel("🛒 مقدارهایِ فروشگاه")
+        site_title.setAlignment(Qt.AlignRight)
+        site_col.addWidget(site_title)
+        self.site_list = QListWidget()
+        self.site_list.setLayoutDirection(Qt.RightToLeft)
+        self.site_list.setMinimumHeight(280)
+        self.site_list.setSelectionMode(QListWidget.SingleSelection)
+        self.site_list.setItemDelegate(RightAlignedItemDelegate(self.site_list))
+        site_col.addWidget(self.site_list)
+        lists_row.addLayout(site_col, 1)
+
+        root.addLayout(lists_row, 1)
 
         close_row = QHBoxLayout()
         close_row.addStretch(1)
@@ -183,7 +217,8 @@ class AttributeValueLinkDialog(QDialog):
     def _start_load(self):
         self.status_label.setText("در حالِ بارگذاریِ ویژگی‌ها از نرم‌افزار و فروشگاه…")
         self.reload_btn.setEnabled(False)
-        self.table.setRowCount(0)
+        self.erp_list.clear()
+        self.site_list.clear()
         self._worker = _LoadWorker(self.config)
         self._worker.done.connect(self._on_loaded)
         self._worker.start()
@@ -222,10 +257,17 @@ class AttributeValueLinkDialog(QDialog):
         if not restored and self.attr_combo.count():
             self.attr_combo.setCurrentIndex(0)
 
-        self._render_values_table()
+        self._render_value_lists()
 
-    def _render_values_table(self):
-        self.table.setRowCount(0)
+    def _current_site_attr_name(self) -> str | None:
+        attr_name = self.attr_combo.currentData()
+        if not attr_name:
+            return None
+        return _find_site_attr_match(attr_name, self._site_attrs.keys())
+
+    def _render_value_lists(self):
+        self.erp_list.clear()
+        self.site_list.clear()
         attr_name = self.attr_combo.currentData()
         if not attr_name:
             return
@@ -233,7 +275,7 @@ class AttributeValueLinkDialog(QDialog):
         from sync_app.core.attribute_value_links import list_value_links_for_attr
 
         erp_values = self._erp_attrs.get(attr_name) or []
-        site_attr_name = _find_site_attr_match(attr_name, self._site_attrs.keys())
+        site_attr_name = self._current_site_attr_name()
         site_values = self._site_attrs.get(site_attr_name, []) if site_attr_name else []
         site_keys = {_match_key(v): v for v in site_values}
         links = list_value_links_for_attr(attr_name)
@@ -242,57 +284,58 @@ class AttributeValueLinkDialog(QDialog):
             self.status_label.setText(
                 f"⚠️ ویژگیِ «{attr_name}» هنوز در فروشگاه نیست — اول از تبِ «ویژگی‌ها» سینکش کنید."
             )
+        else:
+            self.status_label.setText(
+                f"ویژگیِ فروشگاه: «{site_attr_name}» — {len(erp_values)} مقدارِ نرم‌افزار، "
+                f"{len(site_values)} مقدارِ فروشگاه."
+            )
 
-        self.table.setRowCount(len(erp_values))
-        for row, erp_value in enumerate(erp_values):
-            erp_item = QTableWidgetItem(erp_value)
-            erp_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            self.table.setItem(row, 0, erp_item)
-
+        for erp_value in erp_values:
             link_entry = links.get(_match_key(erp_value))
             exact_hit = site_keys.get(_match_key(erp_value))
-
             if exact_hit:
-                status_text = "✅ از قبل یکسان"
+                text = f"✅ {erp_value}"
+                tooltip = "از قبل با همین نام روی فروشگاه هست — نیازی به لینکِ دستی نیست."
             elif link_entry:
-                status_text = f"🔗 لینک‌شده: {link_entry.get('wc_label', '')}"
+                text = f"🔗 {erp_value}  ←  {link_entry.get('wc_label', '')}"
+                tooltip = "لینکِ دستی — با «❌ حذفِ لینک» می‌تونید بردارید."
             else:
-                status_text = "⚠️ نامنطبق"
-            status_item = QTableWidgetItem(status_text)
-            status_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            self.table.setItem(row, 1, status_item)
+                text = f"⚠️ {erp_value}"
+                tooltip = "نامنطبق — یک مقدار از ستونِ فروشگاه انتخاب کنید و «🔗 لینک» بزنید."
+            item = QListWidgetItem(text)
+            item.setData(Qt.UserRole, erp_value)
+            item.setToolTip(tooltip)
+            self.erp_list.addItem(item)
 
-            combo = QComboBox()
-            combo.setLayoutDirection(Qt.RightToLeft)
-            combo.addItem("— بدونِ لینک —", "")
-            current_index = 0
-            for i, sv in enumerate(site_values, start=1):
-                combo.addItem(sv, sv)
-                if link_entry and link_entry.get("wc_label") == sv:
-                    current_index = i
-            combo.setCurrentIndex(current_index)
-            combo.setEnabled(bool(site_values))
-            self.table.setCellWidget(row, 2, combo)
+        for sv in site_values:
+            item = QListWidgetItem(sv)
+            item.setData(Qt.UserRole, sv)
+            self.site_list.addItem(item)
 
-            action_btn = QPushButton("ذخیره")
-            action_btn.clicked.connect(
-                lambda _=False, r=row, a=attr_name, v=erp_value: self._save_row(r, a, v)
+    def _link_selected(self):
+        attr_name = self.attr_combo.currentData()
+        erp_item = self.erp_list.currentItem()
+        site_item = self.site_list.currentItem()
+        if not attr_name or not erp_item or not site_item:
+            QMessageBox.information(
+                self, "انتخاب نشده",
+                "یک مقدار از ستونِ نرم‌افزار و یک مقدار از ستونِ فروشگاه انتخاب کنید.",
             )
-            action_cell = QWidget()
-            action_layout = QHBoxLayout(action_cell)
-            action_layout.setContentsMargins(4, 0, 4, 0)
-            action_layout.addWidget(action_btn)
-            self.table.setCellWidget(row, 3, action_cell)
+            return
 
-        self.table.resizeRowsToContents()
+        from sync_app.core.attribute_value_links import set_value_link
 
-    def _save_row(self, row: int, attr_name: str, erp_value: str):
-        from sync_app.core.attribute_value_links import remove_value_link, set_value_link
+        set_value_link(attr_name, erp_item.data(Qt.UserRole), site_item.data(Qt.UserRole))
+        self._render_value_lists()
 
-        combo = self.table.cellWidget(row, 2)
-        chosen = combo.currentData() if isinstance(combo, QComboBox) else ""
-        if chosen:
-            set_value_link(attr_name, erp_value, chosen)
-        else:
-            remove_value_link(attr_name, erp_value)
-        self._render_values_table()
+    def _unlink_selected(self):
+        attr_name = self.attr_combo.currentData()
+        erp_item = self.erp_list.currentItem()
+        if not attr_name or not erp_item:
+            QMessageBox.information(self, "انتخاب نشده", "یک مقدار از ستونِ نرم‌افزار انتخاب کنید.")
+            return
+
+        from sync_app.core.attribute_value_links import remove_value_link
+
+        remove_value_link(attr_name, erp_item.data(Qt.UserRole))
+        self._render_value_lists()
