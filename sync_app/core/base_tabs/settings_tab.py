@@ -940,6 +940,67 @@ class SettingsTab(QWidget):
 
         restart_application()
 
+    def _refresh_site_recovery_list(self):
+        from sync_app.core.site_scope_recovery import list_site_scope_candidates
+
+        self.site_recovery_list.clear()
+        try:
+            candidates = list_site_scope_candidates()
+        except Exception:
+            candidates = []
+
+        if not candidates:
+            item = QListWidgetItem("هیچ پوشه‌یِ سایتِ دیگه‌ای پیدا نشد (چیزی برایِ بازیابی نیست)")
+            item.setFlags(Qt.NoItemFlags)
+            self.site_recovery_list.addItem(item)
+            return
+
+        for c in candidates:
+            when = datetime.fromtimestamp(c["newest_mtime"]).strftime("%Y-%m-%d %H:%M") if c["newest_mtime"] else "—"
+            size_kb = max(1, c["total_size"] // 1024)
+            label = f"{c['label']} — {c['file_count']} فایل، {size_kb} کیلوبایت، آخرین تغییر: {when}"
+            item = QListWidgetItem(label)
+            item.setData(Qt.UserRole, c["dir"])
+            self.site_recovery_list.addItem(item)
+
+    def _restore_selected_site_scope(self):
+        from sync_app.core.site_scope_recovery import adopt_site_scope
+
+        item = self.site_recovery_list.currentItem()
+        candidate_dir = item.data(Qt.UserRole) if item else None
+        if not candidate_dir:
+            QMessageBox.information(self, "انتخاب نشده", "اول یک پوشه را از لیست انتخاب کنید.")
+            return
+
+        confirm = QMessageBox.question(
+            self, "تأیید بازیابی",
+            "فایل‌هایِ تطبیق (محصول/دسته‌بندی) این پوشه رویِ سایتِ فعلی کپی می‌شن — "
+            "اگه الان هم چیزی در سایتِ فعلی بود، خودش قبلش خودکار بکاپ می‌شه. ادامه می‌دهید؟",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+
+        try:
+            result = adopt_site_scope(candidate_dir)
+        except Exception as exc:
+            QMessageBox.critical(self, "خطا در بازیابی", str(exc))
+            return
+
+        if not result.get("copied"):
+            QMessageBox.warning(self, "چیزی کپی نشد", "این پوشه فایلِ قابلِ‌بازیابی نداشت.")
+            return
+
+        msg = f"{len(result['copied'])} فایل بازیابی شد."
+        if result.get("backup_dir"):
+            msg += f"\nنسخه‌یِ قبلیِ سایتِ فعلی هم این‌جا بکاپ شد:\n{result['backup_dir']}"
+        msg += "\n\nبرنامه الان ریستارت می‌شود تا تب‌ها با دادهٔ تازه بارگذاری شوند."
+        QMessageBox.information(self, "بازیابی انجام شد", msg)
+
+        from sync_app.core.app_restart import restart_application
+
+        restart_application()
+
     def _resolve_sql_auth_mode_for_save(self, existing_config):
         auth_mode = self._last_success_sql_auth_mode
         if auth_mode in ["sql", "windows"]:
@@ -2292,6 +2353,41 @@ class SettingsTab(QWidget):
         self.backup_group = backup_group
         self._refresh_backup_list()
 
+        # ── بازیابیِ لینک‌هایِ تطبیقِ یک سایتِ قدیمی ───────────────────
+        # وقتی آدرسِ سایت/ERP/پروفایل عوض بشه، برنامه فایل‌هایِ نگاشتِ
+        # سایتِ قبلی (تطبیق‌هایِ محصول/دسته‌بندی) رو دیگه پیدا نمی‌کنه —
+        # در یک پوشه‌یِ «یتیم»ِ دیگه سالم موندن، نه پاک شدن. این بخش
+        # همه‌یِ پوشه‌هایِ یتیمِ موجود رو نشون می‌ده تا بدونِ تطبیقِ دستیِ
+        # دوباره، به‌عنوانِ سایتِ فعلی بازیابی بشن.
+        site_recovery_group = QGroupBox("🔗 بازیابیِ لینک‌هایِ تطبیقِ سایتِ قبلی")
+        site_recovery_layout = QVBoxLayout()
+        site_recovery_hint = QLabel(
+            "اگه بعدِ تغییرِ آدرسِ سایت/ERP/پروفایل، تطبیق‌هایِ قبلی (محصول/دسته‌بندی) ناپدید شدن، "
+            "معمولاً گم نشدن — فقط زیرِ یک شناسه‌یِ دیگه مونده‌ن. از این لیست انتخاب و بازیابی کنید "
+            "(نسخه‌یِ فعلی قبلش خودکار بکاپ می‌شه)."
+        )
+        site_recovery_hint.setWordWrap(True)
+        site_recovery_hint.setStyleSheet("color:#64748b; font-size:10px;")
+        site_recovery_layout.addWidget(site_recovery_hint)
+
+        self.site_recovery_list = QListWidget()
+        self.site_recovery_list.setMaximumHeight(140)
+        site_recovery_layout.addWidget(self.site_recovery_list)
+
+        site_recovery_btn_row = QHBoxLayout()
+        self.site_recovery_refresh_btn = QPushButton("🔄 بروزرسانی لیست")
+        self.site_recovery_refresh_btn.clicked.connect(self._refresh_site_recovery_list)
+        site_recovery_btn_row.addWidget(self.site_recovery_refresh_btn)
+        self.site_recovery_restore_btn = QPushButton("↩️ بازیابیِ نسخه‌یِ انتخاب‌شده")
+        self.site_recovery_restore_btn.clicked.connect(self._restore_selected_site_scope)
+        site_recovery_btn_row.addWidget(self.site_recovery_restore_btn)
+        site_recovery_btn_row.addStretch()
+        site_recovery_layout.addLayout(site_recovery_btn_row)
+
+        site_recovery_group.setLayout(site_recovery_layout)
+        self.site_recovery_group = site_recovery_group
+        self._refresh_site_recovery_list()
+
         wc_page_scroll = self._build_settings_page([self.wc_group])
         self.scroll_area = wc_page_scroll
 
@@ -2309,7 +2405,9 @@ class SettingsTab(QWidget):
             "🔔 اعلان‌ها و هوش مصنوعی",
         )
         self.settings_sub_tabs.addTab(
-            self._build_settings_page([self.monitor_group, self.license_group, self.backup_group]),
+            self._build_settings_page(
+                [self.monitor_group, self.license_group, self.backup_group, self.site_recovery_group]
+            ),
             "🛡️ سیستم",
         )
 
