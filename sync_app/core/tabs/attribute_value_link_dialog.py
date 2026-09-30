@@ -159,6 +159,18 @@ class AttributeValueLinkDialog(QDialog):
         top_row.addWidget(self.site_attr_combo)
 
         top_row.addStretch(1)
+
+        filter_label = QLabel("نمایش:")
+        self.filter_combo = QComboBox()
+        self.filter_combo.setLayoutDirection(Qt.RightToLeft)
+        self.filter_combo.setMinimumWidth(130)
+        self.filter_combo.addItem("همه", "all")
+        self.filter_combo.addItem("فقط لینک‌نشده‌ها", "unlinked")
+        self.filter_combo.addItem("فقط لینک‌شده‌ها", "linked")
+        self.filter_combo.currentIndexChanged.connect(self._render_value_lists)
+        top_row.addWidget(filter_label)
+        top_row.addWidget(self.filter_combo)
+
         self.reload_btn = QPushButton("🔄 بازخوانی")
         self.reload_btn.clicked.connect(self._start_load)
         top_row.addWidget(self.reload_btn)
@@ -331,9 +343,26 @@ class AttributeValueLinkDialog(QDialog):
                 f"{len(site_values)} مقدارِ فروشگاه."
             )
 
+        # برایِ نشانه‌گذاریِ سمتِ فروشگاه: کدوم مقدارهایِ سایت هدفِ یک لینکِ
+        # دستی‌ان (شاید چند مقدارِ ERP به یک termِ سایت لینک شده باشن — مثلاً
+        # «سرخ» و «جگری» هر دو به «Red» — پس یک لیست نگه می‌داریم، نه یک مقدار).
+        site_linked_from: dict[str, list[str]] = {}
+        for entry in links.values():
+            wc_label = entry.get("wc_label")
+            erp_label = entry.get("erp_label") or ""
+            if wc_label:
+                site_linked_from.setdefault(wc_label, []).append(erp_label)
+
+        show_filter = self.filter_combo.currentData() or "all"
+
         for erp_value in erp_values:
             link_entry = links.get(_match_key(erp_value))
             exact_hit = site_keys.get(_match_key(erp_value))
+            is_linked = bool(exact_hit or link_entry)
+            if show_filter == "linked" and not is_linked:
+                continue
+            if show_filter == "unlinked" and is_linked:
+                continue
             if exact_hit:
                 text = f"✅ {erp_value}"
                 tooltip = "از قبل با همین نام روی فروشگاه هست — نیازی به لینکِ دستی نیست."
@@ -349,8 +378,17 @@ class AttributeValueLinkDialog(QDialog):
             self.erp_list.addItem(item)
 
         for sv in site_values:
-            item = QListWidgetItem(sv)
+            sources = site_linked_from.get(sv) or []
+            if sources:
+                text = f"🔗 {sv}  ←  {', '.join(sources)}"
+                tooltip = f"لینکِ دستیِ {len(sources)} مقدارِ نرم‌افزار به این term: {', '.join(sources)}"
+            else:
+                text = sv
+                tooltip = ""
+            item = QListWidgetItem(text)
             item.setData(Qt.UserRole, sv)
+            if tooltip:
+                item.setToolTip(tooltip)
             self.site_list.addItem(item)
 
     def _link_selected(self):
@@ -364,9 +402,39 @@ class AttributeValueLinkDialog(QDialog):
             )
             return
 
-        from sync_app.core.attribute_value_links import set_value_link
+        from sync_app.core.attribute_value_links import list_value_links_for_attr, set_value_link
 
-        set_value_link(attr_name, erp_item.data(Qt.UserRole), site_item.data(Qt.UserRole))
+        erp_value = erp_item.data(Qt.UserRole)
+        site_value = site_item.data(Qt.UserRole)
+
+        links = list_value_links_for_attr(attr_name)
+        existing = links.get(_match_key(erp_value))
+        if existing and existing.get("wc_label") and existing.get("wc_label") != site_value:
+            confirm = QMessageBox.question(
+                self, "جایگزینیِ لینکِ قبلی",
+                f"«{erp_value}» از قبل به «{existing.get('wc_label')}» لینک شده.\n"
+                f"لینکِ قبلی حذف و به‌جاش به «{site_value}» لینک بشه؟",
+                QMessageBox.Yes | QMessageBox.No,
+            )
+            if confirm != QMessageBox.Yes:
+                return
+
+        already_targeted_by = [
+            entry.get("erp_label")
+            for key, entry in links.items()
+            if entry.get("wc_label") == site_value and key != _match_key(erp_value)
+        ]
+        if already_targeted_by:
+            confirm2 = QMessageBox.question(
+                self, "لینکِ چندگانه به یک term",
+                f"«{site_value}» از قبل به‌عنوانِ معادلِ «{'، '.join(already_targeted_by)}» هم لینک شده.\n"
+                f"اگه مطمئنید «{erp_value}» هم دقیقاً همین termه، ادامه بدید.",
+                QMessageBox.Yes | QMessageBox.No,
+            )
+            if confirm2 != QMessageBox.Yes:
+                return
+
+        set_value_link(attr_name, erp_value, site_value)
         self._render_value_lists()
 
     def _unlink_selected(self):
