@@ -224,17 +224,25 @@ def _resolve_woo_dim_labels_list(
     global_ids: dict,
     erp_labels: list[str],
 ) -> list[str]:
-    """برچسب‌های ERP را به نام attributeهای global Woo وصل می‌کند."""
+    """برچسب‌های ERP را به نام attributeهای global Woo وصل می‌کند.
+
+    خروجی دقیقاً هم‌طولِ erp_labels است (برایِ ویژگیِ بی‌نظیر، "" برمی‌گرده)
+    تا جایگاهِ هر برچسب حفظ بشه — صداکننده‌ها (_remap_attr_names_to_woo/
+    _remap_variation_attr_names) بر اساسِ همین ایندکس جفت می‌سازن؛ اگه این‌جا
+    ویژگی‌هایِ بی‌نظیر حذف می‌شدن، ایندکس‌ها جابه‌جا می‌شدن و مثلاً «جنس»یِ
+    ERP به‌اشتباه به برچسبِ «رنگ»یِ Woo مپ می‌شد."""
     resolved: list[str] = []
     for erp in erp_labels or []:
         name = str(erp or "").strip()
         if not name:
+            resolved.append("")
             continue
         meta = _lookup_global_attr_meta(global_ids, name)
         if meta:
             resolved.append(_woo_attr_label(meta, name))
         else:
             log.info(f"ℹ️ ویژگی «{name}» در Woo نیست — از sync حذف شد.")
+            resolved.append("")
     return resolved
 
 
@@ -1805,7 +1813,8 @@ def sync_product_variations(
             global_ids = _fetch_global_attribute_ids(wcapi)
 
         woo_dim_labels = _resolve_woo_dim_labels_list(global_ids, erp_dim_labels)
-        if not woo_dim_labels:
+        woo_dim_labels_matched = sum(1 for x in woo_dim_labels if x)
+        if not woo_dim_labels_matched:
             woo_names = ", ".join(
                 str(m.get("name") or k) for k, m in list(global_ids.items())[:6]
             )
@@ -1817,11 +1826,11 @@ def sync_product_variations(
             _LAST_VARIATION_FAIL_HINTS[a_code] = hint
             log.warning(f"⚠️ [{a_code}] {hint}")
             return False
-        if len(woo_dim_labels) < len(erp_dim_labels):
+        if woo_dim_labels_matched < len(erp_dim_labels):
             from sync_app.core.integrations.erp_provider import erp_provider_label
 
             log.info(
-                f"ℹ️ [{a_code}] {len(woo_dim_labels)} ویژگی از {len(erp_dim_labels)} "
+                f"ℹ️ [{a_code}] {woo_dim_labels_matched} ویژگی از {len(erp_dim_labels)} "
                 f"سطح {erp_provider_label(config)} روی Woo هست."
             )
 
