@@ -96,3 +96,70 @@ def resolve_value_link(links: dict, attr_label: str, erp_value_label: str) -> st
     if entry and entry.get("wc_label"):
         return entry["wc_label"]
     return erp_value_label
+
+
+# ── نگاشتِ ویژگیِ نرم‌افزار → ویژگیِ فروشگاه (برایِ دیالوگِ لینکِ مقادیر) ──
+# مستقل از لینکِ خودِ مقادیر — این‌جا فقط ثبت می‌شه که کدوم ویژگیِ ERP با
+# کدوم ویژگیِ فروشگاه باید مقایسه بشه (چون نامِ دو طرف ممکنه کاملاً
+# متفاوت باشه و تطبیقِ خودکار نتونه حدس بزنه).
+
+_PAIRING_FILE = "attribute_pairing.json"
+
+
+def load_attr_pairing() -> dict:
+    """{erp_attr_key: {"erp_label": str, "site_label": str}}"""
+    try:
+        path = site_scoped_path(_PAIRING_FILE)
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except Exception:
+        pass
+    return {}
+
+
+def save_attr_pairing(pairing: dict) -> None:
+    try:
+        path = site_scoped_path(_PAIRING_FILE)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(pairing or {}, f, ensure_ascii=False, indent=2)
+    except Exception as exc:
+        log.warning(f"⚠️ ذخیره attribute_pairing.json ناموفق: {exc}")
+
+
+def set_attr_pairing(erp_attr_label: str, site_attr_label: str) -> None:
+    key = _key(erp_attr_label)
+    site_label = str(site_attr_label or "").strip()
+    if not key or not site_label:
+        return
+    pairing = load_attr_pairing()
+    pairing[key] = {"erp_label": str(erp_attr_label or "").strip(), "site_label": site_label}
+    save_attr_pairing(pairing)
+
+
+def remove_attr_pairing(erp_attr_label: str) -> None:
+    key = _key(erp_attr_label)
+    pairing = load_attr_pairing()
+    if key in pairing:
+        del pairing[key]
+        save_attr_pairing(pairing)
+
+
+def get_attr_pairing(erp_attr_label: str) -> str | None:
+    entry = load_attr_pairing().get(_key(erp_attr_label))
+    return entry.get("site_label") if entry else None
+
+
+def find_erp_attr_paired_to_site(site_attr_label: str, *, exclude_erp_label: str = "") -> str | None:
+    """اگه یک ویژگیِ نرم‌افزارِ دیگه (غیر از exclude_erp_label) از قبل به
+    همین ویژگیِ فروشگاه لینک شده، برچسبِ (نمایشیِ) همون ویژگیِ ERP رو
+    برمی‌گردونه — برایِ هشدارِ تداخل قبلِ لینک‌کردنِ یک ویژگیِ دومِ ERP به
+    همون ویژگیِ فروشگاه."""
+    exclude_key = _key(exclude_erp_label) if exclude_erp_label else ""
+    for key, entry in load_attr_pairing().items():
+        if exclude_key and key == exclude_key:
+            continue
+        if entry.get("site_label") == site_attr_label:
+            return entry.get("erp_label")
+    return None

@@ -155,6 +155,7 @@ class AttributeValueLinkDialog(QDialog):
             "این‌جا دستی انتخاب کنید کدوم ویژگیِ فروشگاه معادلشه."
         )
         self.site_attr_combo.currentIndexChanged.connect(self._render_value_lists)
+        self.site_attr_combo.activated.connect(self._on_site_attr_picked_by_user)
         top_row.addWidget(site_attr_label)
         top_row.addWidget(self.site_attr_combo)
 
@@ -303,19 +304,66 @@ class AttributeValueLinkDialog(QDialog):
         self._render_value_lists()
 
     def _auto_select_site_attr(self):
-        """موقعِ تغییرِ ویژگیِ نرم‌افزار، اگه یک ویژگیِ هم‌نام/نزدیک در فروشگاه
-        پیدا شد، خودکار انتخابش می‌کنه — ولی کاربر همیشه می‌تونه دستی عوضش
-        کنه (این فقط یک پیشنهاد است، نه یک محدودیت)."""
+        """موقعِ تغییرِ ویژگیِ نرم‌افزار، اول دنبالِ یک انتخابِ دستیِ ذخیره‌شده
+        (از سینکِ قبلی) می‌گرده؛ اگه نبود، با یک ویژگیِ هم‌نام/نزدیک در
+        فروشگاه حدس می‌زنه — ولی کاربر همیشه می‌تونه دستی عوضش کنه."""
         attr_name = self.attr_combo.currentData()
-        guess = _find_site_attr_match(attr_name, self._site_attrs.keys()) if attr_name else None
+        saved = None
+        if attr_name:
+            from sync_app.core.attribute_value_links import get_attr_pairing
+
+            saved = get_attr_pairing(attr_name)
+            if saved and saved not in self._site_attrs:
+                saved = None
+        guess = saved or (_find_site_attr_match(attr_name, self._site_attrs.keys()) if attr_name else None)
         self.site_attr_combo.blockSignals(True)
         if guess:
             idx = self.site_attr_combo.findData(guess)
             if idx >= 0:
                 self.site_attr_combo.setCurrentIndex(idx)
+            else:
+                self.site_attr_combo.setCurrentIndex(0)
         else:
             self.site_attr_combo.setCurrentIndex(0)
         self.site_attr_combo.blockSignals(False)
+
+    def _on_site_attr_picked_by_user(self, _index: int):
+        """فقط با انتخابِ دستیِ کاربر صدا زده می‌شه (نه با حدسِ خودکار) —
+        اگه این ویژگیِ فروشگاه از قبل به یک ویژگیِ نرم‌افزارِ دیگه لینک
+        شده، هشدارِ تداخل می‌ده؛ وگرنه انتخاب رو ذخیره می‌کنه تا دفعه‌یِ
+        بعد هم همینو پیشنهاد بده."""
+        attr_name = self.attr_combo.currentData()
+        site_attr_name = self.site_attr_combo.currentData()
+        if not attr_name:
+            return
+
+        from sync_app.core.attribute_value_links import (
+            find_erp_attr_paired_to_site,
+            remove_attr_pairing,
+            set_attr_pairing,
+        )
+
+        if not site_attr_name:
+            remove_attr_pairing(attr_name)
+            return
+
+        conflict = find_erp_attr_paired_to_site(site_attr_name, exclude_erp_label=attr_name)
+        if conflict:
+            confirm = QMessageBox.question(
+                self, "تداخلِ لینکِ ویژگی",
+                f"ویژگیِ فروشگاهِ «{site_attr_name}» از قبل به ویژگیِ نرم‌افزارِ «{conflict}» "
+                "لینک شده.\n"
+                f"اگه «{attr_name}» رو هم به همین ویژگی لینک کنید، هر دو ویژگیِ نرم‌افزار با "
+                "همین یک ویژگیِ فروشگاه مقایسه می‌شن — معمولاً این اشتباهه، مگر این‌که عمدی باشه "
+                "(مثلاً دو تا ویژگیِ ERP که باید هر دو یکی حساب بشن). ادامه بدید؟",
+                QMessageBox.Yes | QMessageBox.No,
+            )
+            if confirm != QMessageBox.Yes:
+                self._auto_select_site_attr()
+                self._render_value_lists()
+                return
+
+        set_attr_pairing(attr_name, site_attr_name)
 
     def _render_value_lists(self):
         self.erp_list.clear()
