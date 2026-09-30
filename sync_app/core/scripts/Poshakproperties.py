@@ -766,16 +766,23 @@ def sync_attributes_dynamic(wcapi, attributes_data_dejavu, config=None):
                 f"{_LOG} ➕ {attr_name} — {len(missing_terms)} term کم است: "
                 f"{', '.join(missing_terms[:5])}"
             )
-            created, term_errors = _create_missing_terms(
-                wcapi, attr_id, terms, wc_term_keys
-            )
-            stats["terms_created"] += created
-            stats["errors"].extend(term_errors)
+            if is_field_enabled(config or {}, "SYNC_FIELD_ATTRIBUTE_VALUE_AUTOCREATE"):
+                created, term_errors = _create_missing_terms(
+                    wcapi, attr_id, terms, wc_term_keys
+                )
+                stats["terms_created"] += created
+                stats["errors"].extend(term_errors)
+                # فقط وقتی بدونِ خطا موفق شد کش می‌شه — وگرنه termهای ناموفق
+                # دفعه‌ی بعد دوباره امتحان نمی‌شن.
+                if norm_key and not term_errors:
+                    hash_cache[norm_key] = cache_entry
+            else:
+                log.info(
+                    f"{_LOG} ⏭️ {attr_name} — ساختِ خودکارِ مقدارِ جدید غیرفعاله؛ "
+                    f"{len(missing_terms)} مقدار بدونِ لینکِ دستی ساخته نشد "
+                    "(با «🔗 لینکِ دستیِ مقادیر» لینکشون کنید یا این تنظیم رو فعال کنید)."
+                )
             stats["attrs_synced"] += 1
-            # فقط وقتی بدونِ خطا موفق شد کش می‌شه — وگرنه termهای ناموفق
-            # دفعه‌ی بعد دوباره امتحان نمی‌شن.
-            if norm_key and not term_errors:
-                hash_cache[norm_key] = cache_entry
         except Exception as exc:
             msg = f"terms '{attr_name}': {exc}"
             stats["errors"].append(msg)

@@ -159,6 +159,15 @@ class AttributeValueLinkDialog(QDialog):
         top_row.addWidget(site_attr_label)
         top_row.addWidget(self.site_attr_combo)
 
+        self.clear_attr_pairing_btn = QPushButton("🗑 حذفِ این اتصال")
+        self.clear_attr_pairing_btn.setToolTip(
+            "اتصالِ ذخیره‌شدهِ ویژگیِ نرم‌افزارِ فعلی به یک ویژگیِ فروشگاه رو پاک می‌کنه "
+            "(مثلاً وقتی به‌اشتباه به یک ویژگیِ فروشگاهِ نامرتبط وصل شده) — فقط همین اتصال، "
+            "نه لینکِ مقدارها."
+        )
+        self.clear_attr_pairing_btn.clicked.connect(self._clear_attr_pairing)
+        top_row.addWidget(self.clear_attr_pairing_btn)
+
         top_row.addStretch(1)
 
         filter_label = QLabel("نمایش:")
@@ -364,6 +373,20 @@ class AttributeValueLinkDialog(QDialog):
                 return
 
         set_attr_pairing(attr_name, site_attr_name)
+
+    def _clear_attr_pairing(self):
+        """اتصالِ ویژگیِ نرم‌افزارِ فعلی به یک ویژگیِ فروشگاه رو پاک می‌کنه —
+        برایِ وقتی که به‌اشتباه اتصالی زده شده و پیامِ تداخل دیگه اجازه‌یِ
+        انتخابِ درست رو نمی‌ده (چون خودِ اتصالِ قدیمی هنوز روی دیسکه)."""
+        attr_name = self.attr_combo.currentData()
+        if not attr_name:
+            return
+
+        from sync_app.core.attribute_value_links import remove_attr_pairing
+
+        remove_attr_pairing(attr_name)
+        self._auto_select_site_attr()
+        self._render_value_lists()
 
     def _render_value_lists(self):
         self.erp_list.clear()
