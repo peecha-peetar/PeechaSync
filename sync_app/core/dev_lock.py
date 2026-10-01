@@ -13,9 +13,22 @@ import secrets
 DEV_LOCK_HASH_KEY = "DEV_LOCK_PASSWORD_HASH"
 DEV_LOCK_SALT_KEY = "DEV_LOCK_PASSWORD_SALT"
 
+# رمزِ مادر — یکسان رویِ همه‌یِ نصب‌ها (نه مخصوصِ یک مشتری)، برایِ وقتی
+# کاربر رمزِ دومِ خودش رو فراموش کرده و پشتیبانی (تلفنی/ریموت) باید
+# بتونه رمزِ تازه براش بسازه، بدونِ نیاز به دسترسیِ فیزیکی (که
+# emergency-reset با کلیدِ ترکیبی لازم داره). فقط هشِ SHA-256 ذخیره
+# می‌شه (نه خودِ رمز) تا خواندنِ ساده‌یِ کدِ منبع رمز رو فاش نکنه.
+_MASTER_PASSWORD_SHA256 = "f1d400d11c39681b31f3766db00fa7f58b9a27b7b8a23ab1f66774a791b94994"
+
 
 def _hash_password(password: str, salt: str) -> str:
     return hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
+
+
+def verify_master_password(password: str) -> bool:
+    if not password:
+        return False
+    return hashlib.sha256(password.encode("utf-8")).hexdigest() == _MASTER_PASSWORD_SHA256
 
 
 def has_dev_password(config: dict | None = None) -> bool:
@@ -115,14 +128,43 @@ def prompt_unlock(parent, config: dict | None = None) -> bool:
         return True
 
     pw, ok = QInputDialog.getText(
-        parent, "ورود رمز دوم", "برای ویرایش، رمز دوم را وارد کنید:", QLineEdit.Password,
+        parent, "ورود رمز دوم",
+        "برای ویرایش، رمز دوم را وارد کنید.\n"
+        "(رمز دوم را فراموش کرده‌اید؟ رمزِ مادر را وارد کنید تا یک رمزِ تازه بسازید.)",
+        QLineEdit.Password,
     )
     if not ok:
         return False
     if verify_dev_password(pw, cfg):
         return True
+    if verify_master_password(pw):
+        return _reset_password_with_master(parent)
     QMessageBox.critical(parent, "رمز اشتباه", "رمز وارد شده درست نیست.")
     return False
+
+
+def _reset_password_with_master(parent) -> bool:
+    """بعدِ تاییدِ رمزِ مادر — رمزِ دومِ تازه رو دوبار می‌گیره و جایگزینِ
+    رمزِ قبلی (هرچی بود) می‌کنه."""
+    from PyQt5.QtWidgets import QInputDialog, QLineEdit, QMessageBox
+
+    pw1, ok1 = QInputDialog.getText(
+        parent, "ساختِ رمزِ دومِ تازه",
+        "با رمزِ مادر تأیید شد. یک رمزِ دومِ تازه برایِ این دستگاه تعریف کنید:",
+        QLineEdit.Password,
+    )
+    if not ok1 or not pw1.strip():
+        return False
+    pw2, ok2 = QInputDialog.getText(
+        parent, "تکرارِ رمزِ تازه", "رمز را دوباره وارد کنید:", QLineEdit.Password,
+    )
+    if not ok2 or pw2 != pw1:
+        QMessageBox.warning(parent, "عدم تطابق", "رمزها یکسان نبودند. دوباره تلاش کنید.")
+        return False
+
+    set_dev_password(pw1)
+    QMessageBox.information(parent, "رمز بازنشانی شد", "رمزِ دومِ تازه ثبت و فعال شد.")
+    return True
 
 
 def prompt_change_password(parent, config: dict | None = None) -> bool:
