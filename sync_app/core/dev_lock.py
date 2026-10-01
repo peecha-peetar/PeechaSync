@@ -128,10 +128,7 @@ def prompt_unlock(parent, config: dict | None = None) -> bool:
         return True
 
     pw, ok = QInputDialog.getText(
-        parent, "ورود رمز دوم",
-        "برای ویرایش، رمز دوم را وارد کنید.\n"
-        "(رمز دوم را فراموش کرده‌اید؟ رمزِ مادر را وارد کنید تا یک رمزِ تازه بسازید.)",
-        QLineEdit.Password,
+        parent, "ورود رمز دوم", "برای ویرایش، رمز دوم را وارد کنید:", QLineEdit.Password,
     )
     if not ok:
         return False
@@ -150,7 +147,7 @@ def _reset_password_with_master(parent) -> bool:
 
     pw1, ok1 = QInputDialog.getText(
         parent, "ساختِ رمزِ دومِ تازه",
-        "با رمزِ مادر تأیید شد. یک رمزِ دومِ تازه برایِ این دستگاه تعریف کنید:",
+        "یک رمزِ دومِ تازه برایِ این دستگاه تعریف کنید:",
         QLineEdit.Password,
     )
     if not ok1 or not pw1.strip():
