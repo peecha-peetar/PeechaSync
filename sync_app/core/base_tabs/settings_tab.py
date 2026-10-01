@@ -1001,6 +1001,64 @@ class SettingsTab(QWidget):
 
         restart_application()
 
+    def _export_full_backup(self):
+        import datetime
+
+        default_name = f"PeechaSync-backup-{datetime.datetime.now().strftime('%Y%m%d-%H%M')}.zip"
+        path, _ = QFileDialog.getSaveFileName(self, "ذخیره‌یِ خروجیِ کامل", default_name, "Zip Files (*.zip)")
+        if not path:
+            return
+        if not path.lower().endswith(".zip"):
+            path += ".zip"
+
+        try:
+            from sync_app.core.full_data_backup import export_full_backup
+
+            result = export_full_backup(path)
+        except Exception as exc:
+            QMessageBox.critical(self, "خطا در خروجی‌گیری", str(exc))
+            return
+
+        size_mb = result["total_size"] / (1024 * 1024)
+        QMessageBox.information(
+            self, "خروجی گرفته شد",
+            f"{result['file_count']} فایل ({size_mb:.1f} مگابایت) در این مسیر ذخیره شد:\n{result['path']}\n\n"
+            "⚠️ این فایل شاملِ اطلاعاتِ حساس است (رمزِ دیتابیس، کلیدهایِ API) — جایِ امن نگه دارید.",
+        )
+
+    def _import_full_backup(self):
+        path, _ = QFileDialog.getOpenFileName(self, "انتخابِ فایلِ بکاپِ کامل", "", "Zip Files (*.zip)")
+        if not path:
+            return
+
+        confirm = QMessageBox.question(
+            self, "تأیید بازگردانی",
+            "محتوایِ این فایل رویِ دادهٔ فعلیِ برنامه (تنظیمات + همه‌یِ لینک‌هایِ تطبیقِ همه‌یِ "
+            "سایت‌ها) رونویسی می‌شه — نسخه‌یِ فعلی قبلش خودکار بکاپ می‌شه. بعدش برنامه ریستارت "
+            "می‌شه. ادامه می‌دهید؟",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+
+        try:
+            from sync_app.core.full_data_backup import import_full_backup
+
+            result = import_full_backup(path)
+        except Exception as exc:
+            QMessageBox.critical(self, "خطا در بازگردانی", str(exc))
+            return
+
+        msg = f"{result['extracted']} فایل بازگردانی شد."
+        if result.get("backup_dir"):
+            msg += f"\nنسخه‌یِ قبلی این‌جا بکاپ شد:\n{result['backup_dir']}"
+        msg += "\n\nبرنامه الان ریستارت می‌شود."
+        QMessageBox.information(self, "بازگردانی انجام شد", msg)
+
+        from sync_app.core.app_restart import restart_application
+
+        restart_application()
+
     def _resolve_sql_auth_mode_for_save(self, existing_config):
         auth_mode = self._last_success_sql_auth_mode
         if auth_mode in ["sql", "windows"]:
@@ -2388,6 +2446,37 @@ class SettingsTab(QWidget):
         self.site_recovery_group = site_recovery_group
         self._refresh_site_recovery_list()
 
+        # ── پشتیبان‌گیریِ کاملِ پوشه‌یِ دادهٔ برنامه (برایِ فرمت/ریست/تعویضِ سیستم) ──
+        # بکاپِ خودکارِ بالا و بازیابیِ scopeِ سایت هر دو داخلِ همین پوشه‌ن —
+        # اگه کلِ پوشه پاک بشه (نه فقط خودِ برنامه)، هیچ‌کدوم کمکی نمی‌کنن.
+        # این بخش یک خروجیِ کاملِ قابلِ‌ذخیره‌یِ بیرون از سیستم می‌سازه.
+        full_backup_group = QGroupBox("📦 پشتیبان‌گیریِ کامل (برایِ نصبِ مجدد/فرمت)")
+        full_backup_layout = QVBoxLayout()
+        full_backup_hint = QLabel(
+            "بکاپِ خودکارِ بالا و «بازیابیِ لینک‌هایِ سایتِ قبلی» فقط داخلِ همین "
+            "پوشه‌یِ دادهٔ برنامه کار می‌کنن — اگه کلِ این پوشه (مثلاً با فرمت/ریستِ "
+            "ویندوز یا تعویضِ سیستم) پاک بشه، اون‌ها هم از بین می‌رن. این‌جا می‌تونید "
+            "یک خروجیِ کامل (تنظیمات + همه‌یِ لینک‌هایِ تطبیقِ همه‌یِ سایت‌ها) بگیرید "
+            "و جایی بیرون از سیستم (فلش/ابر) نگه دارید.\n"
+            "⚠️ این فایل شاملِ اطلاعاتِ حساس (رمزِ دیتابیس، کلیدهایِ API) است — جایِ امن نگه دارید."
+        )
+        full_backup_hint.setWordWrap(True)
+        full_backup_hint.setStyleSheet("color:#64748b; font-size:10px;")
+        full_backup_layout.addWidget(full_backup_hint)
+
+        full_backup_btn_row = QHBoxLayout()
+        self.full_backup_export_btn = QPushButton("📤 خروجیِ کامل...")
+        self.full_backup_export_btn.clicked.connect(self._export_full_backup)
+        full_backup_btn_row.addWidget(self.full_backup_export_btn)
+        self.full_backup_import_btn = QPushButton("📥 بازگردانیِ کامل از فایل...")
+        self.full_backup_import_btn.clicked.connect(self._import_full_backup)
+        full_backup_btn_row.addWidget(self.full_backup_import_btn)
+        full_backup_btn_row.addStretch()
+        full_backup_layout.addLayout(full_backup_btn_row)
+
+        full_backup_group.setLayout(full_backup_layout)
+        self.full_backup_group = full_backup_group
+
         wc_page_scroll = self._build_settings_page([self.wc_group])
         self.scroll_area = wc_page_scroll
 
@@ -2406,7 +2495,10 @@ class SettingsTab(QWidget):
         )
         self.settings_sub_tabs.addTab(
             self._build_settings_page(
-                [self.monitor_group, self.license_group, self.backup_group, self.site_recovery_group]
+                [
+                    self.monitor_group, self.license_group, self.backup_group,
+                    self.site_recovery_group, self.full_backup_group,
+                ]
             ),
             "🛡️ سیستم",
         )
