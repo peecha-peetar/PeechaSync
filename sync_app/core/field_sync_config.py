@@ -31,6 +31,16 @@ CATEGORY_FIELDS = [
 ATTRIBUTE_FIELDS = [
     ("SYNC_FIELD_ATTRIBUTE_NAME", "نام ویژگی / ترم", True),
     ("SYNC_FIELD_ATTRIBUTE_SLUG", "Slug ویژگی / ترم", True),
+    (
+        "SYNC_FIELD_ATTRIBUTE_VALUE_AUTORENAME",
+        "تغییرِ خودکارِ نامِ مقدارِ مشابه در فروشگاه (بر اساسِ شباهتِ متنی)",
+        True,
+    ),
+    (
+        "SYNC_FIELD_ATTRIBUTE_VALUE_AUTOCREATE",
+        "ساختِ خودکارِ مقدارهایِ جدید که لینکِ دستی/تطبیقِ خودکار ندارن",
+        True,
+    ),
 ]
 
 # متغیر (واریانت)

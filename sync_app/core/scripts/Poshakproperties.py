@@ -453,9 +453,27 @@ def _rename_term_if_needed(wcapi, attr_id, term_id, new_name):
         return False
 
 
+def _apply_value_links_to_terms(attr_name: str, terms: set, value_links: dict) -> set:
+    """مقدارهایی که کاربر دستی به یک termِ سایت گره زده رو با همون نامِ
+    سایت جایگزین می‌کنه — از این به بعد «از قبل موجود» حساب می‌شن، نه
+    missing (بدونِ ساختِ تکراری) و نه کاندیدِ fuzzy-rename (چون اسمِ سایت
+    خودش تویِ لیستِ ERP حساب می‌شه)."""
+    if not value_links or not terms:
+        return terms
+    from sync_app.core.attribute_value_links import resolve_value_link
+
+    return {resolve_value_link(value_links, attr_name, t) for t in terms}
+
+
 def _sync_renamed_terms(wcapi, attr_id, erp_terms, wc_terms, wc_term_keys, config=None):
-    """وقتی نام term در ERP عوض شده، همان term قدیمی Woo را rename می‌کند."""
-    if not is_field_enabled(config or {}, "SYNC_FIELD_ATTRIBUTE_NAME"):
+    """وقتی نام term در ERP عوض شده، همان term قدیمی Woo را rename می‌کند.
+
+    این کار بر اساسِ شباهتِ متنیِ فازیه (نه تطابقِ دقیق) — یعنی می‌تونه
+    گاهی یک termِ کاملاً نامرتبط رو هم به‌اشتباه rename کنه؛ به همین خاطر
+    کلیدِ تنظیماتش از SYNC_FIELD_ATTRIBUTE_NAME (که خودِ نامِ ویژگی رو
+    مدیریت می‌کنه) جداست تا کاربر بتونه این بخشِ ریسک‌دار رو مستقل
+    خاموش کنه، بدونِ اینکه سینکِ عادیِ نامِ ویژگی/termهایِ جدید هم خاموش بشه."""
+    if not is_field_enabled(config or {}, "SYNC_FIELD_ATTRIBUTE_VALUE_AUTORENAME"):
         return 0, wc_term_keys
     erp_keys = _erp_term_keys(erp_terms)
     renamed = 0
@@ -623,9 +641,14 @@ def sync_attributes_dynamic(wcapi, attributes_data_dejavu, config=None):
     if force_full_sync:
         log.info(f"{_LOG} ⚡ «همیشه همه‌ی ویژگی‌ها دوباره بررسی شود» فعاله — تشخیصِ تغییر این دور نادیده گرفته می‌شه.")
 
+    from sync_app.core.attribute_value_links import load_value_links
+
+    value_links = load_value_links()
+
     for attr_name, terms in attributes_data_dejavu.items():
         attr_name = normalize_text(attr_name)
         terms = {normalize_text(t) for t in terms if normalize_text(t)}
+        terms = _apply_value_links_to_terms(attr_name, terms, value_links)
         if not attr_name:
             continue
 
@@ -743,16 +766,23 @@ def sync_attributes_dynamic(wcapi, attributes_data_dejavu, config=None):
                 f"{_LOG} ➕ {attr_name} — {len(missing_terms)} term کم است: "
                 f"{', '.join(missing_terms[:5])}"
             )
-            created, term_errors = _create_missing_terms(
-                wcapi, attr_id, terms, wc_term_keys
-            )
-            stats["terms_created"] += created
-            stats["errors"].extend(term_errors)
+            if is_field_enabled(config or {}, "SYNC_FIELD_ATTRIBUTE_VALUE_AUTOCREATE"):
+                created, term_errors = _create_missing_terms(
+                    wcapi, attr_id, terms, wc_term_keys
+                )
+                stats["terms_created"] += created
+                stats["errors"].extend(term_errors)
+                # فقط وقتی بدونِ خطا موفق شد کش می‌شه — وگرنه termهای ناموفق
+                # دفعه‌ی بعد دوباره امتحان نمی‌شن.
+                if norm_key and not term_errors:
+                    hash_cache[norm_key] = cache_entry
+            else:
+                log.info(
+                    f"{_LOG} ⏭️ {attr_name} — ساختِ خودکارِ مقدارِ جدید غیرفعاله؛ "
+                    f"{len(missing_terms)} مقدار بدونِ لینکِ دستی ساخته نشد "
+                    "(با «🔗 لینکِ دستیِ مقادیر» لینکشون کنید یا این تنظیم رو فعال کنید)."
+                )
             stats["attrs_synced"] += 1
-            # فقط وقتی بدونِ خطا موفق شد کش می‌شه — وگرنه termهای ناموفق
-            # دفعه‌ی بعد دوباره امتحان نمی‌شن.
-            if norm_key and not term_errors:
-                hash_cache[norm_key] = cache_entry
         except Exception as exc:
             msg = f"terms '{attr_name}': {exc}"
             stats["errors"].append(msg)

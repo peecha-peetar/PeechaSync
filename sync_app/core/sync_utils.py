@@ -77,6 +77,59 @@ def _site_scope_key(*, include_family: bool = True) -> str:
         cfg = load_secure_config(None) or {}
         platform = store_platform(cfg)
         url_key = "PS_URL" if platform == "prestashop" else "WC_URL"
+        raw_url = str(cfg.get(url_key) or "")
+        url = _normalize_scope_url(raw_url, platform)
+        raw = f"{platform}:{url}" if url else platform
+        if include_family:
+            from sync_app.core.integrations.erp_provider import erp_schema_family
+
+            raw = f"{raw}:{erp_schema_family(cfg)}"
+    except Exception:
+        raw = "default"
+
+    import hashlib
+
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _normalize_scope_url(raw_url: str, platform: str) -> str:
+    """نرمال‌سازیِ آدرسِ سایت برایِ محاسبه‌یِ scope key — قبلاً فقط
+    lower/rstrip('/')/حذفِ scheme انجام می‌شد؛ یعنی همون سایت با
+    «www.» یا پسوندِ «/wp-json/wc/v3» (که برایِ خودِ اتصالِ API بی‌اثره،
+    چون wc_api_helper.normalize_wc_store_url جداگانه حذفش می‌کنه) یک
+    scope keyِ متفاوت می‌ساخت — یعنی همون سایت، بعدِ ویرایشِ جزئیِ آدرس
+    در تنظیمات، یک پوشه‌یِ کاملاً خالی و بی‌ربط می‌گرفت و همه‌یِ
+    لینک‌های قبلی گم به‌نظر می‌رسیدن (در حالی که فقط در پوشه‌یِ قبلی
+    جا مونده بودن). حالا هم www./wp-json حذف می‌شن تا نوشتارهایِ
+    مختلفِ یک آدرسِ یکسان به یک scope key برسن."""
+    url = str(raw_url or "").strip().lower().rstrip("/")
+    if platform != "prestashop" and url:
+        from sync_app.core.wc_api_helper import normalize_wc_store_url
+
+        url = normalize_wc_store_url(url).lower().rstrip("/")
+    for prefix in ("https://", "http://"):
+        if url.startswith(prefix):
+            url = url[len(prefix):]
+            break
+    if url.startswith("www."):
+        url = url[4:]
+    return url
+
+
+def _legacy_unnormalized_site_scope_key(*, include_family: bool = True) -> str:
+    """محاسبه‌یِ scope keyِ دقیقاً مثلِ قبل از افزودنِ نرمال‌سازیِ
+    www./wp-json — فقط برایِ مهاجرتِ یک‌باره در site_scoped_path (پایین)
+    استفاده می‌شه، تا اگه آدرسِ ذخیره‌شده‌یِ کاربر از قبل شاملِ www./
+    wp-json بوده (و دیتایِ واقعی‌اش زیرِ اون hashِ قدیمی نشسته)، همون
+    دیتا خودکار پیدا و منتقل بشه — بدونِ این تابع، نرمال‌سازیِ بالا برایِ
+    این کاربرهایِ خاص باعثِ گم‌شدنِ دوباره‌یِ لینک‌ها می‌شد."""
+    try:
+        from sync_app.core.secure_config_loader import load_secure_config
+        from sync_app.core.integrations.commerce_provider import store_platform
+
+        cfg = load_secure_config(None) or {}
+        platform = store_platform(cfg)
+        url_key = "PS_URL" if platform == "prestashop" else "WC_URL"
         url = str(cfg.get(url_key) or "").strip().lower().rstrip("/")
         for prefix in ("https://", "http://"):
             if url.startswith(prefix):
@@ -127,9 +180,55 @@ def site_scoped_path(*parts):
                 if os.path.isfile(legacy_scoped):
                     shutil.copyfile(legacy_scoped, legacy_scoped + ".pre_erp_family_scope_backup")
                     shutil.move(legacy_scoped, target)
+                else:
+                    # مهاجرتِ سوم: قبل از افزودنِ نرمال‌سازیِ www./wp-json به
+                    # _site_scope_key، آدرسِ سایت خام هش می‌شد — اگه آدرسِ
+                    # ذخیره‌شده‌یِ کاربر از قبل شاملِ www./wp-json بوده،
+                    # دیتایِ واقعی‌اش زیرِ اون hashِ قدیمی‌تر نشسته. copy (نه
+                    # move) تا اگه چندتا فایل با کلیدهایِ قدیمیِ مختلف باشن،
+                    # فراخوانیِ بعدی هم بتونه دوباره بهش برسه.
+                    legacy_unnormalized = os.path.join(
+                        app_dir(), "sites", _legacy_unnormalized_site_scope_key(), *parts
+                    )
+                    if os.path.isfile(legacy_unnormalized) and legacy_unnormalized != target:
+                        shutil.copyfile(legacy_unnormalized, target)
         except Exception:
             pass
+    _ensure_site_scope_marker(base)
     return target
+
+
+def _ensure_site_scope_marker(scope_dir: str) -> None:
+    """یک فایلِ scope.json سبک کنارِ فایل‌هایِ سایت می‌نویسه (فقط یک‌بار،
+    نه در هر فراخوانی) — پلتفرم/آدرس/خانواده‌یِ ERPِ صاحبِ این پوشه رو
+    ثبت می‌کنه. هدف: اگه بعداً scope keyِ فعلی به هر دلیلی عوض بشه (مثلِ
+    باگِ گزارش‌شده)، بشه از رویِ همین مارکر پوشه‌هایِ قدیمی رو در تبِ
+    تنظیمات پیدا و بازیابی کرد — بدونِ این مارکر، پوشه فقط یک hashِ
+    بی‌معنیه و هیچ‌جا ثبت نشده کدوم سایت/ERP بوده."""
+    marker_path = os.path.join(scope_dir, "scope.json")
+    if os.path.exists(marker_path):
+        return
+    try:
+        import json
+        import time
+
+        from sync_app.core.secure_config_loader import load_secure_config
+        from sync_app.core.integrations.commerce_provider import store_platform
+        from sync_app.core.integrations.erp_provider import erp_schema_family
+
+        cfg = load_secure_config(None) or {}
+        platform = store_platform(cfg)
+        url_key = "PS_URL" if platform == "prestashop" else "WC_URL"
+        data = {
+            "platform": platform,
+            "url": str(cfg.get(url_key) or "").strip(),
+            "erp_family": erp_schema_family(cfg),
+            "created_at": time.time(),
+        }
+        with open(marker_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
 
 
 def reconfigure_app_logging():

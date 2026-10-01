@@ -224,17 +224,25 @@ def _resolve_woo_dim_labels_list(
     global_ids: dict,
     erp_labels: list[str],
 ) -> list[str]:
-    """برچسب‌های ERP را به نام attributeهای global Woo وصل می‌کند."""
+    """برچسب‌های ERP را به نام attributeهای global Woo وصل می‌کند.
+
+    خروجی دقیقاً هم‌طولِ erp_labels است (برایِ ویژگیِ بی‌نظیر، "" برمی‌گرده)
+    تا جایگاهِ هر برچسب حفظ بشه — صداکننده‌ها (_remap_attr_names_to_woo/
+    _remap_variation_attr_names) بر اساسِ همین ایندکس جفت می‌سازن؛ اگه این‌جا
+    ویژگی‌هایِ بی‌نظیر حذف می‌شدن، ایندکس‌ها جابه‌جا می‌شدن و مثلاً «جنس»یِ
+    ERP به‌اشتباه به برچسبِ «رنگ»یِ Woo مپ می‌شد."""
     resolved: list[str] = []
     for erp in erp_labels or []:
         name = str(erp or "").strip()
         if not name:
+            resolved.append("")
             continue
         meta = _lookup_global_attr_meta(global_ids, name)
         if meta:
             resolved.append(_woo_attr_label(meta, name))
         else:
             log.info(f"ℹ️ ویژگی «{name}» در Woo نیست — از sync حذف شد.")
+            resolved.append("")
     return resolved
 
 
@@ -368,7 +376,45 @@ def fetch_variations_from_db(
             if is_variation_enabled(str(v.get("sku") or ""), config)
         ]
         attr_map = build_attr_map_from_variations(variations, size_label, color_label, dim3_label)
+
+    variations, attr_map = _apply_attribute_value_links(variations, attr_map)
     return variations, attr_map
+
+
+def _apply_attribute_value_links(variations: list[dict], attr_map: dict) -> tuple[list[dict], dict]:
+    """قبلِ برگشتنِ نتیجه، مقدارهایِ ERP را با لینکِ دستیِ کاربر (اگه
+    تنظیم شده باشه) جایگزین می‌کند — مثلاً ERPِ «سرخ» را به termِ سایتِ
+    «قرمز» تبدیل می‌کند، تا نه termِ تکراری ساخته بشه نه چیزی به‌اشتباه
+    rename بشه. تکِ نقطه‌یِ مشترک برایِ همه‌یِ صداکننده‌ها (Woo/PrestaShop/
+    تطبیقِ ساختاری) — چون همه از همین تابع variations/attr_map می‌گیرن."""
+    try:
+        from sync_app.core.attribute_value_links import load_value_links, resolve_value_link
+    except Exception:
+        return variations, attr_map
+
+    links = load_value_links()
+    if not links:
+        return variations, attr_map
+
+    new_attr_map = {}
+    for name, opts in (attr_map or {}).items():
+        new_attr_map[name] = sorted({
+            resolve_value_link(links, name, opt) for opt in (opts or []) if opt
+        })
+
+    for var in variations or []:
+        for attr in var.get("attributes") or []:
+            if not isinstance(attr, dict):
+                continue
+            name = attr.get("name") or ""
+            option = attr.get("option") or ""
+            if not option:
+                continue
+            linked = resolve_value_link(links, name, option)
+            if linked != option:
+                attr["option"] = linked
+
+    return variations, new_attr_map
 
 
 def _fetch_terms_for_attribute(wcapi, attr_name, meta):
@@ -1805,7 +1851,8 @@ def sync_product_variations(
             global_ids = _fetch_global_attribute_ids(wcapi)
 
         woo_dim_labels = _resolve_woo_dim_labels_list(global_ids, erp_dim_labels)
-        if not woo_dim_labels:
+        woo_dim_labels_matched = sum(1 for x in woo_dim_labels if x)
+        if not woo_dim_labels_matched:
             woo_names = ", ".join(
                 str(m.get("name") or k) for k, m in list(global_ids.items())[:6]
             )
@@ -1817,11 +1864,11 @@ def sync_product_variations(
             _LAST_VARIATION_FAIL_HINTS[a_code] = hint
             log.warning(f"⚠️ [{a_code}] {hint}")
             return False
-        if len(woo_dim_labels) < len(erp_dim_labels):
+        if woo_dim_labels_matched < len(erp_dim_labels):
             from sync_app.core.integrations.erp_provider import erp_provider_label
 
             log.info(
-                f"ℹ️ [{a_code}] {len(woo_dim_labels)} ویژگی از {len(erp_dim_labels)} "
+                f"ℹ️ [{a_code}] {woo_dim_labels_matched} ویژگی از {len(erp_dim_labels)} "
                 f"سطح {erp_provider_label(config)} روی Woo هست."
             )
 

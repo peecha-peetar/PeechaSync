@@ -97,7 +97,9 @@ SECTION_SYNCED = "synced"
 ATTR_RECON_TITLE = "ویژگی‌ها"
 ATTR_RECON_BODY = (
     "ویژگی با «نام یکسان» خودکار تطبیق می‌شود.\n"
-    "همگام‌سازی با سایت: تب «ویژگی‌ها»."
+    "همگام‌سازی با سایت: تب «ویژگی‌ها».\n"
+    "مقدارهایی که هم‌معنی ولی هم‌نویسه نیستن (مثلاً «سرخ» و «قرمز») رو با "
+    "دکمه‌یِ «🔗 لینکِ دستیِ مقادیر» بالا می‌تونید دستی به هم وصل کنید."
 )
 ATTR_RECON_SYNCED_HEADER = "── ✅ نام یکسان — تطبیق خودکار (فقط مشاهده) ──"
 
@@ -317,6 +319,19 @@ class ReconciliationTab(QWidget):
         self.tables_fullscreen_btn.setMinimumHeight(32)
         self.tables_fullscreen_btn.clicked.connect(self._toggle_tables_fullscreen)
         status_row.addWidget(self.tables_fullscreen_btn)
+
+        self.attr_value_link_btn = QPushButton("🔗 لینکِ دستیِ مقادیر")
+        self.attr_value_link_btn.setObjectName("reconAttrValueLinkBtn")
+        self.attr_value_link_btn.setToolTip(
+            "وقتی مقدارِ یک ویژگی در نرم‌افزار و فروشگاه هم‌معنی ولی هم‌نویسه "
+            "نیست (مثلاً «سرخ» در برابرِ «قرمز»)، این‌جا می‌تونید دستی لینکشون کنید."
+        )
+        self.attr_value_link_btn.setProperty("syncAction", False)
+        self.attr_value_link_btn.setCursor(Qt.PointingHandCursor)
+        self.attr_value_link_btn.setMinimumHeight(32)
+        self.attr_value_link_btn.clicked.connect(self._open_attr_value_link_dialog)
+        self.attr_value_link_btn.setVisible(False)
+        status_row.addWidget(self.attr_value_link_btn)
 
         self.search_expanded = QWidget()
         self.search_expanded.setObjectName("reconStatusSearchExpanded")
@@ -1311,6 +1326,12 @@ class ReconciliationTab(QWidget):
             text = f"{extra}\n\n{text}"
         QMessageBox.information(self, ATTR_RECON_TITLE, text)
 
+    def _open_attr_value_link_dialog(self):
+        from sync_app.core.tabs.attribute_value_link_dialog import AttributeValueLinkDialog
+
+        dialog = AttributeValueLinkDialog(self, self.config)
+        dialog.exec_()
+
     def _update_entity_guide(self):
         if hasattr(self, "hero_body"):
             self.hero_body.setText(recon_hero_html_for_entity(self._current_entity(), self.config))
@@ -1324,6 +1345,8 @@ class ReconciliationTab(QWidget):
         show_type = self._current_entity() == ENTITY_PRODUCTS
         self.product_type_filter_label.setVisible(show_type)
         self.product_type_filter_combo.setVisible(show_type)
+        if hasattr(self, "attr_value_link_btn"):
+            self.attr_value_link_btn.setVisible(self._current_entity() == ENTITY_ATTRIBUTES)
 
     def _populate_category_filter_options(self):
         """گزینه‌های فیلتر رو از جدول S_Group واقعی SQL (کد + نام) پر می‌کنه."""
