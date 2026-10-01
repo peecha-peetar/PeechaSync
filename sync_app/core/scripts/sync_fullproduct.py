@@ -1097,18 +1097,37 @@ def main():
                             f"با دادهٔ زیرواریانتِ «{forced_source_sku}» سینک می‌شه."
                         )
                     else:
+                        # رفعِ باگ: قبلاً این‌جا «طبقِ حالتِ متغیرِ عادی ادامه
+                        # می‌داد» — یعنی اگه زیرواریانتِ نماینده در ERP تغییرِ
+                        # نام/حذف شده بود، has_variants همچنان True می‌موند و
+                        # _upsert_wc_product با has_variants=True رویِ همون
+                        # محصولِ سادهٔ سایت که کاربر دستی لینک کرده صدا زده
+                        # می‌شد — یعنی اون محصول می‌تونست بی‌صدا به «متغیرِ
+                        # بدونِ هیچ واریانتی» تبدیل بشه (هیچ گاردی جلوشو
+                        # نمی‌گرفت، چون get_force_simple_source(sku) هنوز
+                        # truthyه). حالا به‌جایِ نوشتنِ ریسکی، این دور برایِ
+                        # همین SKU رد می‌شه تا کاربر خودش تطبیق رو اصلاح کنه.
                         from sync_app.core.integrations.erp_provider import erp_provider_label
 
                         log.warning(
                             f"⚠️ [{sku}] تطبیقِ «سینک به‌عنوانِ محصولِ ساده» ست شده ولی زیرواریانتِ "
                             f"«{forced_source_sku}» در {erp_provider_label(raw_config)} پیدا نشد — "
-                            "طبقِ حالتِ متغیرِ عادی ادامه می‌ده."
+                            "برایِ جلوگیری از تغییرِ ناخواسته‌یِ ساختارِ محصولِ سایت، این کالا این دور رد شد "
+                            "(لطفاً تطبیقِ «تطبیقِ ساختاری» را اصلاح یا حذف کنید)."
                         )
+                        with stats_lock:
+                            stats["failed"] += 1
+                            stats["failed_skus"].append(sku)
+                        return
                 except Exception as exc:
                     log.warning(
                         f"⚠️ [{sku}] بررسیِ تطبیقِ «سینک به‌عنوانِ محصولِ ساده» با خطا مواجه شد: {exc} — "
-                        "طبقِ حالتِ متغیرِ عادی ادامه می‌ده."
+                        "برایِ جلوگیری از تغییرِ ناخواسته‌یِ ساختارِ محصولِ سایت، این کالا این دور رد شد."
                     )
+                    with stats_lock:
+                        stats["failed"] += 1
+                        stats["failed_skus"].append(sku)
+                    return
 
         description = str(row[8] or "").strip()
 

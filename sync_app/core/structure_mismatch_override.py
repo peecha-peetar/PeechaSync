@@ -111,12 +111,15 @@ def get_site_variation_target(sku: str) -> dict | None:
     return {"parent_product_id": parent_id, "variation_id": variation_id}
 
 
-def find_erp_sku_for_site_variation(parent_product_id, variation_id) -> str | None:
+def find_erp_sku_for_site_variation(parent_product_id, variation_id, *, exclude_sku: str = "") -> str | None:
     """برعکسِ get_site_variation_target — از رویِ شناسه‌ی محصول/واریانتِ سایت
     (که رویِ یک خطِ سفارش می‌شینه)، SKUِ سادهٔ ERPِ متناظرش رو پیدا می‌کنه.
     برایِ اینه که سفارش‌هایِ ثبت‌شده رویِ این واریانتِ سایت، به کدِ درستِ ERP
     نسبت داده بشن — وگرنه ordersync فقط SKUِ خودِ واریانتِ سایت (که با
-    کدِ ERP فرقی می‌کنه) رو می‌بینه و نمی‌تونه کالا رو در ERP پیدا کنه."""
+    کدِ ERP فرقی می‌کنه) رو می‌بینه و نمی‌تونه کالا رو در ERP پیدا کنه.
+
+    exclude_sku: برایِ تشخیصِ تعارض قبلِ ذخیره‌یِ یک لینکِ تازه — یعنی
+    «آیا SKUِ دیگری (غیر از این یکی) از قبل همین واریانتِ سایت رو گرفته؟»"""
     try:
         parent_product_id = int(parent_product_id or 0)
         variation_id = int(variation_id or 0)
@@ -124,8 +127,12 @@ def find_erp_sku_for_site_variation(parent_product_id, variation_id) -> str | No
         return None
     if not parent_product_id or not variation_id:
         return None
+    exclude_sku = str(exclude_sku or "").strip()
     for sku, entry in _site_variation_table.load().items():
         if not isinstance(entry, dict):
+            continue
+        sku = str(sku or "").strip()
+        if exclude_sku and sku == exclude_sku:
             continue
         try:
             entry_parent = int(entry.get("parent_product_id") or 0)
@@ -133,7 +140,6 @@ def find_erp_sku_for_site_variation(parent_product_id, variation_id) -> str | No
         except (TypeError, ValueError):
             continue
         if entry_parent == parent_product_id and entry_variation == variation_id:
-            sku = str(sku or "").strip()
             return sku or None
     return None
 
@@ -180,6 +186,45 @@ def get_force_simple_source(sku: str) -> str | None:
         return None
     source = str(entry.get("source_variation_sku") or "").strip()
     return source or None
+
+
+def find_force_simple_parent_sku_for_site_product(site_product_id) -> str | None:
+    """برعکسِ get_force_simple_source — از رویِ idِ محصولِ سایت (همونی که رویِ
+    یک خطِ سفارش می‌شینه)، SKUِ والدِ ERPِ متناظرش رو پیدا می‌کنه — حتی وقتی
+    SKUِ خودِ محصولِ سایت اصلاً با کدِ ERP یکی نیست (دقیقاً همون سناریویی که
+    این قابلیت براش ساخته شده: «سایت از قبل این رو به‌عنوانِ یک محصولِ ساده
+    با SKUِ خودش داره»). رفعِ باگ: قبلاً تشخیصِ سفارش فقط از رویِ تطبیقِ
+    متنیِ SKU انجام می‌شد (get_force_simple_source(a_code) که a_code از
+    پارسِ SKUِ خودِ سایت می‌اومد) — اگه SKUِ سایت با کدِ ERP فرق داشت، این
+    تطبیق هیچ‌وقت برقرار نمی‌شد و سفارش یا با یک ردیفِ نامعتبر ثبت می‌شد یا
+    (بدتر) اگه SKUِ سایت تصادفاً با یک کدِ واقعیِ دیگه در ERP یکی بود، فروش
+    به کالایِ اشتباه نسبت داده می‌شد. حالا از idِ محصولِ سایت استفاده
+    می‌کنیم (مثلِ find_erp_sku_for_site_variation) — چون _fs_apply_match
+    همیشه product_woo_map[parent_sku] رو هم به همین id ست می‌کنه."""
+    try:
+        site_product_id = int(site_product_id or 0)
+    except (TypeError, ValueError):
+        return None
+    if not site_product_id:
+        return None
+    sources = _force_simple_table.load()
+    if not sources:
+        return None
+
+    from sync_app.core.product_woo_map_helper import load_product_woo_map
+
+    product_map = load_product_woo_map()
+    for parent_sku in sources.keys():
+        parent_sku = str(parent_sku or "").strip()
+        if not parent_sku:
+            continue
+        mapped_id = product_map.get(parent_sku)
+        try:
+            if mapped_id is not None and int(mapped_id) == site_product_id:
+                return parent_sku
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 def set_force_simple_source(
