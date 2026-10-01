@@ -1389,6 +1389,9 @@ def main():
                 stats["ok"] += 1
             with hash_lock:
                 sync_hash_cache[sku] = cache_entry
+            from sync_app.core.sync_history import record_sync_event
+
+            record_sync_event("product", p_data.get("name") or sku, code=sku)
 
         except Exception as e:
             with stats_lock:
