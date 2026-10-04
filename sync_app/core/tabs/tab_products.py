@@ -3527,6 +3527,23 @@ class ProductTab(QWidget):
                 # فرق داشته باشه (دقیقاً همون منطقی که سینکِ اصلی استفاده
                 # می‌کنه). فقط اگه لینکی نبود یا اون id رویِ سایت پیدا نشد
                 # (مثلاً حذف شده)، به جستجویِ خامِ SKU برمی‌گردیم.
+                # رفعِ باگ: این چک باید قبلِ مصرفِ product_map باشه — چون
+                # _sv_apply_match (تطبیقِ ساختاریِ «سایتِ متغیر/ERP ساده») عمداً
+                # product_map[sku] رو هم به idِ محصولِ والد ست می‌کنه (فقط برایِ
+                # نمایشِ «لینک‌شده» در تبِ محصولات)، پس اگه این چک بعد از آن
+                # lookup می‌اومد هیچ‌وقت اجرا نمی‌شد و تصاویر بی‌صدا رویِ گالریِ
+                # محصولِ والدِ مشترک (نه فقط همین واریانت) آپلود می‌شدن.
+                from sync_app.core.structure_mismatch_override import get_site_variation_target
+
+                if get_site_variation_target(sku):
+                    log.warning(f"⚠️ {sku} واریانتِ یک محصولِ دیگه‌ست، محصولِ جدایِ خودش رو نداره — رد شد.")
+                    self._last_img_upload_detail = (
+                        f"«{sku}» به‌عنوانِ واریانتِ یک محصولِ دیگه (نه یک محصولِ جدا) تطبیق داده شده — "
+                        "برایِ تغییرِ تصویرش، مستقیم رویِ محصولِ اصلیِ سایت اقدام کنید."
+                    )
+                    fail_count += 1
+                    continue
+
                 res_item = None
                 mapped_id = product_map.get(sku)
                 if mapped_id:
@@ -3562,17 +3579,12 @@ class ProductTab(QWidget):
                         res_item = res[0]
 
                 if res_item is None:
-                    from sync_app.core.structure_mismatch_override import get_site_variation_target
-
-                    if get_site_variation_target(sku):
-                        log.warning(f"⚠️ {sku} واریانتِ یک محصولِ دیگه‌ست، محصولِ جدایِ خودش رو نداره — رد شد.")
-                        self._last_img_upload_detail = (
-                            f"«{sku}» به‌عنوانِ واریانتِ یک محصولِ دیگه (نه یک محصولِ جدا) تطبیق داده شده — "
-                            "برایِ تغییرِ تصویرش، مستقیم رویِ محصولِ اصلیِ سایت اقدام کنید."
-                        )
-                    else:
-                        log.warning(f"⚠️ محصول {sku} در فروشگاه پیدا نشد — رد شد.")
-                        self._last_img_upload_detail = f"محصولِ {sku} در فروشگاه پیدا نشد (نه با لینکِ ثبت‌شده، نه با جستجویِ SKU)."
+                    # نکته: چکِ «آیا واریانتِ یک محصولِ دیگه‌ست» حالا بالایِ
+                    # همین حلقه (قبلِ مصرفِ product_map) انجام می‌شه — اگه به
+                    # این‌جا رسیدیم، یعنی واقعاً نه با لینکِ ثبت‌شده نه با
+                    # جستجویِ SKU پیدا نشد.
+                    log.warning(f"⚠️ محصول {sku} در فروشگاه پیدا نشد — رد شد.")
+                    self._last_img_upload_detail = f"محصولِ {sku} در فروشگاه پیدا نشد (نه با لینکِ ثبت‌شده، نه با جستجویِ SKU)."
                     fail_count += 1
                     continue
 

@@ -268,6 +268,22 @@ def _names_match_well(left: str, right: str) -> bool:
     return bool(set(left_n.split()) & set(right_n.split()))
 
 
+def _names_weakly_similar(left: str, right: str) -> bool:
+    """مکملِ _names_seem_incompatible — یعنی نه کاملاً یکسان/زیررشته‌ان، نه
+    صفر کلمه‌یِ مشترک دارن (دقیقاً همون موردی که SUGGEST_REASON_NAME_SIMILAR
+    تولیدش می‌کنه، مثلِ «پیراهن آبی» در برابرِ «پیراهن قرمز») — باید حتماً
+    قبلِ تأیید هشدار بگیره."""
+    left_n = _normalize_name(left)
+    right_n = _normalize_name(right)
+    if not left_n or not right_n:
+        return False
+    if left_n.casefold() == right_n.casefold():
+        return False
+    if left_n in right_n or right_n in left_n:
+        return False
+    return bool(set(left_n.split()) & set(right_n.split()))
+
+
 def assess_link_pair_risks(entity: str, erp: ReconRow, wc: ReconRow, config: dict | None = None) -> LinkPairRisk:
     from sync_app.core.integrations.erp_provider import erp_provider_label
 
@@ -280,6 +296,11 @@ def assess_link_pair_risks(entity: str, erp: ReconRow, wc: ReconRow, config: dic
     if _names_seem_incompatible(erp_name, wc_name):
         warnings.append(
             f"نام‌ها متفاوت به نظر می‌رسند: «{erp_name or '—'}» در برابر «{wc_name or '—'}»"
+        )
+    elif _names_weakly_similar(erp_name, wc_name):
+        warnings.append(
+            f"نام‌ها فقط تا حدی شبیه‌اند (نه کاملاً یکسان): «{erp_name or '—'}» در برابر "
+            f"«{wc_name or '—'}» — پیش از تأیید حتماً بررسی کنید"
         )
 
     if erp_sku and wc_sku and erp_sku.casefold() != wc_sku.casefold():

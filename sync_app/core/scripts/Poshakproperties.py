@@ -761,6 +761,9 @@ def sync_attributes_dynamic(wcapi, attributes_data_dejavu, config=None):
                     stats["attrs_already_ok"] += 1
                 if norm_key:
                     hash_cache[norm_key] = cache_entry
+                    from sync_app.core.sync_history import record_sync_event
+
+                    record_sync_event("attribute", attr_name)
                 continue
             log.info(
                 f"{_LOG} ➕ {attr_name} — {len(missing_terms)} term کم است: "
@@ -776,6 +779,9 @@ def sync_attributes_dynamic(wcapi, attributes_data_dejavu, config=None):
                 # دفعه‌ی بعد دوباره امتحان نمی‌شن.
                 if norm_key and not term_errors:
                     hash_cache[norm_key] = cache_entry
+                    from sync_app.core.sync_history import record_sync_event
+
+                    record_sync_event("attribute", attr_name)
             else:
                 log.info(
                     f"{_LOG} ⏭️ {attr_name} — ساختِ خودکارِ مقدارِ جدید غیرفعاله؛ "

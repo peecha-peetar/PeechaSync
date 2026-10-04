@@ -168,6 +168,30 @@ def resolve_line_item_variant(cursor, item):
         if forced_sku:
             return forced_sku, None, None, forced_sku
 
+    # حالتِ ۲ از تبِ «تطبیقِ ساختاری» (ERP متغیر ↔ سایت ساده)، نسخه‌یِ
+    # id-based و اولویت‌دار — رفعِ باگ: نسخه‌یِ قدیمی (پایین‌تر) فقط از رویِ
+    # تطبیقِ متنیِ SKU کار می‌کرد که با فرضِ «SKUِ سایت == کدِ ERP» درست بود؛
+    # دقیقاً همون سناریویی که این قابلیت براش ساخته شده («سایت از قبل این
+    # رو به‌عنوانِ یک محصولِ ساده با SKUِ خودش داره») اون فرض رو نقض می‌کنه.
+    # این‌جا با idِ محصولِ سایت (نه متنِ SKU) مستقیم نگاشتِ درست رو پیدا
+    # می‌کنیم — دقیقاً هم‌الگویِ حالتِ ۱ بالا.
+    if site_parent_id and not site_variation_id:
+        from sync_app.core.structure_mismatch_override import (
+            find_force_simple_parent_sku_for_site_product, get_force_simple_source,
+        )
+
+        forced_parent_sku = find_force_simple_parent_sku_for_site_product(site_parent_id)
+        if forced_parent_sku:
+            source_sku = get_force_simple_source(forced_parent_sku)
+            if source_sku:
+                _src_code, src_poshak_id_c, _src_parts = parse_sku(source_sku)
+                if src_poshak_id_c is not None:
+                    forced_poshak_id, forced_r_arcode_c = resolve_variant_by_codes(
+                        cursor, forced_parent_sku, src_poshak_id_c
+                    )
+                    if forced_poshak_id is not None and forced_r_arcode_c is not None:
+                        return forced_parent_sku, forced_poshak_id, forced_r_arcode_c, infer_line_item_sku(item)
+
     sku = infer_line_item_sku(item)
     a_code, poshak_id_c, parts = parse_sku(sku)
 

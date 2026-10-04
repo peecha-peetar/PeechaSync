@@ -873,15 +873,20 @@ class DashboardTab(QWidget):
             ("🧾 سفارشات", "سفارش"),
             ("📄 لاگ‌ها", "لاگ"),
             ("⚡ همگام‌سازی خودکار", "خودکار"),
+            ("📋 گزارشِ همگام‌سازی", "_sync_history_report"),
         ]
         for i, (label, kw) in enumerate(actions):
             btn = QPushButton(label)
             btn.setObjectName("dashQuickBtn")
             btn.setMinimumHeight(40)
             btn.setCursor(Qt.PointingHandCursor)
-            btn.setToolTip(f"باز کردن بخش «{label}» برای تنظیم/اجرای عملیات مربوطه")
+            if kw == "_sync_history_report":
+                btn.setToolTip("فهرستِ سادهٔ «چی، کِی همگام شده» برایِ هر بخش — به‌جایِ لاگِ خام")
+                btn.clicked.connect(self._open_sync_history_report)
+            else:
+                btn.setToolTip(f"باز کردن بخش «{label}» برای تنظیم/اجرای عملیات مربوطه")
+                btn.clicked.connect(lambda _c=False, k=kw: self._navigate(k))
             self._quick_buttons.append(btn)
-            btn.clicked.connect(lambda _c=False, k=kw: self._navigate(k))
             quick_grid.addWidget(btn, i // 2, i % 2)
         quick_layout.addLayout(quick_grid)
 
@@ -1182,6 +1187,12 @@ class DashboardTab(QWidget):
     def _navigate(self, keyword):
         if callable(self.navigate_callback):
             self.navigate_callback(keyword)
+
+    def _open_sync_history_report(self):
+        from sync_app.core.tabs.sync_history_dialog import SyncHistoryReportDialog
+
+        dialog = SyncHistoryReportDialog(self)
+        dialog.exec_()
 
     def load_data(self):
         self._apply_dashboard_theme()

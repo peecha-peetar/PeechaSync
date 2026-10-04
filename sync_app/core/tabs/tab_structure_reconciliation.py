@@ -503,7 +503,15 @@ class _ErpSimpleSkuLoader(QThread):
             conn, _, _ = open_sql_connection(self.cfg, timeout=10)
             try:
                 cursor = conn.cursor()
-                where_bits = ["LEN(A_Code) >= 4"]
+                where_bits = [
+                    "LEN(A_Code) >= 4",
+                    # رفعِ باگ: بدونِ این فیلتر، یک کدِ واقعاً متغیر هم تویِ
+                    # این لیست می‌اومد و قابلِ‌انتخاب بود — بعدش قیمت/موجودیِ
+                    # خامِ Article (نه زیرواریانتِ مشخص) رویِ واریانتِ سایت
+                    # اعمال می‌شد (عیناً هم‌الگویِ فیلترِ _ErpVariantSkuLoader،
+                    # فقط معکوس).
+                    "A_Code NOT IN (SELECT DISTINCT A_Code FROM ItemArticle)",
+                ]
                 params: list = []
                 if groups:
                     where_bits.append("(" + " OR ".join("A_Code LIKE ?" for _ in groups) + ")")
@@ -1158,7 +1166,48 @@ class StructureReconciliationTab(QWidget):
         if not sku:
             return False
 
-        from sync_app.core.structure_mismatch_override import set_site_variation_target
+        from sync_app.core.structure_mismatch_override import (
+            set_site_variation_target,
+            find_erp_sku_for_site_variation,
+            clear_site_variation_target,
+            get_force_simple_source,
+        )
+
+        # رفعِ باگ: اگه همین SKU از قبل در حالتِ «ERP متغیر / سایت ساده»
+        # (force_simple) هم تعریف شده باشه، دو تطبیقِ ساختاریِ متضاد رویِ یک
+        # کد هم‌زمان فعال می‌مونه — یکی‌شون بی‌صدا (بدونِ خطا/هشدار) همیشه
+        # نادیده گرفته می‌شه، ولی تبِ تطبیقِ ساختاری هر دو رو «فعال» نشون
+        # می‌ده (گمراه‌کننده). این‌جا به‌جایِ اجازه‌یِ هم‌زیستی، صراحتاً مسدود
+        # می‌شه.
+        if get_force_simple_source(sku):
+            if not silent:
+                QMessageBox.warning(
+                    self, "تعارضِ تطبیق",
+                    f"SKUِ «{sku}» از قبل در حالتِ «{self.erp_label} متغیر / سایت ساده» تعریف شده — "
+                    "یک کد نمی‌تونه هم‌زمان هر دو نوعِ تطبیقِ ساختاری را داشته باشه.\n"
+                    "اول اون تطبیق را از بخشِ دیگر لغو کنید.",
+                )
+            return False
+
+        # رفعِ باگ: بدونِ این چک، دو SKUِ متفاوتِ ERP می‌تونستن هم‌زمان به
+        # یک واریانتِ سایت لینک بشن — نتیجه‌ش رِیسِ قیمت/موجودی (آخرین
+        # سینک‌شونده برنده می‌شه) و ابهام در تشخیصِ سفارش بود. حالا قبلِ
+        # ذخیره، لینکِ قدیمی (اگه بود) صراحتاً پاک می‌شه.
+        conflicting_sku = find_erp_sku_for_site_variation(parent_id, variation_id, exclude_sku=sku)
+        if conflicting_sku:
+            if silent:
+                # تطبیقِ خودکار/گروهی — به‌جایِ بازنویسیِ بی‌صدا، رد می‌شه
+                # (کاربر می‌تونه دستی و آگاهانه این یکی رو جایگزین کنه).
+                return False
+            proceed = QMessageBox.question(
+                self, "تعارضِ لینک",
+                f"این واریانتِ سایت از قبل به SKUِ «{conflicting_sku}» لینک شده.\n"
+                f"اگر ادامه بدید، همون لینک حذف و به‌جاش «{sku}» جایگزین می‌شه.\n\nادامه بدم؟",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            )
+            if proceed != QMessageBox.Yes:
+                return False
+            clear_site_variation_target(conflicting_sku)
 
         set_site_variation_target(sku, parent_id, variation_id, label=label, erp_label=erp_label)
 
@@ -1196,7 +1245,8 @@ class StructureReconciliationTab(QWidget):
         sku = erp_item.data(Qt.UserRole)
         erp_label = erp_item.text()
 
-        self._sv_apply_match(site_data, sku, erp_label)
+        if not self._sv_apply_match(site_data, sku, erp_label):
+            return
         self._sv_drop_suggestions_for(sku=sku, site_data=site_data)
         QMessageBox.information(self, "انجام شد", f"SKUِ «{sku}» به واریانتِ سایت وصل شد.")
 
@@ -1706,9 +1756,22 @@ class StructureReconciliationTab(QWidget):
         site_id, site_label, _site_sku = site_data
         parent_sku, variant_sku = erp_data
 
-        from sync_app.core.structure_mismatch_override import set_force_simple_source
+        from sync_app.core.structure_mismatch_override import set_force_simple_source, get_site_variation_target
         from sync_app.core.product_woo_map_helper import load_product_woo_map, save_product_woo_map
         from sync_app.core.product_woo_map_meta import register_product_link
+
+        # تعارضِ متقابلِ L9 (نگاه کنید به توضیحِ هم‌الگو در _sv_apply_match):
+        # اگه همین کدِ ERP از قبل به‌عنوانِ یک واریانتِ سایت (حالتِ دیگرِ
+        # تطبیقِ ساختاری) ثبت شده، هم‌زمان اجازه‌یِ force_simple هم ندید.
+        if get_site_variation_target(parent_sku):
+            if not silent:
+                QMessageBox.warning(
+                    self, "تعارضِ تطبیق",
+                    f"SKUِ «{parent_sku}» از قبل در حالتِ «سایت متغیر / {self.erp_label} ساده» تعریف شده — "
+                    "یک کد نمی‌تونه هم‌زمان هر دو نوعِ تطبیقِ ساختاری را داشته باشه.\n"
+                    "اول اون تطبیق را از بخشِ دیگر لغو کنید.",
+                )
+            return False
 
         set_force_simple_source(parent_sku, variant_sku, erp_label=erp_label, site_label=site_label)
         # محصولِ سایتِ انتخاب‌شده رو صریح به همین کدِ والدِ ERP وصل می‌کنیم —
@@ -1736,7 +1799,8 @@ class StructureReconciliationTab(QWidget):
         parent_sku = erp_data[0]
         erp_label = erp_item.text()
 
-        self._fs_apply_match(site_data, erp_data, erp_label)
+        if not self._fs_apply_match(site_data, erp_data, erp_label):
+            return
         self._fs_drop_suggestions_for(parent_sku=parent_sku, site_data=site_data)
         QMessageBox.information(
             self, "انجام شد",

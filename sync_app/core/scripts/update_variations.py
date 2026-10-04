@@ -1951,6 +1951,9 @@ def sync_product_variations(
                 f"ویژگی‌ها: {', '.join(dim_names)}"
             )
             _LAST_VARIATION_FAIL_HINTS.pop(a_code, None)
+            from sync_app.core.sync_history import record_sync_event
+
+            record_sync_event("variation", product_name or a_code, code=a_code)
             return True
         from sync_app.core.integrations.erp_provider import erp_provider_label
 
@@ -2110,6 +2113,9 @@ def _main_prestashop(config, selected_groups, price_col):
             if ok:
                 stats["ok"] += 1
                 hash_cache[a_code] = cache_entry
+                from sync_app.core.sync_history import record_sync_event
+
+                record_sync_event("variation", name or a_code, code=a_code)
             else:
                 stats["failed"] += 1
                 stats["failed_skus"].append(a_code)

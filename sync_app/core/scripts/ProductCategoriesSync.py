@@ -285,6 +285,9 @@ def _sync_category_name_updates(config, categories_to_sync, code_to_wc_id: dict)
         ok = _put_category_update(config, wc_id, payload, category.get("name"), update_failed)
         if ok:
             hash_cache[code_key] = cache_entry
+            from sync_app.core.sync_history import record_sync_event
+
+            record_sync_event("category", category.get("name") or code_key, code=code_key)
         active_map[code_key] = wc_id
     if skipped:
         log.info(f"⏭️ {skipped} دسته بدون تغییر بودن — رد شدن (هیچ درخواستی ارسال نشد).")
@@ -522,6 +525,9 @@ def sync_categories_to_woocommerce(categories_to_sync, config=None):
 
         if wc_id:
             DEJAVU_ID_TO_WC_ID_MAP[code_key] = int(wc_id)
+            from sync_app.core.sync_history import record_sync_event
+
+            record_sync_event("category", name or code_key, code=code_key)
 
     # اگر fetch ناموفق بود ولی map قبلی داریم، همان را نگه دار
     if not DEJAVU_ID_TO_WC_ID_MAP:
