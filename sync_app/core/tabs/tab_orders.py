@@ -68,6 +68,16 @@ def _load_synced_order_ids(config: dict) -> set:
     return ids
 
 
+def _is_order_imported(order_id, order: dict, synced_ids: set) -> bool:
+    """نشانِ «همگام‌شده» فقط وقتی که شماره‌یِ سفارش در ERP هست *و* همون
+    سفارش است — نه یک سفارشِ تازه با شماره‌یِ تکراری (بعد از ریستِ سایت)."""
+    if order_id not in synced_ids:
+        return False
+    from sync_app.core.order_import_ledger import DIFFERENT, ledger_verdict
+
+    return ledger_verdict(order_id, order or {}) != DIFFERENT
+
+
 ORDER_STATUS_LABELS = {
     "any": "همه",
     "processing": "در حال انجام",
@@ -574,7 +584,7 @@ class OrderTab(SitePreviewLoaderMixin, SyncTab):
                 except Exception:
                     continue
                 ids.append(numeric_id)
-                sync_badge = "🔗 " if numeric_id in synced_ids else ""
+                sync_badge = "🔗 " if _is_order_imported(numeric_id, order, synced_ids) else ""
                 items.append(f"{sync_badge}{name} | کد سفارش: #{order_id} | وضعیت: {status} | مبلغ: {total} {currency}")
 
             return {"kind": "orders", "items": items, "ids": ids}
@@ -620,7 +630,7 @@ class OrderTab(SitePreviewLoaderMixin, SyncTab):
             status_label = "پرداخت‌شده" if order.get("valid") else "در انتظار پرداخت"
             ids.append(order["id"])
             name = str(order.get("customer_name") or "").strip() or f"مشتری #{order.get('customer_id') or '-'}"
-            sync_badge = "🔗 " if order["id"] in synced_ids else ""
+            sync_badge = "🔗 " if _is_order_imported(order["id"], order, synced_ids) else ""
             items.append(
                 f"{sync_badge}{name} | کد سفارش: #{order['id']} | "
                 f"وضعیت: {status_label} | مبلغ: {order.get('total_paid')}"

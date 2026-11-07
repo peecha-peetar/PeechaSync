@@ -63,20 +63,31 @@ def register_product_link(
     wc_label: str = "",
     manual: bool = False,
     sku_conflict_wc_id: int | None = None,
+    wc_sku: str | None = None,
+    wc_created: str | None = None,
 ) -> None:
+    """wc_sku/wc_created «اثرِ انگشتِ» محصولِ سایت در لحظه‌یِ تطبیق‌اند —
+    سینک قبل از هر نوشتن با همین‌ها چک می‌کنه که شناسه‌یِ ذخیره‌شده هنوز
+    مالِ همون محصول باشه (بعد از ریستِ سایت، وردپرس شناسه‌ها رو دوباره به
+    محصولاتِ دیگه می‌ده)."""
     sku = str(erp_sku or "").strip()
     wc_id = int(wc_id or 0)
     if not sku or not wc_id:
         return
     meta = load_product_woo_map_meta()
     links = meta.setdefault("links", {})
-    links[sku] = {
+    entry = {
         "wc_id": wc_id,
         "wc_label": str(wc_label or "").strip(),
         "manual": bool(manual),
         "sku_conflict_wc_id": int(sku_conflict_wc_id) if sku_conflict_wc_id else None,
         "confirmed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
+    if wc_sku is not None:
+        entry["wc_sku"] = str(wc_sku or "").strip()
+    if wc_created:
+        entry["wc_created"] = str(wc_created).strip()
+    links[sku] = entry
     save_product_woo_map_meta(meta)
 
     from sync_app.core.secure_config_loader import load_secure_config
@@ -93,6 +104,28 @@ def register_product_link(
     from sync_app.core.integrations.erp_provider import erp_provider_label
 
     log.info(f"📌 تطبیق {kind} ثبت شد: {erp_provider_label(config)} {sku} → Woo #{wc_id}")
+
+
+def record_product_link_fingerprint(erp_sku: str, wc_id: int, *, wc_sku: str | None = None, wc_created: str | None = None) -> None:
+    """تکمیلِ اثرِ انگشتِ لینک‌هایِ دستیِ قدیمی (که قبل از این نسخه بدونِ
+    wc_sku/wc_created ثبت شدن) — فقط کلیدهایِ خالی پر می‌شن، هیچ‌چیزِ
+    موجودی بازنویسی نمی‌شه."""
+    sku = str(erp_sku or "").strip()
+    if not sku:
+        return
+    meta = load_product_woo_map_meta()
+    entry = (meta.get("links") or {}).get(sku)
+    if not isinstance(entry, dict) or int(entry.get("wc_id") or 0) != int(wc_id or 0):
+        return
+    changed = False
+    if wc_sku is not None and "wc_sku" not in entry:
+        entry["wc_sku"] = str(wc_sku or "").strip()
+        changed = True
+    if wc_created and not entry.get("wc_created"):
+        entry["wc_created"] = str(wc_created).strip()
+        changed = True
+    if changed:
+        save_product_woo_map_meta(meta)
 
 
 def clear_product_link_meta(erp_sku: str) -> None:

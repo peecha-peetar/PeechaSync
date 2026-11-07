@@ -372,13 +372,32 @@ def insert_order(order):
         conn, _auth_mode, _conn_str = connect_with_fallback(config, timeout=15)
         cursor = conn.cursor()
 
-        cursor.execute("SELECT TOP 1 RqIndex FROM RqTitle WHERE RqIndex2 = ?", (order_id,))
-        if cursor.fetchone():
+        cursor.execute("SELECT TOP 1 RqIndex, R_Date FROM RqTitle WHERE RqIndex2 = ? ORDER BY RqIndex DESC", (order_id,))
+        existing_row = cursor.fetchone()
+        if existing_row:
             from sync_app.core.integrations.erp_provider import erp_provider_label
+            from sync_app.core.order_import_ledger import (
+                DIFFERENT, UNKNOWN, erp_row_predates_order, ledger_verdict, record_imported_order,
+            )
 
-            log.info(f"ℹ️ سفارش {order_id} قبلاً در {erp_provider_label(config)} ثبت شده — رد شد.")
-            mark_order_completed(order_id)
-            return
+            # شماره‌یِ سفارشِ سایت یکتا نیست: بعد از ریستِ سایت (یا با سایتِ
+            # دیگری رویِ همین ERP) از اول شروع می‌شه. فقط وقتی «قبلاً ثبت شده»
+            # حساب می‌شه که همون سفارش باشه، نه یک سفارشِ تازه با شماره‌یِ تکراری.
+            verdict = ledger_verdict(order_id, order)
+            erp_inserted_at = existing_row[1] if len(existing_row) > 1 else None
+            recycled = verdict == DIFFERENT or (
+                verdict == UNKNOWN and erp_row_predates_order(erp_inserted_at, order)
+            )
+            if not recycled:
+                if verdict == UNKNOWN:
+                    record_imported_order(order_id, order)
+                log.info(f"ℹ️ سفارش {order_id} قبلاً در {erp_provider_label(config)} ثبت شده — رد شد.")
+                mark_order_completed(order_id)
+                return
+            log.warning(
+                f"⚠️ شماره‌یِ سفارشِ {order_id} قبلاً برایِ یک سفارشِ دیگه (قبل از ریستِ سایت یا از سایتِ دیگری) "
+                f"در {erp_provider_label(config)} ثبت شده بود — این یک سفارشِ تازه‌ست و ثبت می‌شه."
+            )
 
         customer_code = resolve_order_customer_code(order, config, cursor)
         customer_code = _fit_to_column(cursor, "RqTitle", "R_CusCode", customer_code, order_id=order_id)
@@ -514,6 +533,9 @@ def insert_order(order):
                 ))
 
         conn.commit()
+        from sync_app.core.order_import_ledger import record_imported_order
+
+        record_imported_order(order_id, order)
         inserted_details = len(groups)
         inserted_facts = sum(1 for v in groups.values() for variant in v if variant["poshak_id_f"] is not None)
         log.info(

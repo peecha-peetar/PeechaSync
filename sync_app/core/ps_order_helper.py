@@ -93,6 +93,11 @@ def ps_get_order(config, order_id: int, *, timeout=None) -> dict | None:
         "customer_id": customer_id,
         "billing": billing,
         "line_items": [_order_row_to_line_item(row) for row in _order_rows(entry)],
+        # شناسه‌یِ یکتایِ پرستاشاپ + تاریخ — اثرِ انگشتِ سفارش، برایِ اینکه
+        # بعد از ریستِ فروشگاه یک سفارشِ تازه با شماره‌یِ تکراری با سفارشِ
+        # قدیمیِ واردشده یکی گرفته نشه (order_import_ledger).
+        "reference": str(entry.get("reference") or ""),
+        "date_created": str(entry.get("date_add") or ""),
     }
 
 

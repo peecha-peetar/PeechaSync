@@ -1209,7 +1209,7 @@ class StructureReconciliationTab(QWidget):
                 return False
             clear_site_variation_target(conflicting_sku)
 
-        set_site_variation_target(sku, parent_id, variation_id, label=label, erp_label=erp_label)
+        set_site_variation_target(sku, parent_id, variation_id, label=label, erp_label=erp_label, site_sku=_site_sku)
 
         from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
 
@@ -1781,7 +1781,7 @@ class StructureReconciliationTab(QWidget):
         product_map = load_product_woo_map()
         product_map[parent_sku] = int(site_id)
         save_product_woo_map(product_map)
-        register_product_link(parent_sku, int(site_id), wc_label=site_label, manual=True)
+        register_product_link(parent_sku, int(site_id), wc_label=site_label, manual=True, wc_sku=_site_sku or "")
         if not silent:
             self._refresh_fs_table()
         return True

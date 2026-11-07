@@ -76,6 +76,39 @@ def merge_category_map_with_slug_map(category_map: dict | None, slug_map: dict |
     return merged
 
 
+def prune_stale_category_ids(merged: dict, slug_map: dict) -> list[str]:
+    """از نگاشتِ {کدِ ERP: idِ دسته} (در جا) لینک‌هایی رو حذف می‌کنه که دیگه
+    معتبر نیستن: یا اون id اصلاً رویِ سایت نیست (دسته حذف شده)، یا الان
+    اسلاگِ «cat-کدِ دیگه»ِ خودِ برنامه رو داره (یعنی بعد از ریستِ سایت این
+    شناسه به دسته‌یِ یک کدِ دیگه رسیده). بدونِ این، محصولاتِ یک گروه
+    بی‌صدا تویِ دسته‌یِ یک گروهِ دیگه می‌نشستن. فقط اسلاگ‌هایِ cat-* (که
+    خودِ برنامه می‌سازه) «مالکیت» حساب می‌شن — اسلاگ‌هایِ دلخواهِ سایت (مثلِ
+    «زنانه-2») ممکنه مقصدِ یک تطبیقِ دستیِ درست باشن. slug_map باید کامل
+    (واکشیِ موفق) باشه."""
+    live_ids: set[int] = set()
+    owner_by_id: dict[int, str] = {}
+    for slug, entry in (slug_map or {}).items():
+        if not isinstance(entry, dict) or not entry.get("id"):
+            continue
+        cid = int(entry["id"])
+        live_ids.add(cid)
+        if str(slug or "").startswith("cat-"):
+            code = extract_code_from_wc_slug(slug)
+            if code:
+                owner_by_id[cid] = normalize_dejavu_code(code)
+    pruned: list[str] = []
+    for code, cid in list(merged.items()):
+        cid = int(cid)
+        owner = owner_by_id.get(cid)
+        if cid not in live_ids:
+            pruned.append(f"{code}→#{cid} (حذف‌شده)")
+            del merged[code]
+        elif owner is not None and owner != normalize_dejavu_code(code):
+            pruned.append(f"{code}→#{cid} (مالِ کدِ {owner})")
+            del merged[code]
+    return pruned
+
+
 def prepare_category_context(config, *, fetch_live: bool = True, timeout: int = 45) -> dict[str, Any]:
     """
     آماده‌سازی قبل sync محصول / اعمال دسته:
@@ -84,11 +117,13 @@ def prepare_category_context(config, *, fetch_live: bool = True, timeout: int = 
     """
     cat_map = load_category_map()
     slug_map: dict = {}
+    live_ok = False
     if fetch_live and config:
         try:
             from sync_app.core.integrations.commerce_provider import fetch_store_slug_map
 
             slug_map = fetch_store_slug_map(config, timeout=timeout)
+            live_ok = True
         except Exception:
             slug_map = {}
 
@@ -98,6 +133,19 @@ def prepare_category_context(config, *, fetch_live: bool = True, timeout: int = 
         new_id = merged.get(normalize_dejavu_code(code))
         if new_id and int(old_id) != int(new_id):
             stale.append(f"{code}:{old_id}→{new_id}")
+
+    if live_ok and slug_map:
+        pruned = prune_stale_category_ids(merged, slug_map)
+        if pruned:
+            try:
+                from sync_app.core.sync_utils import log
+
+                log.warning(
+                    "⚠️ این لینک‌هایِ دسته‌بندی دیگه معتبر نبودن و کنار گذاشته شدن (دسته رویِ سایت حذف "
+                    f"شده یا شناسه‌اش الان مالِ دسته‌یِ دیگری‌ست): {', '.join(pruned[:10])}"
+                )
+            except Exception:
+                pass
 
     if merged != cat_map:
         save_category_map(merged)

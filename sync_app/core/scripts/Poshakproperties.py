@@ -645,6 +645,20 @@ def sync_attributes_dynamic(wcapi, attributes_data_dejavu, config=None):
 
     value_links = load_value_links()
 
+    # کدوم ویژگیِ زنده‌یِ سایت، با نام/اسلاگش، همین الان مالِ یک ویژگیِ ERPِ
+    # دیگه‌ست — شناسه‌یِ ذخیره‌شده یا تطبیقِ term هرگز نباید اون رو برایِ یک
+    # ویژگیِ دیگه بگیره (و تغییرِ نام بده). بعد از ریستِ سایت شناسه‌هایِ
+    # ویژگی از نو داده می‌شن؛ بدونِ این، مثلاً «سایز» به «رنگ» تغییرِ نام می‌داد.
+    erp_attr_keys = {_match_key(normalize_text(n)) for n in attributes_data_dejavu if normalize_text(n)}
+    erp_owner_by_attr_id: dict[int, str] = {}
+    for _attr in existing_attributes or []:
+        if not isinstance(_attr, dict) or not _attr.get("id"):
+            continue
+        for _raw in (_attr.get("name"), _attr.get("slug")):
+            _k = _match_key(_raw)
+            if _k and _k in erp_attr_keys:
+                erp_owner_by_attr_id.setdefault(int(_attr["id"]), _k)
+
     for attr_name, terms in attributes_data_dejavu.items():
         attr_name = normalize_text(attr_name)
         terms = {normalize_text(t) for t in terms if normalize_text(t)}
@@ -677,17 +691,46 @@ def sync_attributes_dynamic(wcapi, attributes_data_dejavu, config=None):
         if attr_id and changed_parts and norm_key in hash_cache:
             log.info(f"{_LOG} 🔍 [{attr_name}] این بخش‌ها عوض شده: {', '.join(changed_parts)}")
 
-        # ۲. اگر با نام پیدا نشد، از نگاشت ذخیره‌شده استفاده کن
+        # ۲. اگر با نام پیدا نشد، از نگاشت ذخیره‌شده استفاده کن — فقط اگه اون
+        # شناسه هنوز واقعاً همین ویژگی باشه: مالِ ویژگیِ ERPِ دیگه‌ای نباشه، و
+        # اگه نامش رویِ سایت فرق داره، termهاش با termهایِ ERP همپوشانی داشته
+        # باشه (وگرنه یعنی بعد از ریست این شناسه به یک ویژگیِ بی‌ربط رسیده).
         if not attr_id and norm_key and norm_key in saved_id_map:
-            attr_id = saved_id_map[norm_key]
-            log.info(f"{_LOG} 🗂️ ویژگی '{attr_name}' از نگاشت ذخیره‌شده — ID: {attr_id}")
+            candidate_id = int(saved_id_map[norm_key])
+            owner_key = erp_owner_by_attr_id.get(candidate_id)
+            live_rec = next(
+                (a for a in existing_attributes or [] if isinstance(a, dict) and int(a.get("id") or 0) == candidate_id),
+                None,
+            )
+            if owner_key and owner_key != norm_key:
+                log.warning(
+                    f"{_LOG} ⚠️ شناسه‌یِ ذخیره‌شده‌یِ '{attr_name}' (ID: {candidate_id}) الان مالِ ویژگیِ دیگری‌ست — نادیده گرفته شد."
+                )
+            elif live_rec is not None:
+                verified_id, _score = _find_attr_by_term_overlap(
+                    wcapi, terms, [live_rec], claimed_ids=claimed_attr_ids,
+                )
+                if verified_id:
+                    attr_id = candidate_id
+                    log.info(f"{_LOG} 🗂️ ویژگی '{attr_name}' از نگاشت ذخیره‌شده — ID: {attr_id}")
+                else:
+                    log.warning(
+                        f"{_LOG} ⚠️ شناسه‌یِ ذخیره‌شده‌یِ '{attr_name}' (ID: {candidate_id}) الان مالِ ویژگیِ "
+                        f"«{live_rec.get('name')}» است و مقادیرش نمی‌خونه — به اون دست زده نمی‌شه."
+                    )
+            else:
+                attr_id = candidate_id  # رویِ سایت نیست — مسیرِ «دوباره جستجو» در پایین رسیدگی می‌کنه
 
         # ۳. نام ERP عوض شده — با همپوشانی termها همان attribute قدیمی را پیدا کن
         if not attr_id:
             overlap_id, overlap_score = _find_attr_by_term_overlap(
                 wcapi,
                 terms,
-                existing_attributes,
+                [
+                    a for a in existing_attributes or []
+                    if isinstance(a, dict)
+                    and erp_owner_by_attr_id.get(int(a.get("id") or 0)) in (None, norm_key)
+                ],
                 claimed_ids=claimed_attr_ids,
             )
             if overlap_id:

@@ -35,6 +35,9 @@ _SITE_SCOPE_FILES = (
     "bulk_image_import_uploaded.json",
     "site_category_price_list.json",
     "site_brand_price_list.json",
+    "transferred_erp_images.json",
+    "transferred_erp_images_ps.json",
+    "imported_orders_ledger.json",
 )
 
 

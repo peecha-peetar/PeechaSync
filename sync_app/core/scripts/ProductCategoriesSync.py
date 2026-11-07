@@ -199,6 +199,38 @@ def _wanted_dejavu_codes(categories_to_sync):
     }
 
 
+def _expected_parent_wc_id(category: dict, code_map: dict) -> int:
+    parent_code = str(category.get("parent_dejavu_id") or "").strip()
+    if not parent_code:
+        return 0
+    try:
+        return int(code_map.get(parent_code) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _pick_name_match(candidates, *, code_key: str, expected_parent: int, claimed_by_code: dict):
+    """از بینِ دسته‌هایِ هم‌نامِ سایت، فقط اونی رو برمی‌گردونه که (۱) الان مالِ
+    کدِ ERPِ دیگه‌ای نیست و (۲) اگه چند تا موند، والدش همون والدِ موردِ
+    انتظاره. اگه نتیجه مبهم باشه None — تا دسته‌یِ جدا ساخته بشه، نه اینکه
+    دو گروهِ متفاوت رویِ یک دسته بیفتن."""
+    claimed_ids = {
+        int(v) for k, v in (claimed_by_code or {}).items()
+        if v and str(k).strip() != str(code_key).strip()
+    }
+    free = [(cid, parent) for cid, parent in (candidates or []) if int(cid) not in claimed_ids]
+    if not free:
+        return None
+    same_parent = [cid for cid, parent in free if int(parent or 0) == int(expected_parent or 0)]
+    if len(same_parent) == 1:
+        return int(same_parent[0])
+    if len(free) == 1 and not same_parent:
+        # تنها دسته‌یِ آزادِ هم‌نام ولی با والدِ دیگه — فقط وقتی قبول می‌شه که
+        # والدِ موردِ انتظار هنوز معلوم نیست (گروهِ اصلی/والدِ ساخته‌نشده).
+        return int(free[0][0]) if not expected_parent else None
+    return None
+
+
 def _category_put_payload(category, code_to_wc_id: dict, config=None, *, is_create=False) -> dict:
     """
     بدنه PUT/POST دسته — والد از نگاشت کد ERP.
@@ -273,7 +305,7 @@ def _sync_category_name_updates(config, categories_to_sync, code_to_wc_id: dict)
             continue
         payload = _category_put_payload(category, active_map, config)
         hash_payload = {"payload": payload, "settings": settings_fingerprint}
-        skip, cache_entry, changed_parts = should_skip_unchanged(code_key, hash_payload, hash_cache, wc_id)
+        skip, cache_entry, changed_parts = should_skip_unchanged(code_key, hash_payload, hash_cache, wc_id, target_id=wc_id)
         if force_full_sync:
             skip = False
         if skip:
@@ -397,8 +429,12 @@ def sync_categories_to_woocommerce(categories_to_sync, config=None):
     ):
         log.info("دسته‌ها در map محلی هستند ولی روی Woo نیستند — ساخت مجدد...")
 
-    # نگاشت نام دستهٔ Woo → id (برای تطبیق وقتی slug فارسی/متفاوت است)
-    NAME_ID_MAP: dict[str, int] = {}
+    # نگاشت نام دستهٔ Woo → [(id, parent)] (برای تطبیق وقتی slug فارسی/متفاوت
+    # است). لیست، نه یک id — چون دو زیرگروهِ هم‌نام زیرِ دو گروهِ متفاوت (مثلِ
+    # «زنانه» هم زیرِ پیراهن هم زیرِ شلوار) خیلی رایجه؛ قبلاً هر دو به همون
+    # اولین دستهٔ هم‌نام می‌چسبیدن و هر سینک اسلاگِ اون دسته بینِ دو کد جابه‌جا
+    # می‌شد (محصولاتِ دو گروه قاطی می‌شدن).
+    NAME_ID_MAP: dict[str, list[tuple[int, int]]] = {}
 
     log.info("▶️ واکشی دسته‌بندی‌های موجود از ووکامرس...")
     try:
@@ -410,7 +446,7 @@ def sync_categories_to_woocommerce(categories_to_sync, config=None):
                     config,
                     "GET",
                     "products/categories",
-                    params={"per_page": 100, "page": p, "_fields": "id,slug,name"},
+                    params={"per_page": 100, "page": p, "_fields": "id,slug,name,parent"},
                     label=f"دریافت categories صفحه {p}",
                 )
                 if not isinstance(data, list):
@@ -427,7 +463,7 @@ def sync_categories_to_woocommerce(categories_to_sync, config=None):
                     TEMP_ID_MAP[code] = cat.get('id')
                 nkey = _norm_cat_name(cat.get('name'))
                 if nkey and cat.get('id'):
-                    NAME_ID_MAP.setdefault(nkey, int(cat['id']))
+                    NAME_ID_MAP.setdefault(nkey, []).append((int(cat['id']), int(cat.get('parent') or 0)))
             if len(batch) < 100:
                 break
             page += 1
@@ -475,7 +511,12 @@ def sync_categories_to_woocommerce(categories_to_sync, config=None):
 
         if not wc_id:
             # تطبیق بر اساس نام: دسته با slug فارسی/متفاوت از قبل روی Woo هست
-            existing_id = NAME_ID_MAP.get(_norm_cat_name(name))
+            existing_id = _pick_name_match(
+                NAME_ID_MAP.get(_norm_cat_name(name)) or [],
+                code_key=code_key,
+                expected_parent=_expected_parent_wc_id(category, code_map),
+                claimed_by_code={**TEMP_ID_MAP, **DEJAVU_ID_TO_WC_ID_MAP},
+            )
             if existing_id:
                 wc_id = existing_id
                 _heal_slug(wc_id)

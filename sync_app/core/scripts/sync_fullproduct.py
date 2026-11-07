@@ -248,6 +248,11 @@ def _upsert_wc_product(wcapi, sku, p_data, has_variants, product_map, *, stock_q
             raise RuntimeError(f"POST محصول {sku} بدون id: {data}")
         saved_pid = int(data["id"])
         log.info(f"➕ [{sku}] ایجاد → Woo #{saved_pid}")
+        # محصولِ تازه هیچ عکسی نداره — سابقه‌یِ «قبلاً منتقل شده» (مالِ
+        # محصولِ قبلیِ حذف‌شده) باید پاک بشه وگرنه تصاویر هیچ‌وقت آپلود نمی‌شن.
+        from sync_app.core.erp_image_helper import forget_transferred_images
+
+        forget_transferred_images(sku, "prestashop" if is_prestashop(config) else "woocommerce")
 
     status = str((data or {}).get("status") or "").strip()
     if status not in ("publish", "draft", "private", "pending"):
@@ -950,6 +955,14 @@ def main():
     )
     db_rows = cursor.fetchall()
     rows_by_sku = {str(r[0]).strip(): r for r in db_rows}
+    # یک‌بار بعد از به‌روزرسانی: لینک‌هایِ قدیمیِ درست با SKUِ متفاوت حفظ بشن
+    # (قانونِ جدیدِ هویت اون‌ها رو نامعتبر می‌دونست و محصولِ تکراری می‌ساخت).
+    from sync_app.core.product_woo_map_helper import grandfather_legacy_links
+
+    grandfather_legacy_links(
+        product_map, live_wc_ids, {k: str(r[1] or "") for k, r in rows_by_sku.items()},
+        name_sync_enabled=is_field_enabled(raw_config, "SYNC_FIELD_PRODUCT_NAME"),
+    )
 
     from sync_app.core.stock_group import is_secondary, combined_stock_for_primary
 
@@ -980,6 +993,10 @@ def main():
     stats_lock = threading.Lock()
     map_lock = threading.Lock()
     _processed_count = 0
+    from sync_app.core.product_woo_map_meta import load_product_woo_map_meta
+    from sync_app.core.product_woo_map_helper import check_mapped_product_identity
+
+    _link_meta_by_sku = dict(load_product_woo_map_meta().get("links") or {})
     progress_lock = threading.Lock()
 
     # تشخیصِ تغییر: هر SKU (ساده یا متغیر) که از آخرین سینکِ موفق دقیقاً
@@ -1023,6 +1040,14 @@ def main():
             # کاربر، در واقع یه واریانتِ یه محصولِ متغیرِ سایته — نه محصولِ
             # جدا. کاملاً از مسیرِ عادیِ ساخت/به‌روزرسانیِ محصول رد می‌شیم.
             try:
+                from sync_app.core.structure_mismatch_override import verify_site_variation_target
+
+                target_ok, target_why = verify_site_variation_target(wcapi, raw_config, site_variation_target)
+                if not target_ok:
+                    raise RuntimeError(
+                        f"تطبیقِ ساختاریِ «{sku}» دیگه معتبر نیست ({target_why}) — هیچ چیزی رویِ سایت "
+                        "نوشته نشد؛ لطفاً در تبِ «تطبیقِ ساختاری» دوباره لینکش کنید."
+                    )
                 stock_quantity = combined_stock_for_primary(sku, int(row[7] or 0), raw_config, _stock_lookup)
                 _apply_site_variation_override(
                     wcapi, raw_config, sku, matched_group, site_variation_target,
@@ -1246,15 +1271,25 @@ def main():
             hash_payload["attr_map"] = attr_map
         mapped_id = local_map.get(sku)
         has_existing = bool(mapped_id)
-        if has_existing and live_wc_ids is not None and int(mapped_id) not in live_wc_ids:
-            # نگاشتِ محلی به یک محصولی اشاره می‌کنه که دیگه رویِ سایت زنده
-            # نیست (حذفِ دستی بیرون از برنامه) — طوری رفتار می‌کنیم که انگار
-            # اصلاً از قبل ساخته نشده، تا resolve_existing_product_id/
-            # _upsert_wc_product تصمیمِ درست (ساختِ دوباره) رو بگیرن.
-            has_existing = False
-            log.info(f"ℹ️ [{sku}] Woo #{mapped_id} دیگه رویِ سایت پیدا نشد — دوباره سینک می‌شه.")
+        if has_existing and live_wc_ids is not None:
+            live_info = live_wc_ids.get(int(mapped_id))
+            if live_info is None:
+                # نگاشتِ محلی به یک محصولی اشاره می‌کنه که دیگه رویِ سایت زنده
+                # نیست (حذفِ دستی بیرون از برنامه) — طوری رفتار می‌کنیم که انگار
+                # اصلاً از قبل ساخته نشده، تا resolve_existing_product_id/
+                # _upsert_wc_product تصمیمِ درست (ساختِ دوباره) رو بگیرن.
+                has_existing = False
+                log.info(f"ℹ️ [{sku}] Woo #{mapped_id} دیگه رویِ سایت پیدا نشد — دوباره سینک می‌شه.")
+            else:
+                identity_ok, why = check_mapped_product_identity(sku, live_info, _link_meta_by_sku.get(sku))
+                if not identity_ok:
+                    # شناسه هنوز رویِ سایت هست ولی مالِ محصولِ دیگری‌ست (مثلاً
+                    # بعد از ریستِ سایت) — نباید «بدونِ تغییر» رد بشه؛
+                    # resolve_existing_product_id لینک رو اصلاح می‌کنه.
+                    has_existing = False
+                    log.info(f"ℹ️ [{sku}] لینکِ Woo #{mapped_id} نیاز به بررسی دارد ({why}).")
         skip, cache_entry, changed_parts = should_skip_unchanged(
-            sku, hash_payload, sync_hash_cache, has_existing
+            sku, hash_payload, sync_hash_cache, has_existing, target_id=mapped_id if has_existing else None,
         )
         if force_full_sync:
             skip = False
@@ -1407,6 +1442,7 @@ def main():
             with stats_lock:
                 stats["ok"] += 1
             with hash_lock:
+                cache_entry["pid"] = int(saved_pid)
                 sync_hash_cache[sku] = cache_entry
             from sync_app.core.sync_history import record_sync_event
 

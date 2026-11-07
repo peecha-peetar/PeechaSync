@@ -101,9 +101,21 @@ def insert_invoice(order: dict, config: dict) -> None:
     order_id = order.get("id")
     order_map = load_sepidar_map(_ORDER_MAP_FILE)
     if str(order_id) in order_map:
-        log.info(f"ℹ️ سفارش {order_id} قبلاً به فاکتورِ سپیدار تبدیل شده — رد شد.")
-        _mark_order_completed(order_id, config)
-        return
+        from sync_app.core.order_import_ledger import DIFFERENT, UNKNOWN, ledger_verdict, record_imported_order
+
+        # شماره‌یِ سفارشِ سایت بعد از ریستِ سایت تکرار می‌شه — فقط اگه همون
+        # سفارش باشه «قبلاً ثبت شده»، نه یک سفارشِ تازه با همون شماره.
+        verdict = ledger_verdict(order_id, order)
+        if verdict != DIFFERENT:
+            if verdict == UNKNOWN:
+                record_imported_order(order_id, order)
+            log.info(f"ℹ️ سفارش {order_id} قبلاً به فاکتورِ سپیدار تبدیل شده — رد شد.")
+            _mark_order_completed(order_id, config)
+            return
+        log.warning(
+            f"⚠️ شماره‌یِ سفارشِ {order_id} قبلاً برایِ یک سفارشِ دیگه (قبل از ریستِ سایت) فاکتور شده بود — "
+            "این یک سفارشِ تازه‌ست و فاکتور می‌شه."
+        )
 
     conn = get_sepidar_connection(config)
     try:
@@ -201,6 +213,9 @@ def insert_invoice(order: dict, config: dict) -> None:
         conn.commit()
         order_map[str(order_id)] = sale_invoice_id
         save_sepidar_map(_ORDER_MAP_FILE, order_map)
+        from sync_app.core.order_import_ledger import record_imported_order
+
+        record_imported_order(order_id, order)
         log.info(f"✅ سفارش {order_id} → فاکتورِ سپیدار #{sale_invoice_id} (Number {number}) ثبت شد.")
         _mark_order_completed(order_id, config)
     except Exception as exc:

@@ -108,7 +108,52 @@ def get_site_variation_target(sku: str) -> dict | None:
         return None
     if not parent_id or not variation_id:
         return None
-    return {"parent_product_id": parent_id, "variation_id": variation_id}
+    return {
+        "parent_product_id": parent_id,
+        "variation_id": variation_id,
+        "site_sku": str(entry.get("site_sku") or "").strip(),
+    }
+
+
+def verify_site_variation_target(wcapi, config, target: dict) -> tuple[bool, str]:
+    """قبل از نوشتنِ قیمت/موجودی رویِ واریانتِ سایتِ لینک‌شده: هنوز وجود
+    داره، هنوز زیرِ همون محصولِ والده، و (اگه موقعِ لینک SKUش ثبت شده)
+    همون SKU رو داره؟ بعد از ریستِ سایت این شناسه‌ها به واریانت‌هایِ
+    محصولاتِ دیگه می‌رسن — بدونِ این چک، قیمتِ یک کالا رویِ واریانتِ
+    یک محصولِ کاملاً بی‌ربط می‌نشست.
+    خروجی: (True, "") یا (False, دلیل). خطایِ ارتباط → استثنا (نه False)،
+    تا لینکِ معتبر به‌خاطرِ قطعیِ موقت نامعتبر حساب نشه."""
+    parent_id = int(target.get("parent_product_id") or 0)
+    variation_id = int(target.get("variation_id") or 0)
+    recorded_sku = str(target.get("site_sku") or "").strip()
+    from sync_app.core.integrations.commerce_provider import is_prestashop
+
+    if is_prestashop(config):
+        from sync_app.core.ps_variation_helper import ps_list_combinations
+
+        combos = ps_list_combinations(config, parent_id)
+        match = next((c for c in combos or [] if int(c.get("id") or 0) == variation_id), None)
+        if not match:
+            return False, f"ترکیبِ #{variation_id} زیرِ محصولِ #{parent_id} رویِ سایت پیدا نشد"
+        live_sku = str(match.get("reference") or "").strip()
+    else:
+        resp = wcapi.get(
+            f"products/{parent_id}/variations/{variation_id}",
+            params={"_fields": "id,parent_id,sku,status"},
+        )
+        status_code = int(getattr(resp, "status_code", 200) or 200)
+        data = resp.json()
+        if not (isinstance(data, dict) and data.get("id")):
+            err_code = str(data.get("code") or "") if isinstance(data, dict) else ""
+            if status_code in (404, 410) or err_code.endswith("_invalid_id") or "invalid" in err_code:
+                return False, f"واریانتِ #{variation_id} زیرِ محصولِ #{parent_id} رویِ سایت پیدا نشد"
+            raise RuntimeError(f"بررسیِ واریانتِ #{variation_id}: {err_code or status_code}")
+        if int(data.get("parent_id") or parent_id) != parent_id:
+            return False, f"واریانتِ #{variation_id} الان مالِ محصولِ #{data.get('parent_id')} است، نه #{parent_id}"
+        live_sku = str(data.get("sku") or "").strip()
+    if recorded_sku and live_sku.casefold() != recorded_sku.casefold():
+        return False, f"SKUِ واریانتِ #{variation_id} رویِ سایت «{live_sku or '—'}» است، نه «{recorded_sku}»"
+    return True, ""
 
 
 def find_erp_sku_for_site_variation(parent_product_id, variation_id, *, exclude_sku: str = "") -> str | None:
@@ -146,6 +191,7 @@ def find_erp_sku_for_site_variation(parent_product_id, variation_id, *, exclude_
 
 def set_site_variation_target(
     sku: str, parent_product_id: int, variation_id: int, *, label: str = "", erp_label: str = "",
+    site_sku: str = "",
 ) -> None:
     sku = str(sku or "").strip()
     if not sku or not parent_product_id or not variation_id:
@@ -156,6 +202,7 @@ def set_site_variation_target(
         "variation_id": int(variation_id),
         "label": str(label or "").strip(),
         "erp_label": str(erp_label or "").strip(),
+        "site_sku": str(site_sku or "").strip(),
     }
     _site_variation_table.save(table)
 

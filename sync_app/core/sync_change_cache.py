@@ -13,7 +13,7 @@
 import hashlib
 import json
 
-from sync_app.core.sync_utils import app_path, log
+from sync_app.core.sync_utils import log, site_scoped_path
 
 
 def _platform_suffix(config) -> str:
@@ -26,7 +26,11 @@ def _platform_suffix(config) -> str:
 
 
 def _cache_path(name: str, config=None) -> str:
-    return app_path(f"sync_hash_cache_{name}_{_platform_suffix(config)}.json")
+    # به‌ازایِ هر سایت جدا — قبلاً بینِ همه‌یِ سایت‌هایِ یک پلتفرم مشترک بود،
+    # پس «این کالا عوض نشده» که برایِ سایتِ A ثبت شده بود، باعث می‌شد رویِ
+    # سایتِ B (یا همون سایت بعد از ریست) اصلاً ارسال نشه. فایلِ قدیمیِ مشترک
+    # با اولین دسترسی خودکار به سایتِ فعلی منتقل می‌شه (site_scoped_path).
+    return site_scoped_path(f"sync_hash_cache_{name}_{_platform_suffix(config)}.json")
 
 
 def load_hash_cache(name: str, config=None) -> dict:
@@ -91,7 +95,7 @@ def _part_hashes(hash_payload: dict) -> dict[str, str]:
 
 
 def should_skip_unchanged(
-    sku: str, hash_payload: dict, cache: dict, has_existing
+    sku: str, hash_payload: dict, cache: dict, has_existing, target_id=None
 ) -> tuple[bool, dict, list[str]]:
     """hash_payload یه دیکشنریِ چند-بخشیه (مثلاً p_data/categories/variants/
     attr_map/settings) — هر بخش جدا هش می‌شه تا اگه سینکِ دوباره لازم شد،
@@ -118,5 +122,15 @@ def should_skip_unchanged(
             if key not in parts and key not in changed:
                 changed.append(key)
         changed.sort()
+    # target_id: شناسه‌یِ محصولِ سایت که آخرین سینکِ موفق رویش نوشته شد.
+    # اگه الان یک محصولِ دیگه (مثلاً بعد از حذف و ساختِ دوباره) هدفه، محتوا
+    # حتماً باید دوباره ارسال بشه — حتی اگه دادهٔ ERP عوض نشده باشه.
+    entry = {"parts": parts}
+    if target_id:
+        entry["pid"] = int(target_id)
+        prev_pid = prev.get("pid") if isinstance(prev, dict) else None
+        if prev_pid and int(prev_pid) != int(target_id) and "target" not in changed:
+            changed.append("target")
+            changed.sort()
     skip = bool(has_existing) and not changed
-    return skip, {"parts": parts}, changed
+    return skip, entry, changed

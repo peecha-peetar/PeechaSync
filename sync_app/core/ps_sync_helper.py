@@ -562,6 +562,9 @@ def _product_to_wc_shape(entry: dict, lang_id: int, *, stock_quantity: int | Non
         "meta_title": _lang_value(entry.get("meta_title"), lang_id),
         "meta_description": _lang_value(entry.get("meta_description"), lang_id),
         "meta_keywords": _lang_value(entry.get("meta_keywords"), lang_id),
+        # اثرِ انگشتِ تغییرناپذیرِ محصول — برایِ تشخیصِ «شناسه‌یِ قدیمی الان
+        # مالِ محصولِ دیگری‌ست» (check_mapped_product_identity).
+        "date_created_gmt": str(entry.get("date_add") or ""),
     }
 
 

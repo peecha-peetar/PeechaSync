@@ -59,10 +59,10 @@ def load_transferred_image_ids(platform: str = "woocommerce") -> dict[str, list[
     یکی جدید اضافه بشه، تعداد کل ممکنه عوض نشه ولی این فایل درست تشخیص می‌ده.
     """
     import json
-    from sync_app.core.sync_utils import app_path
+    from sync_app.core.sync_utils import site_scoped_path
 
     try:
-        with open(app_path(_transferred_images_filename(platform)), "r", encoding="utf-8") as f:
+        with open(site_scoped_path(_transferred_images_filename(platform)), "r", encoding="utf-8") as f:
             data = json.load(f)
             if isinstance(data, dict):
                 return {
@@ -76,11 +76,11 @@ def load_transferred_image_ids(platform: str = "woocommerce") -> dict[str, list[
 
 def save_transferred_image_ids(mapping: dict, platform: str = "woocommerce") -> None:
     import json
-    from sync_app.core.sync_utils import app_path, log
+    from sync_app.core.sync_utils import site_scoped_path, log
 
     try:
         clean = {str(k).strip(): sorted({int(i) for i in (v or [])}) for k, v in (mapping or {}).items()}
-        with open(app_path(_transferred_images_filename(platform)), "w", encoding="utf-8") as f:
+        with open(site_scoped_path(_transferred_images_filename(platform)), "w", encoding="utf-8") as f:
             json.dump(clean, f, ensure_ascii=False, indent=2)
     except Exception as exc:
         try:
@@ -97,6 +97,19 @@ def mark_images_transferred(sku: str, hlo_ids: list[int], platform: str = "wooco
     existing.update(int(i) for i in hlo_ids)
     mapping[str(sku).strip()] = sorted(existing)
     save_transferred_image_ids(mapping, platform)
+
+
+def forget_transferred_images(sku: str, platform: str = "woocommerce") -> None:
+    """سابقه‌یِ «تصاویرِ این کالا قبلاً منتقل شده» به محصولِ *قبلیِ* سایت
+    مربوط بود — وقتی اون محصول حذف/جایگزین می‌شه (یا شناسه‌اش دیگه مالِ این
+    کالا نیست)، باید پاک بشه، وگرنه محصولِ تازه برایِ همیشه بدونِ عکس می‌مونه."""
+    key = str(sku or "").strip()
+    if not key:
+        return
+    mapping = load_transferred_image_ids(platform)
+    if key in mapping:
+        mapping.pop(key, None)
+        save_transferred_image_ids(mapping, platform)
 
 
 def _stage_one(dst_dir: str, subdir: str, sku_key: str, name_hint: str, blob: bytes, path: str, config: dict | None) -> str:

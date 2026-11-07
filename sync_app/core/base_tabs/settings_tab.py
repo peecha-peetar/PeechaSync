@@ -1001,6 +1001,39 @@ class SettingsTab(QWidget):
 
         restart_application()
 
+    def _reset_site_links(self):
+        from sync_app.core.site_link_reset import list_resettable_files, reset_site_links
+
+        names = list_resettable_files()
+        if not names:
+            QMessageBox.information(self, "چیزی برایِ ریست نیست", "برایِ این سایت هنوز هیچ لینکی ذخیره نشده.")
+            return
+        confirm = QMessageBox.question(
+            self, "ریستِ لینک‌هایِ این سایت",
+            f"{len(names)} فایلِ لینک برایِ سایتِ فعلی پیدا شد.\n\n"
+            "فقط وقتی این کار رو بکنید که خودِ سایت ریست یا از نو نصب شده باشه — بعدش باید "
+            "دسته‌بندی، ویژگی‌ها، محصولات و واریانت‌ها دوباره به ترتیب همگام بشن، و اگه کالایی "
+            "رو دستی تطبیق داده بودید، دوباره تطبیقش بدید.\n\n"
+            "همه‌چیز به یک پوشه‌یِ بکاپ منتقل می‌شه (قابلِ برگشت) و برنامه ریستارت می‌شه. ادامه می‌دهید؟",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+        try:
+            result = reset_site_links()
+        except Exception as exc:
+            QMessageBox.critical(self, "خطا در ریست", str(exc))
+            return
+        QMessageBox.information(
+            self, "ریست انجام شد",
+            f"{len(result['moved'])} فایل به این پوشه‌یِ بکاپ منتقل شد:\n{result['backup_dir']}\n\n"
+            "برنامه الان ریستارت می‌شود.",
+        )
+        from sync_app.core.app_restart import restart_application
+
+        restart_application()
+
     def _export_full_backup(self):
         import datetime
 
@@ -2477,6 +2510,29 @@ class SettingsTab(QWidget):
         full_backup_group.setLayout(full_backup_layout)
         self.full_backup_group = full_backup_group
 
+        # ── ریستِ لینک‌هایِ سایتِ فعلی (وقتی خودِ سایت ریست/از نو نصب شده) ──
+        site_reset_group = QGroupBox("🔄 ریستِ لینک‌هایِ این سایت (بعد از ریستِ خودِ سایت)")
+        site_reset_layout = QVBoxLayout()
+        site_reset_hint = QLabel(
+            "اگه سایت رو ریست کردید یا از نو نصب کردید، شماره‌یِ محصولات/دسته‌ها/ویژگی‌هایِ سایت "
+            "عوض شده و لینک‌هایِ قبلی دیگه به چیزِ درستی اشاره نمی‌کنن. این دکمه همه‌یِ لینک‌هایِ "
+            "«همین سایت» (تطبیق‌ها، تطبیقِ ساختاری، دستهٔ دستیِ محصولات، لیستِ قیمتِ دسته‌ها و کشِ "
+            "تغییرات) رو کنار می‌ذاره تا همگام‌سازی از صفر و تمیز شروع بشه.\n"
+            "هیچ‌چیز پاک نمی‌شه — همه به یک پوشه‌یِ بکاپ منتقل می‌شن. سفارش‌هایِ قبلاً واردشده و "
+            "سایت‌هایِ دیگر دست نمی‌خورن."
+        )
+        site_reset_hint.setWordWrap(True)
+        site_reset_hint.setStyleSheet("color:#64748b; font-size:10px;")
+        site_reset_layout.addWidget(site_reset_hint)
+        site_reset_btn_row = QHBoxLayout()
+        self.site_link_reset_btn = QPushButton("🔄 ریستِ لینک‌هایِ این سایت...")
+        self.site_link_reset_btn.clicked.connect(self._reset_site_links)
+        site_reset_btn_row.addWidget(self.site_link_reset_btn)
+        site_reset_btn_row.addStretch()
+        site_reset_layout.addLayout(site_reset_btn_row)
+        site_reset_group.setLayout(site_reset_layout)
+        self.site_reset_group = site_reset_group
+
         wc_page_scroll = self._build_settings_page([self.wc_group])
         self.scroll_area = wc_page_scroll
 
@@ -2497,7 +2553,7 @@ class SettingsTab(QWidget):
             self._build_settings_page(
                 [
                     self.monitor_group, self.license_group, self.backup_group,
-                    self.site_recovery_group, self.full_backup_group,
+                    self.site_recovery_group, self.full_backup_group, self.site_reset_group,
                 ]
             ),
             "🛡️ سیستم",

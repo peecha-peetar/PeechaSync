@@ -332,33 +332,63 @@ def fetch_sepidar_item_images(config: dict | None = None, item_ids=None) -> dict
 
 def _resolve_existing_sepidar_product_id(wcapi, sku: str, product_map: dict):
     """معادلِ محلیِ resolve_existing_product_id دژاوو — عمداً reuse نشده،
-    چون اون تابع داخلش چندجا save_product_woo_map (فایلِ دژاوو) رو هاردکد
-    صدا می‌زنه، حتی وقتی یک product_map دلخواه بهش پاس بدیم؛ اگه با
-    نگاشتِ سپیدار صداش بزنیم، بی‌سروصدا رویِ product_woo_map.jsonِ دژاوو
-    می‌نوشت. این‌جا فقط توابعِ خواندنیِ بی‌اثرش (fetch_product_by_id/
-    find_product_by_sku/_is_active_wc_product) reuse می‌شن؛ ذخیره‌سازی
-    فقط یک‌بار توسطِ خودِ صداکننده (رویِ sepidar_product_map.json) انجام
-    می‌شه."""
-    from sync_app.core.product_woo_map_helper import fetch_product_by_id, find_product_by_sku, _is_active_wc_product
+    چون اون تابع داخلش save_product_woo_map (فایلِ دژاوو) رو صدا می‌زنه؛
+    این‌جا فقط توابعِ بی‌اثر (بررسیِ وضعیت/هویت/جستجویِ SKU) reuse می‌شن و
+    ذخیره فقط یک‌بار توسطِ خودِ صداکننده (رویِ sepidar_product_map.json)
+    انجام می‌شه.
+
+    مثلِ دژاوو، شناسه‌یِ ذخیره‌شده فقط وقتی استفاده می‌شه که هنوز همون
+    محصول باشه (SKUِ یکسان یا تطبیقِ دستیِ معتبر) — بعد از ریستِ سایت
+    شناسه‌ها به محصولاتِ دیگه می‌رسن و بدونِ این چک، اطلاعاتِ یک کالا رویِ
+    محصولِ دیگه نوشته می‌شد. خروجیِ سوم: SKUِ فعلیِ محصولِ سایت (برایِ اینکه
+    صداکننده SKUِ یک محصولِ دستی‌لینک‌شده رو بازنویسی نکنه)."""
+    from sync_app.core.product_woo_map_helper import (
+        check_mapped_product_identity,
+        fetch_product_state,
+        find_product_by_sku,
+        forget_product_site_state,
+        _is_active_wc_product,
+    )
+    from sync_app.core.product_woo_map_meta import get_product_link_meta, record_product_link_fingerprint
+    from sync_app.core.sync_utils import log
 
     sku = str(sku or "").strip()
     if not sku:
-        return None, product_map
+        return None, product_map, None
 
+    link_meta = get_product_link_meta(sku)
     cached = product_map.get(sku)
     if cached:
-        info = fetch_product_by_id(wcapi, int(cached))
-        if info and _is_active_wc_product(info):
-            return int(info["id"]), product_map
+        state, info = fetch_product_state(wcapi, int(cached))
+        if state == "error":
+            raise RuntimeError(
+                f"بررسیِ محصولِ لینک‌شده‌یِ سایت (#{cached}) به‌خاطرِ خطایِ ارتباط ممکن نشد — "
+                "این کالا این دور رد شد تا به‌اشتباه محصولِ تکراری ساخته یا رویِ محصولِ دیگری نوشته نشه."
+            )
+        if state == "ok" and _is_active_wc_product(info):
+            ok, why = check_mapped_product_identity(sku, info, link_meta)
+            if ok:
+                site_sku = str(info.get("sku") or "").strip()
+                if link_meta and link_meta.get("manual"):
+                    record_product_link_fingerprint(
+                        sku, int(info["id"]), wc_sku=site_sku, wc_created=info.get("date_created_gmt"),
+                    )
+                return int(info["id"]), product_map, site_sku
+            log.warning(
+                f"⚠️ [{sku}] لینکِ ذخیره‌شده به #{cached} دیگه معتبر نیست ({why}) — به اون محصول دست زده نمی‌شه."
+            )
         product_map.pop(sku, None)
+        # product_map=None: فایلِ نگاشتِ دژاوو لمس نمی‌شه؛ فقط لینکِ دستی/
+        # سابقه‌یِ تصاویرِ محصولِ قبلی پاک می‌شه.
+        forget_product_site_state(sku, None)
 
     hit = find_product_by_sku(wcapi, sku)
     if hit and hit.get("id") and _is_active_wc_product(hit):
         pid = int(hit["id"])
         product_map[sku] = pid
-        return pid, product_map
+        return pid, product_map, str(hit.get("sku") or "").strip()
 
-    return None, product_map
+    return None, product_map, None
 
 
 def _resolve_sepidar_product_category(item_group_id, groups_by_id: dict, erp_to_wc_category: dict):
@@ -560,6 +590,14 @@ def sync_products_from_erp(config: dict | None = None) -> dict:
                 # دستیِ کاربر (تبِ «تطبیقِ ساختاری») در واقع یه واریانتِ یه
                 # محصولِ متغیرِ سایته — نه محصولِ جدا. کاملاً از مسیرِ عادیِ
                 # ساخت/به‌روزرسانیِ محصول رد می‌شیم.
+                from sync_app.core.structure_mismatch_override import verify_site_variation_target
+
+                target_ok, target_why = verify_site_variation_target(wcapi, config, site_variation_target)
+                if not target_ok:
+                    raise RuntimeError(
+                        f"تطبیقِ ساختاری دیگه معتبر نیست ({target_why}) — هیچ چیزی رویِ سایت نوشته نشد؛ "
+                        "لطفاً در تبِ «تطبیقِ ساختاری» دوباره لینکش کنید."
+                    )
                 group_code = str(item.get("_item_group_id") or "")
                 raw_price = _resolve_sepidar_item_price(item, group_code, config)
                 price = apply_price_markup(raw_price, config, is_sale=False, sku=sku)
@@ -572,7 +610,7 @@ def sync_products_from_erp(config: dict | None = None) -> dict:
                 ok += 1
                 continue
 
-            existing_id, product_map = _resolve_existing_sepidar_product_id(wcapi, sku, product_map)
+            existing_id, product_map, existing_site_sku = _resolve_existing_sepidar_product_id(wcapi, sku, product_map)
             wc_cat_id = _resolve_sepidar_product_category(item.get("_item_group_id"), groups_by_id, erp_to_wc_category)
             group_code = str(item.get("_item_group_id") or "")
             raw_price = _resolve_sepidar_item_price(item, group_code, config)
@@ -597,6 +635,10 @@ def sync_products_from_erp(config: dict | None = None) -> dict:
                 payload["categories"] = [{"id": int(wc_cat_id)}]
 
             if existing_id:
+                if existing_site_sku is not None and existing_site_sku.casefold() != sku.casefold():
+                    # تطبیقِ دستی به محصولی با SKUِ متفاوت — SKUِ خودِ سایت دست
+                    # نمی‌خوره (همون قراردادِ دژاوو در _upsert_wc_product).
+                    payload.pop("sku", None)
                 wcapi.put(f"products/{existing_id}", payload)
                 new_id = existing_id
             else:
@@ -605,6 +647,9 @@ def sync_products_from_erp(config: dict | None = None) -> dict:
                 new_id = data.get("id") if isinstance(data, dict) else None
                 if not new_id:
                     raise RuntimeError(f"ایجادِ محصول ناموفق: {data}")
+                from sync_app.core.erp_image_helper import forget_transferred_images
+
+                forget_transferred_images(sku, "prestashop" if ps_mode else "woocommerce")
 
             product_map[sku] = int(new_id)
 

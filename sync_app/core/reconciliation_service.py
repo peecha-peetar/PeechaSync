@@ -785,7 +785,7 @@ def _fetch_wc_products(
         "products",
         params={
             "status": "any",
-            "_fields": "id,sku,name,status,type,price,categories",
+            "_fields": "id,sku,name,status,type,price,categories,date_created_gmt",
         },
         cancel_check=cancel_check,
     )
@@ -825,7 +825,10 @@ def _fetch_wc_products(
                 side="wc",
                 match_key=sku.lower() if sku else "",
                 erp_key=sku or None,
-                extra={"sku": sku, "type": ptype, "name": name, "categories": categories},
+                extra={
+                    "sku": sku, "type": ptype, "name": name, "categories": categories,
+                    "date_created_gmt": str(item.get("date_created_gmt") or ""),
+                },
             )
         )
     rows.sort(key=lambda r: (bool(r.synced), str(r.label or "")))
@@ -863,12 +866,11 @@ def product_pair_in_map(erp: ReconRow, wc: ReconRow, *, config: dict | None = No
     if is_sepidar_provider(config):
         from sync_app.core.scripts.sepidar.sepidar_common import load_sepidar_map
 
-        sku = str(wc.match_key or (wc.extra or {}).get("sku") or "").strip()
-        item_id = str(erp.erp_key or "").strip()
-        if not sku or not item_id:
+        code = _sepidar_erp_code(erp)
+        if not code or not wc.wc_id:
             return False
         product_map = load_sepidar_map("sepidar_product_map.json")
-        return str(product_map.get(sku) or "") == item_id
+        return int(product_map.get(code) or 0) == int(wc.wc_id or 0)
 
     sku = str(erp.erp_key or erp.match_key or "").strip()
     if not sku:
@@ -1891,17 +1893,51 @@ def _save_sepidar_category_links(pairs: list[tuple[ReconRow, ReconRow]]) -> int:
     return saved
 
 
+def _sepidar_erp_code(erp: ReconRow) -> str:
+    return str((erp.extra or {}).get("sku") or erp.match_key or "").strip()
+
+
+def _mark_sepidar_product_sync_by_map(erp_rows: list[ReconRow], wc_rows: list[ReconRow], sepidar_map: dict) -> None:
+    """sepidar_product_map.json = {کدِ کالایِ سپیدار: idِ محصولِ سایت} — همون
+    معنایی که سینکِ محصولات (sync_products_from_erp) و تبِ محصولات باهاش
+    کار می‌کنن."""
+    wc_by_id = {int(row.wc_id or 0): row for row in wc_rows if row.wc_id}
+    for erp_row in erp_rows:
+        try:
+            wc_id = int(sepidar_map.get(_sepidar_erp_code(erp_row)) or 0)
+        except (TypeError, ValueError):
+            continue
+        wc_row = wc_by_id.get(wc_id)
+        if wc_row is not None:
+            wc_row.synced = True
+            erp_row.synced = True
+
+
 def _save_sepidar_product_links(pairs: list[tuple[ReconRow, ReconRow]]) -> int:
+    """رفعِ باگ: قبلاً این‌جا {SKUِ سایت: ItemIDِ سپیدار} نوشته می‌شد، در
+    حالی که سینکِ محصولات همین فایل رو {کدِ کالا: idِ محصولِ سایت} می‌خونه —
+    یعنی بعد از هر تطبیق، ItemIDِ سپیدار به‌عنوانِ شناسه‌یِ محصولِ سایت
+    استفاده می‌شد و اطلاعاتِ کالا رویِ یک محصولِ بی‌ربط می‌نشست. حالا هر دو
+    یک معنا دارن و لینکِ دستی (SKUِ متفاوت) هم با اثرِ انگشت ثبت می‌شه."""
     from sync_app.core.scripts.sepidar.sepidar_common import load_sepidar_map, save_sepidar_map
 
     sepidar_map = load_sepidar_map("sepidar_product_map.json")
     saved = 0
     for erp, wc in pairs:
-        sku = str(wc.match_key or (wc.extra or {}).get("sku") or "").strip()
-        item_id = str(erp.erp_key or "").strip()
-        if not sku or not item_id:
+        code = _sepidar_erp_code(erp)
+        wc_id = int(wc.wc_id or 0)
+        if not code or not wc_id:
             continue
-        sepidar_map[sku] = int(item_id)
+        sepidar_map[code] = wc_id
+        site_sku = str(wc.match_key or (wc.extra or {}).get("sku") or "").strip()
+        register_product_link(
+            code,
+            wc_id,
+            wc_label=wc.label,
+            manual=site_sku.casefold() != code.casefold(),
+            wc_sku=site_sku,
+            wc_created=str((wc.extra or {}).get("date_created_gmt") or "") or None,
+        )
         saved += 1
     if saved:
         save_sepidar_map("sepidar_product_map.json", sepidar_map)
@@ -1946,7 +1982,7 @@ def load_comparison(
             erp_rows = _fetch_sepidar_products(config)
             _check_recon_cancel(cancel_check)
             wc_rows = _fetch_sepidar_wc_products(config)
-            _mark_sepidar_sync_by_map(erp_rows, wc_rows, load_sepidar_map("sepidar_product_map.json"))
+            _mark_sepidar_product_sync_by_map(erp_rows, wc_rows, load_sepidar_map("sepidar_product_map.json"))
         else:
             erp_rows = _fetch_erp_products(config)
             _check_recon_cancel(cancel_check)
@@ -2264,6 +2300,8 @@ def _save_product_links(
             wc_label=row_display_name(wc, ENTITY_PRODUCTS) or wc.label,
             manual=manual,
             sku_conflict_wc_id=conflict_id,
+            wc_sku=str((wc.extra or {}).get("sku") or wc_sku or "").strip(),
+            wc_created=str((wc.extra or {}).get("date_created_gmt") or "") or None,
         )
         saved += 1
     if saved:
@@ -2280,6 +2318,15 @@ def _save_variation_links(pairs: list[tuple[ReconRow, ReconRow]]) -> int:
         parent_id = int(wc.extra.get("parent_id") or 0)
         if parent_sku and parent_id:
             product_map[parent_sku] = parent_id
+            site_parent_sku = str(wc.extra.get("parent_sku") or "").strip()
+            if site_parent_sku.casefold() != parent_sku.casefold():
+                # والدِ سایت SKUِ دیگه‌ای داره — این یک تطبیقِ آگاهانه‌ست، باید
+                # «دستی» ثبت بشه (با اثرِ انگشت) وگرنه سینک اون رو لینکِ
+                # نامعتبر حساب می‌کنه و محصولِ تکراری می‌سازه.
+                register_product_link(
+                    parent_sku, parent_id, wc_label=str(wc.extra.get("parent_name") or wc.label or ""),
+                    manual=True, wc_sku=site_parent_sku,
+                )
             saved += 1
         elif erp.erp_key and wc.extra.get("parent_sku"):
             ps = str(wc.extra.get("parent_sku") or "").strip()
@@ -2454,13 +2501,18 @@ def _remove_sepidar_product_link(erp: ReconRow, wc: ReconRow) -> bool:
     from sync_app.core.scripts.sepidar.sepidar_common import load_sepidar_map, save_sepidar_map
 
     sepidar_map = load_sepidar_map("sepidar_product_map.json")
-    sku = str(wc.match_key or (wc.extra or {}).get("sku") or "").strip()
-    item_id = str(erp.erp_key or "").strip()
-    if not sku or not item_id or str(sepidar_map.get(sku)) != item_id:
+    code = _sepidar_erp_code(erp)
+    wc_id = int(wc.wc_id or 0)
+    try:
+        mapped = int(sepidar_map.get(code) or 0)
+    except (TypeError, ValueError):
+        mapped = 0
+    if not code or not wc_id or mapped != wc_id:
         return False
-    del sepidar_map[sku]
+    del sepidar_map[code]
     save_sepidar_map("sepidar_product_map.json", sepidar_map)
-    log.info(f"↩ لغو تطبیق محصول (سپیدار): {sku} ↔ {item_id}")
+    clear_product_link_meta(code)
+    log.info(f"↩ لغو تطبیق محصول (سپیدار): {code} ↔ سایت #{wc_id}")
     return True
 
 
