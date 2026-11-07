@@ -105,6 +105,41 @@ def _fmt_order_num(value):
         return str(value) if value not in (None, "") else "—"
 
 
+def _attach_erp_codes(cfg: dict, line_items: list) -> None:
+    """به هر قلمِ سفارش کدِ اتوماتیک و کدِ دستیِ کالایِ دیتابیس رو اضافه می‌کنه
+    (فقط نمایش). کدِ کالا از رویِ لینکِ محصول (product_woo_map) پیدا می‌شه —
+    چون SKUِ سایت در تطبیقِ دستی می‌تونه با کدِ دیتابیس فرق کنه."""
+    try:
+        from sync_app.core.manual_code import is_manual_code_supported, load_manual_codes
+
+        if not line_items or not is_manual_code_supported(cfg):
+            return
+        from sync_app.core.product_woo_map_helper import load_product_woo_map
+
+        product_map = load_product_woo_map() or {}
+        by_site_id: dict[int, str] = {}
+        for code, pid in product_map.items():
+            try:
+                by_site_id.setdefault(int(pid), str(code))
+            except (TypeError, ValueError):
+                continue
+        manual_codes = load_manual_codes(cfg)
+        for li in line_items:
+            if not isinstance(li, dict):
+                continue
+            try:
+                pid = int(li.get("product_id") or 0)
+            except (TypeError, ValueError):
+                pid = 0
+            site_sku = str(li.get("sku") or "").strip()
+            erp_code = by_site_id.get(pid) or (site_sku if site_sku in product_map or site_sku in manual_codes else "")
+            if erp_code:
+                li["erp_code"] = erp_code
+                li["manual_code"] = manual_codes.get(erp_code, "")
+    except Exception as exc:
+        log.debug(f"کدِ دستیِ اقلامِ سفارش: {exc}")
+
+
 class OrderDetailsDialog(QDialog):
     """نمایشِ اقلامِ یک سفارشِ سایت — با دابل‌کلیک روی ردیفِ سفارش باز می‌شه."""
 
@@ -153,7 +188,13 @@ class OrderDetailsDialog(QDialog):
             price = _fmt_order_num(row_item.get("price"))
             total = _fmt_order_num(row_item.get("total", row_item.get("subtotal")))
 
-            title_lbl = QLabel(f"{name}  (SKU: {sku})")
+            erp_code = str(row_item.get("erp_code") or "").strip()
+            code_suffix = ""
+            if erp_code:
+                from sync_app.core.manual_code import codes_label
+
+                code_suffix = f"  |  {codes_label(erp_code, row_item.get('manual_code'))}"
+            title_lbl = QLabel(f"{name}  (SKU: {sku}){code_suffix}")
             title_lbl.setStyleSheet("font-weight: 700; color: #0f172a;")
             title_lbl.setAlignment(Qt.AlignRight)
             title_lbl.setWordWrap(True)
@@ -366,6 +407,7 @@ class OrderTab(SitePreviewLoaderMixin, SyncTab):
             order = ps_get_order(cfg, order_id, timeout=timeout)
             if not order:
                 raise Exception(f"سفارش #{order_id} یافت نشد.")
+            _attach_erp_codes(cfg, order.get("line_items") or [])
             return order
 
         response = wc_rest_request(cfg, "GET", f"orders/{order_id}", timeout=timeout)
@@ -380,12 +422,14 @@ class OrderTab(SitePreviewLoaderMixin, SyncTab):
             {
                 "name": li.get("name"),
                 "sku": li.get("sku"),
+                "product_id": li.get("product_id"),
                 "quantity": li.get("quantity"),
                 "price": li.get("price"),
                 "total": li.get("total"),
             }
             for li in (data.get("line_items") or [])
         ]
+        _attach_erp_codes(cfg, line_items)
         return {
             "id": data.get("id"),
             "billing": data.get("billing") or {},

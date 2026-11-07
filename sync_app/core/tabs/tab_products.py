@@ -777,6 +777,8 @@ class ProductTab(QWidget):
 
         from sync_app.core.variation_query import load_variable_a_codes
         variable_codes = load_variable_a_codes(cursor)
+        from sync_app.core.manual_code import load_manual_codes
+        manual_codes = load_manual_codes(config, cursor=cursor)
 
         rows = []
         for row in raw_rows:
@@ -793,6 +795,7 @@ class ProductTab(QWidget):
                 "erp_images": erp_images,  # لیست کامل (blob, path) — برای آپلود همه‌ی تصاویر
                 "erp_image_count": len(erp_images),
                 "is_variant": sku in variable_codes,
+                "manual_code": manual_codes.get(sku, ""),
             })
         conn.close()
         return rows
@@ -914,6 +917,8 @@ class ProductTab(QWidget):
         structural_skus = set(list_site_variation_targets().keys()) | set(list_force_simple_sources().keys())
         erp_label = self._erp_label()
         platform_label = self._platform_label()
+        from sync_app.core.manual_code import codes_label, is_manual_code_supported
+        show_manual_code = is_manual_code_supported(self.config)
 
         try:
             for row in rows or []:
@@ -944,8 +949,9 @@ class ProductTab(QWidget):
                 is_variant = bool(row.get("is_variant"))
                 type_badge = "🎨 متغیر" if is_variant else "⬜ ساده"
 
+                code_part = codes_label(sku, row.get("manual_code")) if show_manual_code else f"کد: {sku}"
                 raw_text = (
-                    f"{link_status} | {type_badge} | {product_name} | کد: {sku} | قیمت: {price:,.0f} | "
+                    f"{link_status} | {type_badge} | {product_name} | {code_part} | قیمت: {price:,.0f} | "
                     f"موجودی: {row['stock']} | تصویر: {image_status}"
                 )
                 item = QListWidgetItem()

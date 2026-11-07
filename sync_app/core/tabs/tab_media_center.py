@@ -1034,10 +1034,10 @@ class MediaCenterTab(QWidget):
         self.readiness_run_btn.clicked.connect(self._run_readiness_check)
         layout.addWidget(self.readiness_run_btn)
 
-        self.readiness_table = QTableWidget(0, 4)
-        self.readiness_table.setHorizontalHeaderLabels(["نام کالا", "کد کالا", "امتیاز", "موارد ناقص"])
+        self.readiness_table = QTableWidget(0, 5)
+        self.readiness_table.setHorizontalHeaderLabels(["نام کالا", "کد کالا", "کد دستی", "امتیاز", "موارد ناقص"])
         self.readiness_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.readiness_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+        self.readiness_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
         self.readiness_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.readiness_table.setMinimumHeight(220)
         layout.addWidget(self.readiness_table)
@@ -1077,6 +1077,8 @@ class MediaCenterTab(QWidget):
     def _fetch_readiness_rows(self, config, selected_groups):
         if is_sepidar_provider(config):
             from sync_app.core.scripts.sepidar.sepidar_productsync import fetch_readiness_rows
+            # کدِ کالایِ سپیدار/دشت خودش کدِ واردشده توسطِ کاربره — ستونِ «کد دستی» لازم نیست
+            self._readiness_manual_codes = None
             return fetch_readiness_rows(config)
 
         from sync_app.core.erp_image_helper import resolve_erp_picture_path
@@ -1097,6 +1099,8 @@ class MediaCenterTab(QWidget):
         """
         cursor.execute(query, [f"{g}%" for g in selected_groups])
         sql_rows = cursor.fetchall()
+        from sync_app.core.manual_code import load_manual_codes
+        self._readiness_manual_codes = load_manual_codes(config, cursor=cursor)
         conn.close()
 
         # چک زنده‌ی ووکامرس — چون محصول ممکنه عکسش رو مستقیم توی خود سایت
@@ -1181,12 +1185,19 @@ class MediaCenterTab(QWidget):
         return rows
 
     def _fill_readiness_table(self, rows):
+        from sync_app.core.manual_code import manual_code_text
+
+        manual_codes = getattr(self, "_readiness_manual_codes", {})
+        self.readiness_table.setColumnHidden(2, manual_codes is None)
         self.readiness_table.setRowCount(0)
         for sku, name, score, missing in rows:
             row = self.readiness_table.rowCount()
             self.readiness_table.insertRow(row)
             self.readiness_table.setItem(row, 0, QTableWidgetItem(name))
             self.readiness_table.setItem(row, 1, QTableWidgetItem(sku))
+            self.readiness_table.setItem(
+                row, 2, QTableWidgetItem(manual_code_text((manual_codes or {}).get(str(sku).strip())))
+            )
             score_item = QTableWidgetItem(f"{score}")
             if score >= 90:
                 score_item.setForeground(Qt.darkGreen)
@@ -1194,5 +1205,5 @@ class MediaCenterTab(QWidget):
                 score_item.setForeground(Qt.darkYellow)
             else:
                 score_item.setForeground(Qt.red)
-            self.readiness_table.setItem(row, 2, score_item)
-            self.readiness_table.setItem(row, 3, QTableWidgetItem("، ".join(missing) if missing else "✅ کامل"))
+            self.readiness_table.setItem(row, 3, score_item)
+            self.readiness_table.setItem(row, 4, QTableWidgetItem("، ".join(missing) if missing else "✅ کامل"))

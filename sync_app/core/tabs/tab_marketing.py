@@ -72,16 +72,16 @@ class MarketingTab(QWidget):
         self.sub_tabs = QTabWidget()
         self.sub_tabs.setLayoutDirection(Qt.RightToLeft)
 
-        self.no_sale_table = self._make_table(["کد", "نام", "موجودی", "پیشنهاد"])
+        self.no_sale_table = self._make_table(["کد", "کد دستی", "نام", "موجودی", "پیشنهاد"])
         self.sub_tabs.addTab(self._wrap(self.no_sale_table), "🚫 بدون فروش")
 
-        self.best_sellers_table = self._make_table(["کد", "نام", "تعداد فروش", "درآمد"])
+        self.best_sellers_table = self._make_table(["کد", "کد دستی", "نام", "تعداد فروش", "درآمد"])
         self.sub_tabs.addTab(self._wrap(self.best_sellers_table), "🔥 پرفروش‌ها")
 
-        self.high_stock_table = self._make_table(["کد", "نام", "موجودی", "فروش", "پیشنهاد"])
+        self.high_stock_table = self._make_table(["کد", "کد دستی", "نام", "موجودی", "فروش", "پیشنهاد"])
         self.sub_tabs.addTab(self._wrap(self.high_stock_table), "📦 موجودی زیاد، فروش کم")
 
-        self.low_stock_table = self._make_table(["کد", "نام", "موجودی", "فروش", "پیشنهاد"])
+        self.low_stock_table = self._make_table(["کد", "کد دستی", "نام", "موجودی", "فروش", "پیشنهاد"])
         self.sub_tabs.addTab(self._wrap(self.low_stock_table), "⚠️ نزدیک اتمام موجودی")
 
         self.calendar_table = self._make_table(["مناسبت", "فاصله (ماه)", "پیشنهاد"])
@@ -96,7 +96,9 @@ class MarketingTab(QWidget):
     def _make_table(self, headers):
         table = QTableWidget(0, len(headers))
         table.setHorizontalHeaderLabels(headers)
-        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        # ستونِ «نام» کش میاد (بعد از اضافه‌شدنِ ستونِ «کد دستی» دیگه همیشه ستونِ ۱ نیست)
+        name_col = headers.index("نام") if "نام" in headers else 1
+        table.horizontalHeader().setSectionResizeMode(name_col, QHeaderView.Stretch)
         table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         return table
 
@@ -147,6 +149,8 @@ class MarketingTab(QWidget):
                     {"sku": p["sku"], "name": p["name"], "stock": p["stock"]}
                     for p in fetch_products_for_display(config)
                 ]
+                # کدِ کالایِ سپیدار/دشت خودش کدِ واردشده توسطِ کاربره — ستونِ «کد دستی» لازم نیست
+                self._manual_codes = None
             else:
                 conn, _, _ = open_sql_connection(config, timeout=8)
                 cursor = conn.cursor()
@@ -159,6 +163,8 @@ class MarketingTab(QWidget):
                     {"sku": str(r[0]).strip(), "name": str(r[1]).strip(), "stock": int(r[2] or 0)}
                     for r in cursor.fetchall()
                 ]
+                from sync_app.core.manual_code import load_manual_codes
+                self._manual_codes = load_manual_codes(config, cursor=cursor)
                 conn.close()
 
             return build_marketing_infos(sql_products, report), report
@@ -194,41 +200,53 @@ class MarketingTab(QWidget):
             bar = "█" * bar_len
             self.trend_table.setItem(row, 1, QTableWidgetItem(f"{revenue:,.0f}   {bar}"))
 
+    def _manual_code_of(self, sku) -> str:
+        from sync_app.core.manual_code import manual_code_text
+
+        return manual_code_text((getattr(self, "_manual_codes", None) or {}).get(str(sku or "").strip()))
+
     def _fill_all_tables(self, infos):
+        hide_manual = getattr(self, "_manual_codes", {}) is None
+        for tbl in (self.no_sale_table, self.best_sellers_table, self.high_stock_table, self.low_stock_table):
+            tbl.setColumnHidden(1, hide_manual)
         self.no_sale_table.setRowCount(0)
         for i in no_sale_products(infos):
             row = self.no_sale_table.rowCount()
             self.no_sale_table.insertRow(row)
             self.no_sale_table.setItem(row, 0, QTableWidgetItem(i.sku))
-            self.no_sale_table.setItem(row, 1, QTableWidgetItem(i.name))
-            self.no_sale_table.setItem(row, 2, QTableWidgetItem(str(i.stock)))
-            self.no_sale_table.setItem(row, 3, QTableWidgetItem(suggest_action(i)))
+            self.no_sale_table.setItem(row, 1, QTableWidgetItem(self._manual_code_of(i.sku)))
+            self.no_sale_table.setItem(row, 2, QTableWidgetItem(i.name))
+            self.no_sale_table.setItem(row, 3, QTableWidgetItem(str(i.stock)))
+            self.no_sale_table.setItem(row, 4, QTableWidgetItem(suggest_action(i)))
 
         self.best_sellers_table.setRowCount(0)
         for i in best_sellers(infos):
             row = self.best_sellers_table.rowCount()
             self.best_sellers_table.insertRow(row)
             self.best_sellers_table.setItem(row, 0, QTableWidgetItem(i.sku))
-            self.best_sellers_table.setItem(row, 1, QTableWidgetItem(i.name))
-            self.best_sellers_table.setItem(row, 2, QTableWidgetItem(str(i.qty_sold)))
-            self.best_sellers_table.setItem(row, 3, QTableWidgetItem(f"{i.revenue:,.0f}"))
+            self.best_sellers_table.setItem(row, 1, QTableWidgetItem(self._manual_code_of(i.sku)))
+            self.best_sellers_table.setItem(row, 2, QTableWidgetItem(i.name))
+            self.best_sellers_table.setItem(row, 3, QTableWidgetItem(str(i.qty_sold)))
+            self.best_sellers_table.setItem(row, 4, QTableWidgetItem(f"{i.revenue:,.0f}"))
 
         self.high_stock_table.setRowCount(0)
         for i in high_stock_low_sales(infos):
             row = self.high_stock_table.rowCount()
             self.high_stock_table.insertRow(row)
             self.high_stock_table.setItem(row, 0, QTableWidgetItem(i.sku))
-            self.high_stock_table.setItem(row, 1, QTableWidgetItem(i.name))
-            self.high_stock_table.setItem(row, 2, QTableWidgetItem(str(i.stock)))
-            self.high_stock_table.setItem(row, 3, QTableWidgetItem(str(i.qty_sold)))
-            self.high_stock_table.setItem(row, 4, QTableWidgetItem(suggest_action(i)))
+            self.high_stock_table.setItem(row, 1, QTableWidgetItem(self._manual_code_of(i.sku)))
+            self.high_stock_table.setItem(row, 2, QTableWidgetItem(i.name))
+            self.high_stock_table.setItem(row, 3, QTableWidgetItem(str(i.stock)))
+            self.high_stock_table.setItem(row, 4, QTableWidgetItem(str(i.qty_sold)))
+            self.high_stock_table.setItem(row, 5, QTableWidgetItem(suggest_action(i)))
 
         self.low_stock_table.setRowCount(0)
         for i in low_stock_warning(infos):
             row = self.low_stock_table.rowCount()
             self.low_stock_table.insertRow(row)
             self.low_stock_table.setItem(row, 0, QTableWidgetItem(i.sku))
-            self.low_stock_table.setItem(row, 1, QTableWidgetItem(i.name))
-            self.low_stock_table.setItem(row, 2, QTableWidgetItem(str(i.stock)))
-            self.low_stock_table.setItem(row, 3, QTableWidgetItem(str(i.qty_sold)))
-            self.low_stock_table.setItem(row, 4, QTableWidgetItem(suggest_action(i)))
+            self.low_stock_table.setItem(row, 1, QTableWidgetItem(self._manual_code_of(i.sku)))
+            self.low_stock_table.setItem(row, 2, QTableWidgetItem(i.name))
+            self.low_stock_table.setItem(row, 3, QTableWidgetItem(str(i.stock)))
+            self.low_stock_table.setItem(row, 4, QTableWidgetItem(str(i.qty_sold)))
+            self.low_stock_table.setItem(row, 5, QTableWidgetItem(suggest_action(i)))

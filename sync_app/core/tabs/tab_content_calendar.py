@@ -156,6 +156,8 @@ class ContentCalendarTab(QWidget):
         all_count = len(all_posts)
         posts = self._filtered_posts(all_posts)
         self._row_checkboxes = {}
+        from sync_app.core.manual_code import cached_manual_codes
+        manual_codes = cached_manual_codes()
 
         self.table.setRowCount(0)
         pending_count = 0
@@ -180,7 +182,11 @@ class ContentCalendarTab(QWidget):
                 when = str(post.get("scheduled_at") or "")
             self.table.setItem(row, 1, QTableWidgetItem(when))
 
-            product_label = f"{post.get('product_name') or ''} ({post.get('sku') or ''})"
+            # کدِ دستی فقط از کش (همون که تبِ محصولات پر می‌کنه) — بدونِ کوئریِ دیتابیس در نخِ رابط
+            post_sku = str(post.get("sku") or "").strip()
+            manual = manual_codes.get(post_sku, "")
+            code_text = f"{post_sku} | کد دستی: {manual}" if manual else post_sku
+            product_label = f"{post.get('product_name') or ''} ({code_text})"
             self.table.setItem(row, 2, QTableWidgetItem(product_label))
 
             platform = str(post.get("platform") or "")

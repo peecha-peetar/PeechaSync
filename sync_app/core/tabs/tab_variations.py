@@ -661,6 +661,9 @@ class VariationsTab(QWidget):
         if sale_sc_id:
             sale_cache = load_bulk_article_variant_prices(cursor, sorted(candidate_skus), sc_id=sale_sc_id)
 
+        from sync_app.core.manual_code import load_manual_codes
+        manual_codes = load_manual_codes(config, cursor=cursor)
+
         rows = []
         for row in candidate_rows:
             sku = _row_sku(row)
@@ -675,6 +678,7 @@ class VariationsTab(QWidget):
             if not parsed:
                 continue
             parsed["product_enabled"] = is_product_enabled(sku, config)
+            parsed["manual_code"] = manual_codes.get(sku, "")
             rows.append(parsed)
         conn.close()
         rows.sort(key=lambda r: (r.get("name") or "", r.get("sku") or "", r.get("variant_sku") or ""))
@@ -773,13 +777,19 @@ class VariationsTab(QWidget):
         disabled: set[str],
     ):
         product_map = load_product_woo_map()
+        from sync_app.core.manual_code import is_manual_code_supported, manual_code_text
+        show_manual_code = is_manual_code_supported(self.config)
         last_product = None
         for row in rows:
             product_key = row.get("sku")
             is_parent_linked = product_key in product_map
             if product_key != last_product:
                 link_mark = "✅ " if is_parent_linked else "⭕ "
-                header = QListWidgetItem(f"━━━ {link_mark}{row.get('name', '')} ({product_key}) ━━━")
+                code_part = (
+                    f"{product_key} | کد دستی: {manual_code_text(row.get('manual_code'))}"
+                    if show_manual_code else f"{product_key}"
+                )
+                header = QListWidgetItem(f"━━━ {link_mark}{row.get('name', '')} ({code_part}) ━━━")
                 header.setFlags(Qt.ItemIsEnabled)
                 header.setData(Qt.UserRole, "")
                 header.setData(Qt.UserRole + 1, "header")
@@ -798,7 +808,8 @@ class VariationsTab(QWidget):
             item.setData(Qt.UserRole, variant_sku)
             item.setData(Qt.UserRole + 1, section_kind)
             item.setData(Qt.UserRole + 2, product_key)
-            item.setData(Qt.UserRole + 6, display.lower())
+            # کدِ دستیِ کالا هم قابلِ جستجو باشه (فقط برایِ فیلتر، نه نمایش)
+            item.setData(Qt.UserRole + 6, f"{display} {row.get('manual_code') or ''}".lower())
             item.setData(Qt.UserRole + 7, display)
             item.setData(Qt.UserRole + 8, is_parent_linked)
             if section_kind == "display_only":
@@ -1244,7 +1255,7 @@ class VariationsTab(QWidget):
             base = str(item.data(Qt.UserRole + 7) or item.text() or "").strip()
             display = base
             item.setText(display)
-            item.setData(Qt.UserRole + 6, display.lower())
+            item.setData(Qt.UserRole + 6, item.data(Qt.UserRole + 6) or display.lower())
 
     def _upload_images_for_variation(self, vsku, item):
         files, _ = QFileDialog.getOpenFileNames(
