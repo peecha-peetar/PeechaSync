@@ -3410,26 +3410,46 @@ class ProductTab(QWidget):
                     continue
                 pid = int(pid)
 
+                from sync_app.core.media_upload_ledger import file_digest, hlo_id_from_path, known_media_id, remember_media
+                from sync_app.core.erp_image_helper import mark_images_transferred
+
                 if replace_mode:
                     try:
                         for existing_id in ps_get_product_image_ids(cfg, pid):
                             ps_delete_product_image(cfg, pid, existing_id)
                     except Exception as exc:
                         log.warning(f"⚠️ حذف تصاویر فعلی محصول {sku} ناموفق بود: {exc}")
+                try:
+                    current_ps_ids = set(ps_get_product_image_ids(cfg, pid))
+                except Exception:
+                    current_ps_ids = set()
 
                 sku_manual_paths = manual_paths_by_sku.get(sku, set())
                 uploaded = 0
+                sent_hlo_ids: list[int] = []
                 for rel_or_abs in paths:
                     abs_path = self._product_image_abs_path(rel_or_abs)
                     if not abs_path:
                         log.warning(f"⚠️ فایل تصویر پیدا نشد — {sku}: {rel_or_abs}")
+                        continue
+                    src_digest = file_digest(abs_path)
+                    hlo_id = hlo_id_from_path(abs_path)
+                    known = known_media_id("prestashop", sku, src_digest)
+                    if known and known in current_ps_ids:
+                        if hlo_id:
+                            sent_hlo_ids.append(hlo_id)
+                        log.info(f"ℹ️ تصویر {os.path.basename(abs_path)} برای {sku} از قبل رویِ سایت هست — دوباره فرستاده نشد.")
+                        uploaded += 1
                         continue
                     abs_path = _apply_pipeline_if_needed(sku, abs_path, pid, rel_or_abs in sku_manual_paths)
                     filename = os.path.basename(abs_path)
                     try:
                         with open(abs_path, "rb") as f:
                             img_data = f.read()
-                        ps_upload_product_image(cfg, pid, img_data, filename)
+                        image_id = ps_upload_product_image(cfg, pid, img_data, filename)
+                        remember_media("prestashop", sku, src_digest, image_id)
+                        if hlo_id:
+                            sent_hlo_ids.append(hlo_id)
                         log.info(f"✅ تصویر {filename} برای {sku} آپلود شد.")
                         uploaded += 1
                     except Exception as exc:
@@ -3443,6 +3463,8 @@ class ProductTab(QWidget):
                     fail_count += 1
                     continue
 
+                if sent_hlo_ids:
+                    mark_images_transferred(sku, sent_hlo_ids, "prestashop")
                 log.info(f"✅ {uploaded} تصویر برای محصول {sku} (ID:{pid}) روی پرستاشاپ تنظیم شد.")
                 success_count += 1
 
@@ -3592,12 +3614,40 @@ class ProductTab(QWidget):
                 existing_images = res_item.get("images", [])
                 sku_manual_paths = manual_paths_by_sku.get(sku, set())
 
+                from sync_app.core.media_upload_ledger import (
+                    file_digest, gallery_has_hlo, hlo_id_from_path, known_media_id, remember_media, unique_ids,
+                )
+                from sync_app.core.erp_image_helper import mark_images_transferred
+
+                existing_ids = unique_ids(img.get("id") for img in existing_images if isinstance(img, dict))
                 new_images = []
+                kept_ids: list[int] = []
+                sent_hlo_ids: list[int] = []
+                batch_digests: set[str] = set()
                 for rel_or_abs in paths:
                     abs_path = self._product_image_abs_path(rel_or_abs)
                     if not abs_path:
                         log.warning(f"⚠️ فایل تصویر پیدا نشد — {sku}: {rel_or_abs}")
                         continue
+
+                    # همین فایل قبلاً به همین محصول رفته و هنوز تویِ گالریشه؟
+                    # (با همین دکمه یا با سینکِ خودکار) — دوباره آپلود نمی‌شه.
+                    src_digest = file_digest(abs_path)
+                    hlo_id = hlo_id_from_path(abs_path)
+                    known = known_media_id("woocommerce", sku, src_digest)
+                    on_site_id = known if (known and known in existing_ids) else gallery_has_hlo(existing_images, hlo_id)
+                    if on_site_id:
+                        kept_ids.append(int(on_site_id))
+                        if hlo_id:
+                            sent_hlo_ids.append(hlo_id)
+                        log.info(f"ℹ️ تصویر {os.path.basename(abs_path)} برای {sku} از قبل رویِ سایت هست — دوباره فرستاده نشد.")
+                        continue
+                    if src_digest and src_digest in batch_digests:
+                        if hlo_id:
+                            sent_hlo_ids.append(hlo_id)
+                        continue  # همین عکس با اسمِ دیگه‌ای همین الان فرستاده شد
+                    if src_digest:
+                        batch_digests.add(src_digest)
 
                     filename = os.path.basename(abs_path)
                     abs_path = _apply_pipeline_if_needed(sku, abs_path, rel_or_abs in sku_manual_paths)
@@ -3637,20 +3687,35 @@ class ProductTab(QWidget):
 
                     if media_id:
                         new_images.append({"id": int(media_id)})
+                        remember_media("woocommerce", sku, src_digest, media_id)
                     else:
                         new_images.append({"src": src_url})
+                    if hlo_id:
+                        sent_hlo_ids.append(hlo_id)
 
-                if not new_images:
+                if not new_images and not kept_ids:
                     log.warning(f"⚠️ هیچ تصویری برای {sku} با موفقیت آپلود نشد.")
                     if not self._last_img_upload_detail:
                         self._last_img_upload_detail = f"هیچ فایلِ تصویرِ معتبری برایِ {sku} روی دیسک پیدا نشد."
                     fail_count += 1
                     continue
 
-                if not replace_mode and existing_images:
-                    payload_images = list(existing_images) + new_images
+                new_ids = [int(img["id"]) for img in new_images if img.get("id")]
+                new_srcs = [img for img in new_images if not img.get("id")]
+                if replace_mode:
+                    # «جایگزین کن»: گالری دقیقاً همین تصاویر (بدونِ تکرار) — این
+                    # کار عکس‌هایِ تکراریِ قبلی رو هم از گالری پاک می‌کنه.
+                    final_ids = unique_ids(kept_ids + new_ids)
                 else:
-                    payload_images = new_images
+                    final_ids = unique_ids(existing_ids + kept_ids + new_ids)
+                raw_gallery_ids = [int(img["id"]) for img in existing_images if isinstance(img, dict) and img.get("id")]
+                if not new_images and final_ids == raw_gallery_ids:
+                    if sent_hlo_ids:
+                        mark_images_transferred(sku, sent_hlo_ids)
+                    log.info(f"✅ همه‌یِ تصاویرِ {sku} از قبل رویِ سایت بودن — چیزی تکرار نشد.")
+                    success_count += 1
+                    continue
+                payload_images = [{"id": i} for i in final_ids] + new_srcs
 
                 for attempt in range(1, WP_UPLOAD_MAX_ATTEMPTS + 1):
                     wait_for_connectivity_blocking(cfg, need_sql=False, need_wc=True)
@@ -3669,6 +3734,10 @@ class ProductTab(QWidget):
                         break
 
                     if ok_up:
+                        if sent_hlo_ids:
+                            # سینکِ خودکار بدونه این تصاویرِ دیتابیس رفتن — وگرنه
+                            # دفعه‌یِ بعد دوباره آپلود و به گالری اضافه‌شون می‌کرد.
+                            mark_images_transferred(sku, sent_hlo_ids)
                         log.info(
                             f"✅ {len(new_images)} تصویر برای محصول {sku} (ID:{p_id}) تنظیم شد."
                         )

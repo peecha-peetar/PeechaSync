@@ -145,7 +145,10 @@ def _apply_field_sync_config(payload, config, *, is_create):
     if not is_field_enabled(cfg, "SYNC_FIELD_PRODUCT_CATEGORIES"):
         payload.pop("categories", None)
     if not is_field_enabled(cfg, "SYNC_FIELD_PRODUCT_PRICE"):
+        # قیمتِ ویژه هم جزوِ «قیمت»ه — قبلاً فقط قیمتِ عادی حذف می‌شد و قیمتِ
+        # ویژه‌یِ ERP همچنان رویِ قیمتِ عادیِ دست‌نخورده‌یِ سایت می‌نشست.
         payload.pop("regular_price", None)
+        payload.pop("sale_price", None)
     if not is_field_enabled(cfg, "SYNC_FIELD_PRODUCT_VISIBILITY"):
         payload.pop("catalog_visibility", None)
     # روی ووکامرس، manage_stock=False برای محصول متغیر یک تنظیم فنیِ ثابته
@@ -333,6 +336,11 @@ def _apply_site_variation_override(
         sale_str = woo_sale_price_str(raw_price, raw_sale, price_div)
         if sale_str:
             patch["sale_price"] = sale_str
+        else:
+            from sync_app.core.article_price import sale_price_list_column
+
+            if sale_price_list_column(config, sku):
+                patch["sale_price"] = ""
     if is_field_enabled(config, "SYNC_FIELD_VARIATION_STOCK"):
         from sync_app.core.stock_mode import resolve_variation_stock_mode, apply_stock_mode_to_payload
 
@@ -488,12 +496,31 @@ def _sync_product_images_if_needed(wcapi, sku, saved_pid, upsert_data, erp_image
         site_url = str(raw_config.get("WC_URL") or "").strip().rstrip("/")
         product_url = f"{site_url}/?p={int(saved_pid)}" if site_url else ""
 
+        from sync_app.core.media_upload_ledger import (
+            file_digest, gallery_has_hlo, known_media_id, remember_media, unique_ids,
+        )
+
+        existing_ids = unique_ids(img.get("id") for img in existing_images if isinstance(img, dict))
         uploaded_ids = []
         transferred_hlo_ids = []
+        already_on_site_hlo_ids = []
+        batch_digests: set[str] = set()
         for hlo_id, rel in rel_by_hlo_id.items():
             abs_path = app_path_from_rel(rel)
             if not os.path.isfile(abs_path):
                 continue
+            # همین تصویر (مثلاً با «ارسالِ تصاویر»ِ دستی) از قبل تویِ گالریِ
+            # محصول هست — دوباره آپلود و اضافه نمی‌شه (رفعِ عکس‌هایِ تکراری).
+            # دو ردیفِ تصویرِ یکسان در دیتابیس هم فقط یک‌بار فرستاده می‌شن.
+            digest = file_digest(abs_path)
+            known = known_media_id("woocommerce", sku, digest)
+            if (known and known in existing_ids) or gallery_has_hlo(existing_images, hlo_id) or (
+                digest and digest in batch_digests
+            ):
+                already_on_site_hlo_ids.append(hlo_id)
+                continue
+            if digest:
+                batch_digests.add(digest)
             # روشِ پردازشِ تصویرِ پیش‌فرض (اگه در تنظیمات ست شده باشه) — همون
             # نقطه‌ی مشترکی که همه‌ی روش‌هایِ انتقالِ تصویر (دیتابیس/دستی/
             # گروهی/دسته‌بندی) ازش استفاده می‌کنن؛ اگه پیش‌فرضی نباشه، همون
@@ -508,12 +535,16 @@ def _sync_product_images_if_needed(wcapi, sku, saved_pid, upsert_data, erp_image
             if ok and media_id:
                 uploaded_ids.append(media_id)
                 transferred_hlo_ids.append(hlo_id)
+                remember_media("woocommerce", sku, digest, media_id)
             else:
                 log.warning(f"⚠️ آپلود تصویر {sku} (hlo_id={hlo_id}) ناموفق: {err}")
 
+        if already_on_site_hlo_ids:
+            mark_images_transferred(sku, already_on_site_hlo_ids)
+            log.info(f"ℹ️ [{sku}] {len(already_on_site_hlo_ids)} تصویر از قبل رویِ سایت بود — دوباره فرستاده نشد.")
+
         if uploaded_ids:
-            existing_ids = [img.get("id") for img in existing_images if img.get("id")]
-            payload = {"images": [{"id": i} for i in existing_ids] + [{"id": mid} for mid in uploaded_ids]}
+            payload = {"images": [{"id": mid} for mid in unique_ids(existing_ids + uploaded_ids)]}
             resp = wcapi.put(f"products/{int(saved_pid)}", payload)
             wc_parse_json(resp, f"اتصال تصویر به محصول {sku}")
             # فقط تصاویری که واقعاً آپلود موفق بودن رو ثبت می‌کنیم — اگه
@@ -574,25 +605,41 @@ def _sync_product_images_if_needed_ps(config, sku, product_id, erp_images):
         site_url = str(config.get("PS_URL") or "").strip().rstrip("/")
         product_url = f"{site_url}/index.php?id_product={int(product_id)}&controller=product" if site_url else ""
 
+        from sync_app.core.media_upload_ledger import file_digest, known_media_id, remember_media
+        from sync_app.core.ps_sync_helper import ps_get_product_image_ids
+
+        try:
+            existing_ps_ids = set(ps_get_product_image_ids(config, int(product_id)))
+        except Exception:
+            existing_ps_ids = set()
+
         uploaded_count = 0
         transferred_hlo_ids = []
         for hlo_id, rel in rel_by_hlo_id.items():
             abs_path = app_path_from_rel(rel)
             if not os.path.isfile(abs_path):
                 continue
+            digest = file_digest(abs_path)
+            known = known_media_id("prestashop", sku, digest)
+            if known and known in existing_ps_ids:
+                # از قبل تویِ گالریِ محصول هست (مثلاً با ارسالِ دستی) — تکرار نمی‌شه.
+                transferred_hlo_ids.append(hlo_id)
+                continue
             final_path = apply_default_pipeline(abs_path, config, code=sku, product_url=product_url)
 
             try:
                 with open(final_path, "rb") as f:
                     img_data = f.read()
-                ps_upload_product_image(config, int(product_id), img_data, os.path.basename(final_path))
+                image_id = ps_upload_product_image(config, int(product_id), img_data, os.path.basename(final_path))
+                remember_media("prestashop", sku, digest, image_id)
                 uploaded_count += 1
                 transferred_hlo_ids.append(hlo_id)
             except Exception as exc:
                 log.warning(f"⚠️ آپلود تصویر {sku} (hlo_id={hlo_id}) روی پرستاشاپ ناموفق: {exc}")
 
-        if uploaded_count:
+        if transferred_hlo_ids:
             mark_images_transferred(sku, transferred_hlo_ids, "prestashop")
+        if uploaded_count:
             from sync_app.core.integrations.erp_provider import erp_provider_label
 
             log.info(
@@ -1174,6 +1221,14 @@ def main():
             p_data["description"] = description
         if sale_price:
             p_data["sale_price"] = sale_price
+        elif not has_variants:
+            from sync_app.core.article_price import sale_price_list_column
+
+            if sale_price_list_column(raw_config, sku):
+                # لیستِ قیمتِ ویژه برایِ این کالا فعاله ولی الان قیمتِ ویژه‌ای
+                # نداره — قیمتِ ویژه‌یِ قبلیِ سایت باید پاک بشه، وگرنه تخفیفِ
+                # قدیمی رویِ سایت می‌مونه و با قیمتِ تازه قاطی می‌شه.
+                p_data["sale_price"] = ""
         if categories:
             p_data["categories"] = categories
         elif cat_id:

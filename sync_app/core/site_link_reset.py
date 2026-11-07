@@ -36,6 +36,7 @@ RESET_FILES = (
     "bulk_image_import_uploaded.json",
     "transferred_erp_images.json",
     "transferred_erp_images_ps.json",
+    "uploaded_media_ledger.json",
 )
 RESET_PATTERNS = ("sync_hash_cache_*.json",)
 _CONFIG_CACHE_KEYS = ("WC_ATTR_CACHE", "WC_PRODUCT_ATTR_FP")

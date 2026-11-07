@@ -490,9 +490,16 @@ def _apply_sepidar_site_variation_override(
     from sync_app.core.stock_mode import apply_stock_mode_to_payload
     from sync_app.core.sync_utils import log
 
+    from sync_app.core.field_sync_config import is_field_enabled
+
     parent_id = int(target["parent_product_id"])
     variation_id = int(target["variation_id"])
     price_str = str(int(site_price)) if site_price else "0"
+    sync_price = is_field_enabled(config, "SYNC_FIELD_VARIATION_PRICE")
+    sync_stock = is_field_enabled(config, "SYNC_FIELD_VARIATION_STOCK")
+    if not sync_price and not sync_stock:
+        log.info(f"ℹ️ [{sku}] هر دو فیلدِ «قیمت» و «موجودیِ متغیر» خاموشن — چیزی برایِ این واریانت ارسال نشد.")
+        return
 
     if ps_mode:
         from sync_app.core.ps_sync_helper import ps_get_product, ps_set_stock_quantity
@@ -506,21 +513,25 @@ def _apply_sepidar_site_variation_override(
             base_price = float(parent.get("regular_price") or 0)
         except (TypeError, ValueError):
             base_price = 0.0
-        price_impact = float(site_price or 0) - base_price
-        ps_update_combination(config, variation_id, price_impact=price_impact)
+        if sync_price:
+            price_impact = float(site_price or 0) - base_price
+            ps_update_combination(config, variation_id, price_impact=price_impact)
 
-        stock_payload = apply_stock_mode_to_payload({}, stock_mode, stock)
-        if stock_payload.get("manage_stock"):
+        stock_payload = apply_stock_mode_to_payload({}, stock_mode, stock) if sync_stock else None
+        if stock_payload is None:
+            pass
+        elif stock_payload.get("manage_stock"):
             qty = int(stock_payload.get("stock_quantity") or 0)
             out_of_stock = 1 if qty <= 0 else 0
+            ps_set_stock_quantity(config, parent_id, qty, product_attribute_id=variation_id, out_of_stock=out_of_stock)
         elif stock_payload.get("stock_status") == "instock":
-            qty, out_of_stock = 9999, 0
+            ps_set_stock_quantity(config, parent_id, 9999, product_attribute_id=variation_id, out_of_stock=0)
         else:
-            qty, out_of_stock = 0, 1
-        ps_set_stock_quantity(config, parent_id, qty, product_attribute_id=variation_id, out_of_stock=out_of_stock)
+            ps_set_stock_quantity(config, parent_id, 0, product_attribute_id=variation_id, out_of_stock=1)
     else:
-        patch = {"regular_price": price_str}
-        apply_stock_mode_to_payload(patch, stock_mode, stock)
+        patch = {"regular_price": price_str} if sync_price else {}
+        if sync_stock:
+            apply_stock_mode_to_payload(patch, stock_mode, stock)
         wcapi.put(f"products/{parent_id}/variations/{variation_id}", patch)
 
     log.info(
@@ -633,6 +644,16 @@ def sync_products_from_erp(config: dict | None = None) -> dict:
             apply_stock_mode_to_payload(payload, stock_mode, int(item["stock"]))
             if wc_cat_id:
                 payload["categories"] = [{"id": int(wc_cat_id)}]
+
+            # تیک‌هایِ «فیلدهایِ همگام‌سازی» (تنظیمات) — قبلاً برایِ سپیدار/دشت
+            # اصلاً بررسی نمی‌شد و نام/قیمت/موجودی همیشه بازنویسی می‌شد.
+            from sync_app.core.scripts.sync_fullproduct import _apply_field_sync_config
+            from sync_app.core.field_sync_config import is_field_enabled
+
+            payload = _apply_field_sync_config(payload, config, is_create=not existing_id)
+            if existing_id and not is_field_enabled(config, "SYNC_FIELD_PRODUCT_STOCK"):
+                for key in ("manage_stock", "stock_quantity", "stock_status"):
+                    payload.pop(key, None)
 
             if existing_id:
                 if existing_site_sku is not None and existing_site_sku.casefold() != sku.casefold():

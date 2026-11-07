@@ -38,6 +38,7 @@ _SITE_SCOPE_FILES = (
     "transferred_erp_images.json",
     "transferred_erp_images_ps.json",
     "imported_orders_ledger.json",
+    "uploaded_media_ledger.json",
 )
 
 

@@ -103,6 +103,45 @@ _VAR_SAVE_BACKOFF = (1.0, 2.0)
 _VAR_SAVE_GAP_SEC = 0.0
 _LAST_VARIATION_NETWORK_ERROR = ""
 _LAST_VARIATION_FAIL_HINTS: dict[str, str] = {}
+# تنظیماتِ «فیلدهایِ همگام‌سازی» برایِ مسیرهایی که config رو مستقیم نمی‌گیرن
+# (PUT/POSTِ تکیِ واریانت در حالتِ شبکه‌یِ کند و تلاش‌هایِ دوباره‌یِ bind) —
+# قبلاً این مسیرها تیکِ «قیمت/موجودیِ متغیر» رو اصلاً نمی‌دیدن.
+_FIELD_CONFIG: dict = {}
+
+
+def _set_field_config(config) -> None:
+    global _FIELD_CONFIG
+    if config is not None:
+        _FIELD_CONFIG = dict(config or {})
+
+
+def _apply_variation_field_rules(payload: dict, var: dict, vid, config=None) -> dict:
+    """قوانینِ مشترکِ همه‌یِ مسیرهایِ ارسالِ واریانت:
+    - واریانتِ موجود (vid): قیمت/موجودی فقط اگه تیکش روشنه؛
+    - قیمتِ ویژه همراهِ قیمت؛ اگه لیستِ قیمتِ ویژه فعاله ولی این واریانت
+      قیمتِ ویژه نداره، قیمتِ ویژه‌یِ قبلیِ سایت پاک می‌شه (وگرنه تخفیفِ
+      قدیمی رویِ سایت می‌موند و قیمت‌ها قاطی به نظر می‌رسید)؛
+    - اگه این واریانت با ویژگی (نه SKU) به واریانتِ سایت وصل شده، SKUِ
+      خودِ سایت دست نمی‌خوره."""
+    cfg = config if config is not None else _FIELD_CONFIG
+    price_on = (not vid) or is_field_enabled(cfg or {}, "SYNC_FIELD_VARIATION_PRICE")
+    stock_on = (not vid) or is_field_enabled(cfg or {}, "SYNC_FIELD_VARIATION_STOCK")
+    if price_on:
+        sale = str(var.get("sale_price") or "").strip()
+        if sale and sale != "0":
+            payload["sale_price"] = sale
+        elif var.get("_sale_list_active") and vid:
+            payload["sale_price"] = ""
+    else:
+        payload.pop("regular_price", None)
+        payload.pop("sale_price", None)
+    if not stock_on:
+        payload.pop("manage_stock", None)
+        payload.pop("stock_quantity", None)
+        payload.pop("stock_status", None)
+    if vid and var.get("_keep_site_sku_for_vid") and int(var["_keep_site_sku_for_vid"]) == int(vid):
+        payload.pop("sku", None)
+    return payload
 
 
 def _configure_variation_network_mode(config):
@@ -378,6 +417,10 @@ def fetch_variations_from_db(
         attr_map = build_attr_map_from_variations(variations, size_label, color_label, dim3_label)
 
     variations, attr_map = _apply_attribute_value_links(variations, attr_map)
+    for v in variations:
+        v["_a_code"] = str(a_code)
+        if sale_sc_id:
+            v["_sale_list_active"] = True
     return variations, attr_map
 
 
@@ -715,11 +758,7 @@ def _batch_payload_from_var(var, vid=None, config=None, a_code=""):
         payload["sku"] = sku
     if vid:
         payload["id"] = int(vid)
-        # فقط برای واریانت موجود (update) — واریانت جدید باید موجودی اولیه داشته باشد
-        if not is_field_enabled(config or {}, "SYNC_FIELD_VARIATION_STOCK"):
-            payload.pop("manage_stock", None)
-            payload.pop("stock_quantity", None)
-    return payload
+    return _apply_variation_field_rules(payload, var, vid, config)
 
 
 def _batch_save_variations(wcapi, product_id, a_code, variations, id_by_sku, config=None):
@@ -916,7 +955,13 @@ def sync_variation_prices_quick(
     color_label=None,
     variations=None,
 ):
-    """فقط قیمت و موجودی واریانت‌های موجود — بدون bind/حذف/ساخت مجدد."""
+    """فقط قیمت و موجودی واریانت‌های موجود — بدون bind/حذف/ساخت مجدد.
+
+    اگه سایز/رنگِ یکی از واریانت‌ها در ERP عوض شده باشه (SKU همونه ولی
+    ویژگی‌ها فرق دارن)، صفر برمی‌گردونه تا صداکننده مسیرِ کامل رو اجرا کنه —
+    قبلاً این مسیر فقط قیمت رو می‌فرستاد و چون «همه‌یِ واریانت‌ها تطبیق
+    داشتن»، مسیرِ کامل هیچ‌وقت اجرا نمی‌شد و سایت ویژگی‌هایِ قدیمی رو نشون می‌داد."""
+    _set_field_config(config)
     product_id = _resolve_product_id(wcapi, a_code, product_map)
     if not product_id:
         log.warning(f"⚠️ [{a_code}] محصول در Woo نیست — قیمت واریانت ارسال نشد.")
@@ -951,10 +996,16 @@ def sync_variation_prices_quick(
     matched_vids: set[int] = set()
     unmatched: list[str] = []
     skipped_no_change = 0
+    attrs_changed: list[str] = []
 
     for var in variations:
         sku = str(var.get("sku") or "").strip()
         vid = _lookup_variation_id(by_sku, sku) if sku else None
+        if vid:
+            erp_trait = _variation_trait_key(var)
+            wc_trait = _variation_trait_key((by_id.get(vid) or {}).get("attributes"), from_wc=True)
+            if erp_trait and erp_trait != wc_trait:
+                attrs_changed.append(sku)
         if not vid:
             trait = _variation_trait_key(var)
             candidates = by_trait.get(trait) or []
@@ -976,6 +1027,8 @@ def sync_variation_prices_quick(
             patch["regular_price"] = price
             if sale and sale != "0":
                 patch["sale_price"] = sale
+            elif var.get("_sale_list_active"):
+                patch["sale_price"] = ""
         if is_field_enabled(config or {}, "SYNC_FIELD_VARIATION_STOCK"):
             from sync_app.core.stock_mode import resolve_variation_stock_mode, apply_stock_mode_to_payload
             selected_groups = [str(g).strip() for g in (config or {}).get("SELECTED_SUB_GROUPS", []) if str(g).strip()]
@@ -1000,6 +1053,13 @@ def sync_variation_prices_quick(
             + (f" → قیمت={price}" if sync_price else "")
             + (f" / ویژه={sale}" if sync_price and sale and sale != "0" else "")
         )
+
+    if attrs_changed:
+        log.info(
+            f"ℹ️ [{a_code}] سایز/رنگِ {len(attrs_changed)} واریانت در ERP عوض شده "
+            f"(نمونه: {', '.join(attrs_changed[:3])}) — مسیرِ کامل اجرا می‌شه."
+        )
+        return 0
 
     if not updates:
         if skipped_no_change:
@@ -1093,7 +1153,17 @@ def _build_variation_payload(
         payload["sku"] = sku
     if vid:
         payload["id"] = vid
-    return payload
+    payload.pop("sale_price", None)
+    if is_field_enabled(_FIELD_CONFIG or {}, "SYNC_FIELD_VARIATION_STOCK") or not vid:
+        a_code = str(var.get("_a_code") or "")
+        if a_code:
+            from sync_app.core.stock_mode import resolve_variation_stock_mode, apply_stock_mode_to_payload
+
+            selected_groups = [str(g).strip() for g in (_FIELD_CONFIG or {}).get("SELECTED_SUB_GROUPS", []) if str(g).strip()]
+            matched_group = next((g for g in selected_groups if a_code.startswith(g)), "")
+            v_mode = resolve_variation_stock_mode(sku, a_code, matched_group, _FIELD_CONFIG or {})
+            apply_stock_mode_to_payload(payload, v_mode, int(var.get("stock_quantity") or 0))
+    return _apply_variation_field_rules(payload, var, vid)
 
 
 def _build_stock_payload(var, vid=None):
@@ -1679,6 +1749,38 @@ def _verify_all_variation_stocks(wcapi, product_id, variations, id_by_sku):
     return ok
 
 
+def _augment_ids_with_trait_matches(variations, by_sku, by_id, by_trait):
+    """واریانتِ ERP که با SKU پیدا نشد ولی دقیقاً یک واریانتِ آزادِ سایت با
+    همون ویژگی‌ها (سایز/رنگ) داره — مثلاً محصولی که دستی تطبیق داده شده و
+    واریانت‌هایِ سایت SKUِ خودشون رو دارن — به همون وصل می‌شه (به‌روزرسانی)،
+    نه اینکه یک واریانتِ تکراری کنارش ساخته بشه. SKUِ خودِ سایت حفظ می‌شه."""
+    merged = dict(by_sku or {})
+    claimed: set[int] = set()
+    for var in variations or []:
+        sku = str(var.get("sku") or "").strip()
+        vid = _lookup_variation_id(merged, sku) if sku else None
+        if vid:
+            claimed.add(int(vid))
+    for var in variations or []:
+        sku = str(var.get("sku") or "").strip()
+        if not sku or _lookup_variation_id(merged, sku):
+            continue
+        trait = _variation_trait_key(var)
+        open_candidates = [
+            c for c in (by_trait or {}).get(trait) or []
+            if int(c.get("id") or 0) and int(c["id"]) not in claimed
+        ]
+        if not trait or len(open_candidates) != 1:
+            continue
+        vid = int(open_candidates[0]["id"])
+        claimed.add(vid)
+        _index_sku_aliases(merged, sku, vid)
+        site_sku = str((by_id.get(vid) or {}).get("sku") or "").strip()
+        if site_sku and site_sku.casefold() != sku.casefold():
+            var["_keep_site_sku_for_vid"] = vid
+    return merged
+
+
 def _upsert_variations_fast(
     wcapi,
     product_id,
@@ -1689,9 +1791,11 @@ def _upsert_variations_fast(
     config=None,
 ):
     """PUT/POST تکی + recreate در صورت bind ناموفق."""
+    _set_field_config(config)
     total = len(variations)
     _log_step(f"[{a_code}] دریافت واریانت‌های Woo...")
-    existing_by_sku, existing_by_id, _ = _fetch_existing_variations_index(wcapi, product_id)
+    existing_by_sku, existing_by_id, existing_by_trait = _fetch_existing_variations_index(wcapi, product_id)
+    existing_by_sku = _augment_ids_with_trait_matches(variations, existing_by_sku, existing_by_id, existing_by_trait)
 
     new_count = 0
     update_count = 0
@@ -1713,7 +1817,8 @@ def _upsert_variations_fast(
 
     if extra_ids:
         _delete_variations(wcapi, product_id, a_code, extra_ids)
-        existing_by_sku, existing_by_id, _ = _fetch_existing_variations_index(wcapi, product_id)
+        existing_by_sku, existing_by_id, existing_by_trait = _fetch_existing_variations_index(wcapi, product_id)
+        existing_by_sku = _augment_ids_with_trait_matches(variations, existing_by_sku, existing_by_id, existing_by_trait)
 
     def _run_save(id_map, *, serial, use_slug=False):
         return _save_all_variations(
@@ -1829,6 +1934,7 @@ def sync_product_variations(
     size_label=None,
     color_label=None,
 ):
+    _set_field_config(config)
     try:
         check_cancelled()
         if product_map is None:
