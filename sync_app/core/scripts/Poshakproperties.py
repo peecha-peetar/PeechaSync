@@ -849,10 +849,14 @@ def sync_attributes_dynamic(wcapi, attributes_data_dejavu, config=None):
 
 
 def main():
-    from sync_app.core.integrations.erp_provider import erp_provider_label
+    from sync_app.core.integrations.erp_provider import catalog_sync_block_reason, erp_provider_label
 
     log.info(f"{_LOG} 🚀 شروع همگام‌سازی داینامیک ویژگی‌ها...")
     config = load_secure_config(None) or {}
+    blocked = catalog_sync_block_reason(config)
+    if blocked:
+        log.error(f"🛑 {blocked}")
+        raise RuntimeError(blocked)
     erp_label = erp_provider_label(config)
     log.info(f"{_LOG} Poshakproperties — اتصال {erp_label} و فروشگاه...")
 

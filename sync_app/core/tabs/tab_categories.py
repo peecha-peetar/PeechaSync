@@ -1606,6 +1606,9 @@ class CategoryTab(QWidget):
 
         self.config["SELECTED_CATEGORY_GROUPS"] = list(selected_main_codes)
         self.config["SELECTED_SUB_GROUPS"] = selected_sub_codes
+        from sync_app.core.sync_utils import remember_selected_groups
+
+        remember_selected_groups(self.config)
         save_secure_config(self.config)
 
         from sync_app.core.tab_operation_guard import run_sql_reload_if_active
@@ -2278,6 +2281,9 @@ class CategoryTab(QWidget):
                 self._temp_extra_excluded_codes = None
                 return
             self.config["SELECTED_SUB_GROUPS"] = remaining
+            from sync_app.core.sync_utils import remember_selected_groups
+
+            remember_selected_groups(self.config)
             save_secure_config(self.config)
             selected = remaining
 
@@ -2485,6 +2491,9 @@ class CategoryTab(QWidget):
             if code not in current:
                 current.append(code)
         cfg["SELECTED_SUB_GROUPS"] = current
+        from sync_app.core.sync_utils import remember_selected_groups
+
+        remember_selected_groups(cfg)
         save_secure_config(cfg)
         self._temp_extra_excluded_codes = None
 

@@ -262,13 +262,15 @@ def fetch_sepidar_products_for_sync(config: dict | None = None, selected_group_i
 
         # POS.ItemImage — یه کالا می‌تونه چند تصویر داشته باشه (بدونِ ستونِ
         # مسیر/path، فقط varbinary خام)؛ معادلِ HLOpictures دژاوو.
-        images_by_item: dict[int, list[bytes]] = {}
+        images_by_item: dict[int, list[tuple[int, bytes]]] = {}
         try:
-            cursor.execute("SELECT ItemRef, Image FROM POS.ItemImage ORDER BY ItemRef, ItemImageID")
+            cursor.execute(
+                "SELECT ItemImageID, ItemRef, Image FROM POS.ItemImage ORDER BY ItemRef, ItemImageID"
+            )
             for r in cursor.fetchall():
-                if r[0] is None or not r[1]:
+                if r[1] is None or not r[2]:
                     continue
-                images_by_item.setdefault(int(r[0]), []).append(bytes(r[1]))
+                images_by_item.setdefault(int(r[1]), []).append((int(r[0] or 0), bytes(r[2])))
         except Exception:
             images_by_item = {}
     finally:
@@ -281,7 +283,7 @@ def fetch_sepidar_products_for_sync(config: dict | None = None, selected_group_i
         if selected_group_ids is not None:
             if item_group_id is None or str(item_group_id) not in selected_group_ids:
                 continue
-        erp_images = [(blob, "") for blob in images_by_item.get(item_id, [])]
+        erp_images = [(blob, "") for _image_id, blob in images_by_item.get(item_id, [])]
         first_blob = erp_images[0][0] if erp_images else b""
         price_columns = {
             col: (float(r[4 + i]) if r[4 + i] is not None else 0.0)
@@ -373,20 +375,49 @@ def _resolve_existing_sepidar_product_id(wcapi, sku: str, product_map: dict):
                     record_product_link_fingerprint(
                         sku, int(info["id"]), wc_sku=site_sku, wc_created=info.get("date_created_gmt"),
                     )
-                return int(info["id"]), product_map, site_sku
-            log.warning(
-                f"⚠️ [{sku}] لینکِ ذخیره‌شده به #{cached} دیگه معتبر نیست ({why}) — به اون محصول دست زده نمی‌شه."
-            )
+                from sync_app.core.sync_utils import product_is_other_source, source_product_mark
+
+                manual = bool(link_meta and link_meta.get("manual"))
+                if not manual and product_is_other_source(info, int(info["id"])):
+                    mark = source_product_mark() or "سرور دیگر"
+                    log.info(
+                        f"ℹ️ [{sku}] محصول #{int(info['id'])} مال منبع دیگری است — "
+                        f"کالای «{mark}» جدا ساخته می‌شود و روی آن نوشته نمی‌شود."
+                    )
+                else:
+                    return int(info["id"]), product_map, site_sku
+            else:
+                log.warning(
+                    f"⚠️ [{sku}] لینکِ ذخیره‌شده به #{cached} دیگه معتبر نیست ({why}) — به اون محصول دست زده نمی‌شه."
+                )
         product_map.pop(sku, None)
         # product_map=None: فایلِ نگاشتِ دژاوو لمس نمی‌شه؛ فقط لینکِ دستی/
         # سابقه‌یِ تصاویرِ محصولِ قبلی پاک می‌شه.
         forget_product_site_state(sku, None)
 
-    hit = find_product_by_sku(wcapi, sku)
-    if hit and hit.get("id") and _is_active_wc_product(hit):
+    from sync_app.core.sync_utils import product_is_other_source, site_sku_for_source, source_product_mark
+
+    seen: set[int] = set()
+    for candidate in dict.fromkeys([site_sku_for_source(sku), sku]):
+        hit = find_product_by_sku(wcapi, candidate)
+        if not hit or not hit.get("id") or not _is_active_wc_product(hit):
+            continue
         pid = int(hit["id"])
+        if pid in seen:
+            continue
+        seen.add(pid)
+        from sync_app.core.product_woo_map_helper import fetch_product_by_id
+
+        full = fetch_product_by_id(wcapi, pid) or hit
+        if product_is_other_source(full, pid):
+            mark = source_product_mark() or "این سرور"
+            log.info(
+                f"ℹ️ [{sku}] محصول #{pid} مال منبع دیگری است — "
+                f"برای «{mark}» کالای جدا ساخته می‌شود."
+            )
+            continue
         product_map[sku] = pid
-        return pid, product_map, str(hit.get("sku") or "").strip()
+        return pid, product_map, str(full.get("sku") or hit.get("sku") or "").strip()
 
     return None, product_map, None
 
@@ -656,10 +687,16 @@ def sync_products_from_erp(config: dict | None = None) -> dict:
                     payload.pop(key, None)
 
             if existing_id:
-                if existing_site_sku is not None and existing_site_sku.casefold() != sku.casefold():
+                from sync_app.core.sync_utils import site_sku_matches_erp
+
+                if existing_site_sku is not None and not site_sku_matches_erp(existing_site_sku, sku):
                     # تطبیقِ دستی به محصولی با SKUِ متفاوت — SKUِ خودِ سایت دست
                     # نمی‌خوره (همون قراردادِ دژاوو در _upsert_wc_product).
                     payload.pop("sku", None)
+            from sync_app.core.sync_utils import apply_source_product_identity
+
+            payload = apply_source_product_identity(payload, sku, config)
+            if existing_id:
                 wcapi.put(f"products/{existing_id}", payload)
                 new_id = existing_id
             else:
@@ -674,7 +711,8 @@ def sync_products_from_erp(config: dict | None = None) -> dict:
 
             product_map[sku] = int(new_id)
 
-            erp_images = images_by_item.get(item.get("_item_id")) or []
+            erp_rows = images_by_item.get(item.get("_item_id")) or []
+            erp_images = [(image_id, blob, "") for image_id, blob in erp_rows]
             if erp_images:
                 if ps_mode:
                     _sync_product_images_if_needed_ps(config, sku, new_id, erp_images)

@@ -272,6 +272,15 @@ def _ps_apply_stock_from_payload(config, product_id, qty, out_of_stock, timeout)
     log.info(f"📦 [#{product_id}] موجودی محصول: {qty} ({label}, out_of_stock={out_of_stock})")
 
 
+def _source_database_from_body(body) -> str:
+    from sync_app.core.sync_utils import SOURCE_DB_META
+
+    for item in (body or {}).get("meta_data") or []:
+        if isinstance(item, dict) and str(item.get("key") or "") == SOURCE_DB_META:
+            return str(item.get("value") or "").strip()
+    return ""
+
+
 def _ps_product_create_from_payload(config, body, timeout):
     from sync_app.core.ps_sync_helper import ps_create_product, ps_get_product, ps_try_set_price_visibility
 
@@ -298,6 +307,7 @@ def _ps_product_create_from_payload(config, body, timeout):
         catalog_visibility=catalog_visibility,
         out_of_stock=out_of_stock,
         has_variants=has_variants,
+        source_database=_source_database_from_body(body),
         timeout=timeout,
     )
     _ps_apply_stock_from_payload(config, created["id"], qty, out_of_stock if out_of_stock is not None else 0, timeout)
@@ -358,6 +368,7 @@ def _ps_product_update_from_payload(config, product_id, body, timeout):
         catalog_visibility=body.get("catalog_visibility"),
         out_of_stock=out_of_stock,
         has_variants=has_variants,
+        source_database=_source_database_from_body(body),
         timeout=timeout,
     )
     _ps_apply_stock_from_payload(config, product_id, qty, out_of_stock if out_of_stock is not None else 0, timeout)

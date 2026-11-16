@@ -76,6 +76,37 @@ def hlo_id_from_path(path: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
+def find_gallery_by_filename(gallery: list[dict], filename: str) -> int | None:
+    """اگر همان اسم فایل (یا شکلِ -1/-2 وردپرس) همین حالا در گالری باشد."""
+    stem = os.path.splitext(os.path.basename(str(filename or "")))[0].lower()
+    if len(stem) < 6:
+        return None
+    for img in gallery or []:
+        if not isinstance(img, dict) or not img.get("id"):
+            continue
+        text = f"{img.get('src') or ''} {img.get('name') or ''}".lower()
+        if stem in text:
+            return int(img["id"])
+    return None
+
+
+def reusable_media_id(platform: str, sku: str, digest: str, gallery, local_filename: str = "", hlo_id: int | None = None) -> int | None:
+    """شناسهٔ رسانه‌ای که نباید دوباره آپلود شود.
+
+    اول دفترِ اثرانگشت، بعد شناسهٔ ردیفِ دیتابیس داخلِ اسم فایل، بعد خودِ
+    اسم فایل. حتی اگر این شناسه الان در فهرستِ گالری نباشد، آپلودِ تازه
+    ساخته نمی‌شود؛ همان شناسه دوباره به گالری وصل می‌شود.
+    """
+    known = known_media_id(platform, sku, digest)
+    if known:
+        return known
+    if hlo_id:
+        found = gallery_has_hlo(gallery, int(hlo_id))
+        if found:
+            return found
+    return find_gallery_by_filename(gallery, local_filename)
+
+
 def gallery_has_hlo(gallery: list[dict], hlo_id: int) -> int | None:
     """برایِ تصاویری که قبل از این دفتر آپلود شدن: رسانه‌ای تویِ گالری هست که
     اسمِ فایلش همون «_hlo<شناسه>» رو داره؟ خروجی: شناسه‌یِ اون رسانه یا None."""

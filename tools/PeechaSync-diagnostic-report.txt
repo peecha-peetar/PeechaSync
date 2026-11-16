@@ -1,0 +1,35 @@
+========================================
+PeechaSync diagnostic report
+========================================
+Time: Sun 08/23/2026 22:54:09.27
+PC: SERWIN
+User: BitBin.ir
+Report folder: C:\PeechaSync-Source\tools\
+
+--- Windows ---
+
+Microsoft Windows [Version 10.0.26200.9168]
+
+--- Python ---
+FAIL: system Python not in PATH
+
+--- Install folder ---
+Path: C:\PeechaSync
+OK folder exists
+OK main.pyc
+MISSING main.py
+OK Run-PeechaSync.bat
+OK main.py not needed (pyc-only install
+Installed version: 2.30.108
+echo [%date% %time%] launcher=1.1.11 >> "%LOG_FILE%"
+OK python\python.exe
+OK python site-packages\PyQt5
+OK _packages wheels folder
+MISSING .venv\Scripts\python.exe
+
+--- Desktop shortcut ---
+OK C:\Users\BitBin.ir\Desktop\PeechaSync.lnk
+Size: 1935 bytes
+
+--- Package imports ---
+Python: C:\PeechaSync\python\python.exe

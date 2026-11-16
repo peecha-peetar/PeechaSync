@@ -605,6 +605,12 @@ def sync_categories_to_woocommerce(categories_to_sync, config=None):
 # ---------------------------------------------------------
 def main():
     log.info("▶️ شروع همگام‌سازی دسته‌بندی‌های محصول...")
+    from sync_app.core.integrations.erp_provider import catalog_sync_block_reason
+
+    blocked = catalog_sync_block_reason(load_secure_config(None) or {})
+    if blocked:
+        log.error(f"🛑 {blocked}")
+        raise RuntimeError(blocked)
 
     # توجه: ماژول تنظیمات تو قبلاً با امضای load_secure_config(None) استفاده می‌شود
     # اینجا هم سازگار با آن فراخوانی می‌کنیم

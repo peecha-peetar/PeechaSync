@@ -236,6 +236,9 @@ def _upsert_wc_product(wcapi, sku, p_data, has_variants, product_map, *, stock_q
         _guard_manual_link_structure_match(config, sku, int(existing_id), has_variants, target)
 
     payload = _apply_field_sync_config(payload, config, is_create=not existing_id)
+    from sync_app.core.sync_utils import apply_source_product_identity
+
+    payload = apply_source_product_identity(payload, sku, config)
 
     if existing_id:
         p_id = int(existing_id)
@@ -245,6 +248,11 @@ def _upsert_wc_product(wcapi, sku, p_data, has_variants, product_map, *, stock_q
         log.info(f"🔄 [{sku}] بروزرسانی → Woo #{saved_pid}")
     else:
         product_map = clear_trashed_sku_blockers(wcapi, sku, product_map)
+        from sync_app.core.sync_utils import site_sku_for_source
+
+        site_sku = site_sku_for_source(sku, config)
+        if site_sku and site_sku != sku:
+            product_map = clear_trashed_sku_blockers(wcapi, site_sku, product_map)
         resp = wcapi.post("products", payload)
         data = wc_parse_json(resp, f"POST محصول {sku}")
         if not isinstance(data, dict) or not data.get("id"):
@@ -382,7 +390,7 @@ def _sync_variation_image_if_needed(wcapi, sku, parent_id, variation_id, erp_ima
         from sync_app.core.smart_publish import apply_default_pipeline
         from sync_app.core.wc_sync_helper import wp_upload_media_ex
 
-        rels = stage_erp_images(f"{sku}_hlo{hlo_id}", blob, path, raw_config)
+        rels = stage_erp_images(sku, blob, path, raw_config)
         if not rels:
             return
         abs_path = app_path_from_rel(rels[0])
@@ -391,7 +399,9 @@ def _sync_variation_image_if_needed(wcapi, sku, parent_id, variation_id, erp_ima
 
         site_url = str(raw_config.get("WC_URL") or "").strip().rstrip("/")
         product_url = f"{site_url}/?p={int(parent_id)}" if site_url else ""
-        final_path = apply_default_pipeline(abs_path, raw_config, code=sku, product_url=product_url)
+        from sync_app.core.erp_image_helper import publish_product_image
+
+        final_path = publish_product_image(abs_path, raw_config, sku, 0, product_url)
 
         with open(final_path, "rb") as f:
             img_data = f.read()
@@ -436,7 +446,7 @@ def _sync_variation_image_if_needed_ps(config, sku, parent_id, variation_id, erp
     try:
         from sync_app.core.smart_publish import apply_default_pipeline
 
-        rels = stage_erp_images(f"{sku}_hlo{hlo_id}", blob, path, config)
+        rels = stage_erp_images(sku, blob, path, config)
         if not rels:
             return
         abs_path = app_path_from_rel(rels[0])
@@ -445,7 +455,9 @@ def _sync_variation_image_if_needed_ps(config, sku, parent_id, variation_id, erp
 
         site_url = str(config.get("PS_URL") or "").strip().rstrip("/")
         product_url = f"{site_url}/index.php?id_product={int(parent_id)}&controller=product" if site_url else ""
-        final_path = apply_default_pipeline(abs_path, config, code=sku, product_url=product_url)
+        from sync_app.core.erp_image_helper import publish_product_image
+
+        final_path = publish_product_image(abs_path, config, sku, 0, product_url)
 
         with open(final_path, "rb") as f:
             img_data = f.read()
@@ -476,6 +488,14 @@ def _sync_product_images_if_needed(wcapi, sku, saved_pid, upsert_data, erp_image
         return  # همه‌ی تصاویر ERP قبلاً منتقل شدن — چیز جدیدی نیست
 
     existing_images = (upsert_data or {}).get("images") or []
+    if not existing_images and saved_pid:
+        try:
+            resp = wcapi.get(f"products/{int(saved_pid)}", params={"_fields": "images"})
+            data = resp.json() if hasattr(resp, "json") else {}
+            if isinstance(data, dict):
+                existing_images = data.get("images") or []
+        except Exception:
+            pass
 
     try:
         from sync_app.core.erp_image_helper import stage_erp_images
@@ -484,11 +504,12 @@ def _sync_product_images_if_needed(wcapi, sku, saved_pid, upsert_data, erp_image
 
         # هر تصویرِ جدید رو با اسم مبتنی بر hlo_id ذخیره می‌کنیم — تا اگه
         # این تابع چندبار اجرا بشه، فایل‌های محلیِ قبلی رو خراب نکنه.
-        rel_by_hlo_id: dict[int, str] = {}
-        for hlo_id, blob, path in new_erp_images:
-            rels = stage_erp_images(f"{sku}_hlo{hlo_id}", blob, path, raw_config)
-            if rels:
-                rel_by_hlo_id[hlo_id] = rels[0]
+        ordered = sorted(new_erp_images, key=lambda row: int(row[0] or 0))
+        extras = [(blob, path) for _hlo_id, blob, path in ordered[1:]]
+        rels = stage_erp_images(sku, ordered[0][1], ordered[0][2], raw_config, extra_images=extras)
+        rel_by_hlo_id = {
+            int(hlo_id): rel for (hlo_id, _blob, _path), rel in zip(ordered, rels) if rel
+        }
 
         if not rel_by_hlo_id:
             return
@@ -497,7 +518,7 @@ def _sync_product_images_if_needed(wcapi, sku, saved_pid, upsert_data, erp_image
         product_url = f"{site_url}/?p={int(saved_pid)}" if site_url else ""
 
         from sync_app.core.media_upload_ledger import (
-            file_digest, gallery_has_hlo, known_media_id, remember_media, unique_ids,
+            file_digest, remember_media, reusable_media_id, unique_ids,
         )
 
         existing_ids = unique_ids(img.get("id") for img in existing_images if isinstance(img, dict))
@@ -513,11 +534,16 @@ def _sync_product_images_if_needed(wcapi, sku, saved_pid, upsert_data, erp_image
             # محصول هست — دوباره آپلود و اضافه نمی‌شه (رفعِ عکس‌هایِ تکراری).
             # دو ردیفِ تصویرِ یکسان در دیتابیس هم فقط یک‌بار فرستاده می‌شن.
             digest = file_digest(abs_path)
-            known = known_media_id("woocommerce", sku, digest)
-            if (known and known in existing_ids) or gallery_has_hlo(existing_images, hlo_id) or (
-                digest and digest in batch_digests
-            ):
-                already_on_site_hlo_ids.append(hlo_id)
+            reused = reusable_media_id(
+                "woocommerce", sku, digest, existing_images, os.path.basename(abs_path), hlo_id,
+            )
+            if reused or (digest and digest in batch_digests):
+                if reused:
+                    remember_media("woocommerce", sku, digest, reused)
+                    if int(reused) not in existing_ids:
+                        uploaded_ids.append(int(reused))
+                if hlo_id:
+                    already_on_site_hlo_ids.append(hlo_id)
                 continue
             if digest:
                 batch_digests.add(digest)
@@ -525,7 +551,10 @@ def _sync_product_images_if_needed(wcapi, sku, saved_pid, upsert_data, erp_image
             # نقطه‌ی مشترکی که همه‌ی روش‌هایِ انتقالِ تصویر (دیتابیس/دستی/
             # گروهی/دسته‌بندی) ازش استفاده می‌کنن؛ اگه پیش‌فرضی نباشه، همون
             # تصویرِ خام/اصلی برمی‌گرده.
-            final_path = apply_default_pipeline(abs_path, raw_config, code=sku, product_url=product_url)
+            from sync_app.core.erp_image_helper import publish_product_image
+
+            image_index = list(rel_by_hlo_id).index(hlo_id)
+            final_path = publish_product_image(abs_path, raw_config, sku, image_index, product_url)
 
             with open(final_path, "rb") as f:
                 img_data = f.read()
@@ -534,7 +563,8 @@ def _sync_product_images_if_needed(wcapi, sku, saved_pid, upsert_data, erp_image
             )
             if ok and media_id:
                 uploaded_ids.append(media_id)
-                transferred_hlo_ids.append(hlo_id)
+                if hlo_id:
+                    transferred_hlo_ids.append(hlo_id)
                 remember_media("woocommerce", sku, digest, media_id)
             else:
                 log.warning(f"⚠️ آپلود تصویر {sku} (hlo_id={hlo_id}) ناموفق: {err}")
@@ -590,11 +620,12 @@ def _sync_product_images_if_needed_ps(config, sku, product_id, erp_images):
     try:
         from sync_app.core.smart_publish import apply_default_pipeline
 
-        rel_by_hlo_id: dict[int, str] = {}
-        for hlo_id, blob, path in new_erp_images:
-            rels = stage_erp_images(f"{sku}_hlo{hlo_id}", blob, path, config)
-            if rels:
-                rel_by_hlo_id[hlo_id] = rels[0]
+        ordered = sorted(new_erp_images, key=lambda row: int(row[0] or 0))
+        extras = [(blob, path) for _hlo_id, blob, path in ordered[1:]]
+        rels = stage_erp_images(sku, ordered[0][1], ordered[0][2], config, extra_images=extras)
+        rel_by_hlo_id = {
+            int(hlo_id): rel for (hlo_id, _blob, _path), rel in zip(ordered, rels) if rel
+        }
 
         if not rel_by_hlo_id:
             log.warning(
@@ -608,9 +639,11 @@ def _sync_product_images_if_needed_ps(config, sku, product_id, erp_images):
         from sync_app.core.media_upload_ledger import file_digest, known_media_id, remember_media
         from sync_app.core.ps_sync_helper import ps_get_product_image_ids
 
+        gallery_known = True
         try:
             existing_ps_ids = set(ps_get_product_image_ids(config, int(product_id)))
         except Exception:
+            gallery_known = False
             existing_ps_ids = set()
 
         uploaded_count = 0
@@ -621,11 +654,14 @@ def _sync_product_images_if_needed_ps(config, sku, product_id, erp_images):
                 continue
             digest = file_digest(abs_path)
             known = known_media_id("prestashop", sku, digest)
-            if known and known in existing_ps_ids:
-                # از قبل تویِ گالریِ محصول هست (مثلاً با ارسالِ دستی) — تکرار نمی‌شه.
-                transferred_hlo_ids.append(hlo_id)
+            if known and (not gallery_known or known in existing_ps_ids):
+                if hlo_id:
+                    transferred_hlo_ids.append(hlo_id)
                 continue
-            final_path = apply_default_pipeline(abs_path, config, code=sku, product_url=product_url)
+            from sync_app.core.erp_image_helper import publish_product_image
+
+            image_index = list(rel_by_hlo_id).index(hlo_id)
+            final_path = publish_product_image(abs_path, config, sku, image_index, product_url)
 
             try:
                 with open(final_path, "rb") as f:
@@ -633,7 +669,8 @@ def _sync_product_images_if_needed_ps(config, sku, product_id, erp_images):
                 image_id = ps_upload_product_image(config, int(product_id), img_data, os.path.basename(final_path))
                 remember_media("prestashop", sku, digest, image_id)
                 uploaded_count += 1
-                transferred_hlo_ids.append(hlo_id)
+                if hlo_id:
+                    transferred_hlo_ids.append(hlo_id)
             except Exception as exc:
                 log.warning(f"⚠️ آپلود تصویر {sku} (hlo_id={hlo_id}) روی پرستاشاپ ناموفق: {exc}")
 
@@ -855,6 +892,12 @@ def patch_product_categories(config=None):
 
 def main():
     raw_config = load_secure_config(None) or {}
+    from sync_app.core.integrations.erp_provider import catalog_sync_block_reason
+
+    blocked = catalog_sync_block_reason(raw_config)
+    if blocked:
+        log.error(f"🛑 {blocked}")
+        raise RuntimeError(blocked)
     ps_mode = is_prestashop(raw_config)
     if not ps_mode:
         apply_network_overrides(raw_config)
@@ -1348,6 +1391,15 @@ def main():
         )
         if force_full_sync:
             skip = False
+        if skip and has_variants and mapped_id and attr_map:
+            from sync_app.core.scripts.update_variations import variation_attributes_need_rebuild
+
+            if variation_attributes_need_rebuild(wcapi, int(mapped_id), attr_map):
+                skip = False
+                log.info(
+                    f"ℹ️ [{sku}] ویژگی‌های روی سایت با دیتابیس یکی نیست — "
+                    "با وجودِ عوض نشدنِ دیتابیس، متغیرها دوباره ارسال می‌شوند."
+                )
         if skip:
             with progress_lock:
                 skipped_unchanged["count"] += 1
@@ -1447,6 +1499,8 @@ def main():
                         size_label=dim_labels[0] if dim_labels else None,
                         color_label=dim_labels[1] if len(dim_labels) > 1 else None,
                         variations=erp_variations,
+                        attr_map=attr_map,
+                        global_ids=global_ids,
                     )
                     if quick_saved >= len(erp_variations) and erp_variations:
                         skip_full = True

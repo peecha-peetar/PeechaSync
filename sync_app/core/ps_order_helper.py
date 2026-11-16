@@ -33,7 +33,11 @@ def _order_row_to_line_item(row: dict) -> dict:
     except (TypeError, ValueError):
         qty = 0.0
     try:
-        unit_price = float(row.get("unit_price_tax_excl") or 0)
+        # فی با مالیات، همان مبلغی که مشتری دیده. اگر سایت این فیلد را
+        # نفرستاده باشد، فی بدون مالیات استفاده می‌شود.
+        unit_price = float(row.get("unit_price_tax_incl") or 0)
+        if unit_price <= 0:
+            unit_price = float(row.get("unit_price_tax_excl") or 0)
     except (TypeError, ValueError):
         unit_price = 0.0
     try:
@@ -88,16 +92,25 @@ def ps_get_order(config, order_id: int, *, timeout=None) -> dict | None:
         except Exception:
             billing = {}
 
+    payable = (
+        entry.get("total_paid_tax_incl")
+        or entry.get("total_paid")
+        or entry.get("total_paid_tax_excl")
+    )
+    shipping = entry.get("total_shipping_tax_incl") or entry.get("total_shipping")
     return {
         "id": int(entry.get("id") or 0),
         "customer_id": customer_id,
         "billing": billing,
+        "total": payable,
+        "shipping_total": shipping,
         "line_items": [_order_row_to_line_item(row) for row in _order_rows(entry)],
         # شناسه‌یِ یکتایِ پرستاشاپ + تاریخ — اثرِ انگشتِ سفارش، برایِ اینکه
         # بعد از ریستِ فروشگاه یک سفارشِ تازه با شماره‌یِ تکراری با سفارشِ
         # قدیمیِ واردشده یکی گرفته نشه (order_import_ledger).
         "reference": str(entry.get("reference") or ""),
         "date_created": str(entry.get("date_add") or ""),
+        "id_cart": int(entry.get("id_cart") or 0),
     }
 
 

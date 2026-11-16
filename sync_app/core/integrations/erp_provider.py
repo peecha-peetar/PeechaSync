@@ -129,6 +129,16 @@ def erp_schema_family(config) -> str:
     return key
 
 
+def catalog_sync_block_reason(config) -> str:
+    """هلو و قیاس هنوز اتصال واقعی ندارند و نباید با جدول‌های دژاوو ارسال شوند."""
+    key = normalize_erp_provider_key((config or {}).get("ERP_PROVIDER"))
+    if key == "holoo":
+        return "اتصال هلو هنوز پیاده‌سازی نشده و با جدول‌های دژاوو ارسال نمی‌شود."
+    if key == "ghiaas":
+        return "اتصال قیاس هنوز پیاده‌سازی نشده و با جدول‌های دژاوو ارسال نمی‌شود."
+    return ""
+
+
 def erp_provider_label(config) -> str:
     """نامِ نمایشیِ Providerِ ERP انتخاب‌شده (تو تنظیمات) — به‌جای کلمه‌ی
     ژنریکِ «ERP» یا «SQL» تو کلِ برنامه استفاده می‌شه، تا همه‌جا اسمِ

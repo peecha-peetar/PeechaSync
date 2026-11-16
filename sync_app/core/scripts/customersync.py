@@ -449,6 +449,12 @@ def update_customer(customer_data, customer_code, moien_code):
 def main():
     log.info("▶️ شروع همگام‌سازی مشتریان...")
     init_runtime_config()  # SQL_CONN_STRING را برای هر دو پلتفرم مقداردهی می‌کند
+    from sync_app.core.integrations.erp_provider import catalog_sync_block_reason
+
+    blocked = catalog_sync_block_reason(load_secure_config(None) or {})
+    if blocked:
+        log.error(f"🛑 {blocked}")
+        raise RuntimeError(blocked)
 
     config = load_secure_config(None) or {}
     if is_ps_mode(config):

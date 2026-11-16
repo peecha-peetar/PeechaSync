@@ -1199,23 +1199,16 @@ class ProductTab(QWidget):
         (اگه فعال باشه) + افزودن به نگاشتِ تصاویرِ دستیِ محصول. اگه ردیفِ
         محصول تویِ لیستِ فعلاً بارگذاری‌شده باشه، UI هم به‌روز می‌شه.
         مسیرِ نسبیِ ذخیره‌شده رو برمی‌گردونه."""
-        dst_dir = app_path("product_images", sku)
-        os.makedirs(dst_dir, exist_ok=True)
+        from sync_app.core.media_upload_ledger import file_digest
 
-        from sync_app.core.smart_publish import (
-            AUTO_RUN_KEY, AUTO_PIPELINE_KEY, load_pipelines, load_watermark_settings,
-            load_ai_studio_settings, run_pipeline, load_text_engrave_settings, load_qr_code_settings,
-        )
-        from sync_app.core.media_center import load_image_profiles
+        incoming_digest = file_digest(src_path)
+        if incoming_digest:
+            for rel in self._existing_manual_image_paths(sku):
+                if file_digest(self._product_image_abs_path(rel)) == incoming_digest:
+                    log.info(f"ℹ️ عکسِ موبایل/دستی برای {sku} قبلاً پیوست شده — دوباره اضافه نشد.")
+                    return rel
 
         config = load_secure_config(None) or {}
-        auto_run = bool(config.get(AUTO_RUN_KEY, False))
-        auto_pipeline_name = config.get(AUTO_PIPELINE_KEY)
-        pipelines = load_pipelines(config) if auto_run else {}
-        auto_pipeline = pipelines.get(auto_pipeline_name) if auto_pipeline_name else None
-
-        # اطلاعاتی که مراحل «حک متن» و «QR کد» بهشون نیاز دارن — کد کالا،
-        # نام محصول، و لینک محصول رو سایت (اگه قبلاً به فروشگاه لینک شده باشه).
         product_url = ""
         try:
             from sync_app.core.scripts.sepidar.sepidar_common import is_sepidar_provider
@@ -1229,41 +1222,12 @@ class ProductTab(QWidget):
                 product_url = f"{site_url}/?p={int(wc_id)}"
         except Exception:
             product_url = ""
-        product_info = {"a_code": sku, "a_code_c": sku, "name": product_name, "product_url": product_url}
+        from sync_app.core.erp_image_helper import next_image_index, publish_product_image
 
-        base = os.path.basename(src_path)
-        timestamp = str(int(time.time() * 1000))
-        dst_name = f"{timestamp}_{base}"
-        dst_abs = os.path.join(dst_dir, dst_name)
-        shutil.copy2(src_path, dst_abs)
-
-        if auto_pipeline:
-            steps = auto_pipeline.get("steps", [])
-            profile_name = auto_pipeline.get("profile", "")
-            profiles = load_image_profiles(config)
-            profile = profiles.get(profile_name) if profile_name else None
-            watermark = load_watermark_settings(config)
-            ai_studio = load_ai_studio_settings(config)
-            result = run_pipeline(
-                dst_abs, steps, out_dir=dst_dir, profile=profile, watermark=watermark,
-                ai_studio=ai_studio,
-                text_engrave=load_text_engrave_settings(config),
-                qr_code=load_qr_code_settings(config),
-                product_info=product_info,
-            )
-            if result.ok:
-                # فایل نهایی پردازش‌شده جای فایل خام می‌شینه
-                final_ext = os.path.splitext(result.dst_path)[1]
-                final_name = f"{timestamp}_{os.path.splitext(base)[0]}{final_ext}"
-                final_abs = os.path.join(dst_dir, final_name)
-                os.replace(result.dst_path, final_abs)
-                if os.path.isfile(dst_abs) and dst_abs != final_abs:
-                    os.remove(dst_abs)
-                dst_name = final_name
-            else:
-                log.warning(f"⚠️ Smart Publish خودکار روی {base} ناموفق بود: {result.error}")
-
-        rel_path = os.path.join("product_images", sku, dst_name).replace("\\", "/")
+        final_abs = publish_product_image(
+            src_path, config, sku, next_image_index(sku), product_url,
+        )
+        rel_path = os.path.join("product_images", os.path.basename(final_abs)).replace("\\", "/")
 
         rel_paths = list(self._existing_manual_image_paths(sku))
         rel_paths.append(rel_path)
@@ -2226,16 +2190,33 @@ class ProductTab(QWidget):
             if not result.ok:
                 raise RuntimeError(result.error)
 
+            from sync_app.core.media_upload_ledger import file_digest, remember_media, reusable_media_id
+
+            source_digest = file_digest(src)
+            from sync_app.core.erp_image_helper import next_image_index, publish_product_image
+
+            result.dst_path = publish_product_image(
+                result.dst_path, config, sku, next_image_index(sku), product_url, run_pipeline=False,
+            )
             with open(result.dst_path, "rb") as f:
                 image_bytes = f.read()
 
             if ps_mode:
-                from sync_app.core.ps_sync_helper import ps_upload_product_image
+                from sync_app.core.media_upload_ledger import known_media_id
+                from sync_app.core.ps_sync_helper import ps_get_product_image_ids, ps_upload_product_image
 
+                known = known_media_id("prestashop", sku, source_digest)
                 try:
-                    ps_upload_product_image(
+                    current_ids = set(ps_get_product_image_ids(config, int(wc_id)))
+                except Exception:
+                    current_ids = None
+                if known and (current_ids is None or known in current_ids):
+                    return result
+                try:
+                    image_id = ps_upload_product_image(
                         config, int(wc_id), image_bytes, os.path.basename(result.dst_path),
                     )
+                    remember_media("prestashop", sku, source_digest, image_id)
                 except Exception as exc:
                     raise RuntimeError(f"افزودن تصویر به گالری محصول ناموفق بود: {exc}")
                 return result
@@ -2249,11 +2230,23 @@ class ProductTab(QWidget):
                 {"id": img.get("id")} for img in existing_images
                 if isinstance(img, dict) and img.get("id")
             ]
+            already = reusable_media_id(
+                "woocommerce", sku, source_digest, existing_images, os.path.basename(src),
+            )
+            if already:
+                remember_media("woocommerce", sku, source_digest, already)
+                if not any(int(img.get("id") or 0) == int(already) for img in new_images):
+                    new_images.append({"id": int(already)})
+                    ok2, _resp2, err2 = update_wc_product_images(config, wc_id, new_images)
+                    if not ok2:
+                        raise RuntimeError(f"افزودن تصویر به گالری محصول ناموفق بود: {err2}")
+                return result
             ok, media_id, _url, err = wp_upload_media_ex(
                 config, image_bytes, os.path.basename(result.dst_path), fallback_stem=sku
             )
             if not ok:
                 raise RuntimeError(f"آپلود رسانه ناموفق بود: {err}")
+            remember_media("woocommerce", sku, source_digest, media_id)
             new_images.append({"id": media_id})
             ok2, _resp2, err2 = update_wc_product_images(config, wc_id, new_images)
             if not ok2:
@@ -3394,17 +3387,14 @@ class ProductTab(QWidget):
         fail_count = 0
         log.info(f"📷 شروع ارسال تصاویر {len(to_process)} محصول به پرستاشاپ — فقط فایل‌های موجود روی دیسک")
 
-        def _apply_pipeline_if_needed(sku: str, abs_path: str, pid: int, already_processed: bool) -> str:
-            if already_processed:
-                # این تصویر موقعِ آپلودِ دستی/پیوستِ عکسِ موبایل قبلاً یک‌بار
-                # از پایپ‌لاین رد شده — دوباره اجرا نکنیم، وگرنه واترمارک/حکِ
-                # متن دوبار روی هم می‌افته.
-                return abs_path
-            # روشِ پردازشِ تصویرِ پیش‌فرض (اگه در تنظیمات ست شده باشه) — همون
-            # نقطه‌ی مشترکی که همه‌ی روش‌هایِ انتقالِ تصویر ازش استفاده می‌کنن.
+        def _apply_pipeline_if_needed(sku: str, abs_path: str, pid: int, already_processed: bool, index: int) -> str:
+            from sync_app.core.erp_image_helper import publish_product_image
+
             site_url = str(cfg.get("PS_URL") or "").strip().rstrip("/")
             product_url = f"{site_url}/index.php?id_product={int(pid)}&controller=product" if site_url else ""
-            return apply_default_pipeline(abs_path, cfg, code=sku, product_url=product_url)
+            return publish_product_image(
+                abs_path, cfg, sku, index, product_url, run_pipeline=not already_processed,
+            )
 
         for sku, paths in to_process:
             try:
@@ -3425,15 +3415,17 @@ class ProductTab(QWidget):
                             ps_delete_product_image(cfg, pid, existing_id)
                     except Exception as exc:
                         log.warning(f"⚠️ حذف تصاویر فعلی محصول {sku} ناموفق بود: {exc}")
+                gallery_known = True
                 try:
                     current_ps_ids = set(ps_get_product_image_ids(cfg, pid))
                 except Exception:
+                    gallery_known = False
                     current_ps_ids = set()
 
                 sku_manual_paths = manual_paths_by_sku.get(sku, set())
                 uploaded = 0
                 sent_hlo_ids: list[int] = []
-                for rel_or_abs in paths:
+                for image_index, rel_or_abs in enumerate(paths):
                     abs_path = self._product_image_abs_path(rel_or_abs)
                     if not abs_path:
                         log.warning(f"⚠️ فایل تصویر پیدا نشد — {sku}: {rel_or_abs}")
@@ -3441,13 +3433,15 @@ class ProductTab(QWidget):
                     src_digest = file_digest(abs_path)
                     hlo_id = hlo_id_from_path(abs_path)
                     known = known_media_id("prestashop", sku, src_digest)
-                    if known and known in current_ps_ids:
+                    if known and (not gallery_known or known in current_ps_ids):
                         if hlo_id:
                             sent_hlo_ids.append(hlo_id)
                         log.info(f"ℹ️ تصویر {os.path.basename(abs_path)} برای {sku} از قبل رویِ سایت هست — دوباره فرستاده نشد.")
                         uploaded += 1
                         continue
-                    abs_path = _apply_pipeline_if_needed(sku, abs_path, pid, rel_or_abs in sku_manual_paths)
+                    abs_path = _apply_pipeline_if_needed(
+                        sku, abs_path, pid, rel_or_abs in sku_manual_paths, image_index,
+                    )
                     filename = os.path.basename(abs_path)
                     try:
                         with open(abs_path, "rb") as f:
@@ -3530,20 +3524,19 @@ class ProductTab(QWidget):
         else:
             product_map = load_product_woo_map()
 
-        def _apply_pipeline_if_needed(sku: str, abs_path: str, already_processed: bool) -> str:
-            """اگه پایپ‌لاین خودکار فعاله، تصویر رو پردازش می‌کنه و مسیر
-            فایل نهایی (پردازش‌شده) رو برمی‌گردونه؛ وگرنه همون مسیر اصلی.
-            اگه already_processed باشه (یعنی این تصویرِ دستی/موبایل قبلاً
-            موقعِ آپلود/پیوست یک‌بار از پایپ‌لاین رد شده)، دوباره اجرا
-            نمی‌کنیم — وگرنه واترمارک/حکِ متن دوبار روی هم می‌افته."""
-            if already_processed:
-                return abs_path
+        def _apply_pipeline_if_needed(sku: str, abs_path: str, already_processed: bool, index: int) -> str:
+            """فایل نهایی با کد کالا ذخیره می‌شود. عکسی که موقع پیوست موبایل
+            یک‌بار پردازش شده، دوباره از پایپ‌لاین رد نمی‌شود."""
+            from sync_app.core.erp_image_helper import publish_product_image
+
             site_url = str(cfg.get("WC_URL") or "").strip().rstrip("/")
             product_url = ""
             wc_id = product_map.get(sku)
             if wc_id and site_url:
                 product_url = f"{site_url}/?p={int(wc_id)}"
-            return apply_default_pipeline(abs_path, cfg, code=sku, product_url=product_url)
+            return publish_product_image(
+                abs_path, cfg, sku, index, product_url, run_pipeline=not already_processed,
+            )
 
         for sku, paths in to_process:
             try:
@@ -3621,7 +3614,7 @@ class ProductTab(QWidget):
                 sku_manual_paths = manual_paths_by_sku.get(sku, set())
 
                 from sync_app.core.media_upload_ledger import (
-                    file_digest, gallery_has_hlo, hlo_id_from_path, known_media_id, remember_media, unique_ids,
+                    file_digest, hlo_id_from_path, remember_media, reusable_media_id, unique_ids,
                 )
                 from sync_app.core.erp_image_helper import mark_images_transferred
 
@@ -3630,7 +3623,7 @@ class ProductTab(QWidget):
                 kept_ids: list[int] = []
                 sent_hlo_ids: list[int] = []
                 batch_digests: set[str] = set()
-                for rel_or_abs in paths:
+                for image_index, rel_or_abs in enumerate(paths):
                     abs_path = self._product_image_abs_path(rel_or_abs)
                     if not abs_path:
                         log.warning(f"⚠️ فایل تصویر پیدا نشد — {sku}: {rel_or_abs}")
@@ -3640,10 +3633,12 @@ class ProductTab(QWidget):
                     # (با همین دکمه یا با سینکِ خودکار) — دوباره آپلود نمی‌شه.
                     src_digest = file_digest(abs_path)
                     hlo_id = hlo_id_from_path(abs_path)
-                    known = known_media_id("woocommerce", sku, src_digest)
-                    on_site_id = known if (known and known in existing_ids) else gallery_has_hlo(existing_images, hlo_id)
+                    on_site_id = reusable_media_id(
+                        "woocommerce", sku, src_digest, existing_images, os.path.basename(abs_path), hlo_id,
+                    )
                     if on_site_id:
                         kept_ids.append(int(on_site_id))
+                        remember_media("woocommerce", sku, src_digest, on_site_id)
                         if hlo_id:
                             sent_hlo_ids.append(hlo_id)
                         log.info(f"ℹ️ تصویر {os.path.basename(abs_path)} برای {sku} از قبل رویِ سایت هست — دوباره فرستاده نشد.")
@@ -3656,7 +3651,9 @@ class ProductTab(QWidget):
                         batch_digests.add(src_digest)
 
                     filename = os.path.basename(abs_path)
-                    abs_path = _apply_pipeline_if_needed(sku, abs_path, rel_or_abs in sku_manual_paths)
+                    abs_path = _apply_pipeline_if_needed(
+                        sku, abs_path, rel_or_abs in sku_manual_paths, image_index,
+                    )
                     filename = os.path.basename(abs_path)
                     with open(abs_path, "rb") as f:
                         img_data = f.read()

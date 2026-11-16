@@ -59,9 +59,16 @@ def describe_candidate(marker: dict) -> str:
     if not marker:
         return "نامشخص (این پوشه هنوز مارکر نداره — احتمالاً از قبلِ این نسخه مونده)"
     platform_fa = {"woocommerce": "ووکامرس", "prestashop": "پرستاشاپ"}.get(marker.get("platform") or "", marker.get("platform") or "؟")
-    erp_fa = {"dejavu": "دژاوو/هلو", "sepidar": "سپیدار/دشت"}.get(marker.get("erp_family") or "", marker.get("erp_family") or "؟")
+    provider = str(marker.get("erp_provider") or "").strip().lower()
+    erp_names = {"dejavu": "دژاوو", "holoo": "هلو", "sepidar": "سپیدار", "dasht": "دشت"}
+    if provider:
+        erp_fa = erp_names.get(provider, provider)
+    else:
+        erp_fa = {"dejavu": "دژاوو/هلو", "sepidar": "سپیدار/دشت"}.get(marker.get("erp_family") or "", marker.get("erp_family") or "؟")
     url = marker.get("url") or "—"
-    return f"{platform_fa} | {url} | ERP: {erp_fa}"
+    database = marker.get("database") or ""
+    db_note = f" | دیتابیس: {database}" if database else ""
+    return f"{platform_fa} | {url} | ERP: {erp_fa}{db_note}"
 
 
 def list_site_scope_candidates(*, exclude_current: bool = True) -> list[dict]:

@@ -112,6 +112,106 @@ def forget_transferred_images(sku: str, platform: str = "woocommerce") -> None:
         save_transferred_image_ids(mapping, platform)
 
 
+def product_image_filename(code: str, index: int, ext: str) -> str:
+    """عکس اول: کد کالا. عکس‌های بعدی: کد$۱ و کد$۲."""
+    safe = "".join(ch for ch in str(code or "").strip() if ch not in '\\/:*?"<>|$').strip() or "product"
+    ext = str(ext or ".jpg")
+    if not ext.startswith("."):
+        ext = f".{ext}"
+    ext = ext.lower()
+    if int(index or 0) <= 0:
+        return f"{safe}{ext}"
+    return f"{safe}${int(index)}{ext}"
+
+
+def next_image_index(code: str) -> int:
+    """اولین شمارهٔ خالی. صفر یعنی خودِ کد کالا، بعد از آن $۱ و $۲."""
+    folder = app_path("product_images")
+    if not os.path.isdir(folder):
+        return 0
+    target = str(code or "").strip().casefold()
+    found: set[int] = set()
+    for name in os.listdir(folder):
+        stem, _ext = os.path.splitext(name)
+        if "$" in stem:
+            code_part, _, idx_part = stem.partition("$")
+            if code_part.strip().casefold() == target and idx_part.strip().isdigit():
+                found.add(int(idx_part.strip()))
+        elif stem.strip().casefold() == target:
+            found.add(0)
+    if 0 not in found:
+        return 0
+    return max(found) + 1 if found else 0
+
+
+def discard_legacy_image_files(code: str) -> None:
+    """فایل‌های میانی و اسم‌های قدیمیِ همین کالا را از پوشهٔ تصاویر پاک می‌کند."""
+    folder = app_path("product_images")
+    prefix = str(code or "").strip()
+    if not prefix or not os.path.isdir(folder):
+        return
+    needle = prefix.casefold() + "_"
+    tokens = ("_hlo", "_erp_main", "_erp_extra", "_final", "_resized", "_wm", "_txt", "_qr")
+    for name in os.listdir(folder):
+        lower = name.casefold()
+        if not lower.startswith(needle):
+            continue
+        if not any(token in lower for token in tokens):
+            continue
+        try:
+            os.remove(os.path.join(folder, name))
+        except OSError:
+            pass
+
+
+def publish_product_image(
+    src_path: str,
+    config: dict | None,
+    code: str,
+    index: int,
+    product_url: str = "",
+    *,
+    run_pipeline: bool = True,
+) -> str:
+    """فقط فایل نهایی را با کد کالا نگه می‌دارد و فایل میانی را پاک می‌کند."""
+    if not src_path or not os.path.isfile(src_path):
+        return src_path
+    folder = app_path("product_images")
+    os.makedirs(folder, exist_ok=True)
+    src_abs = os.path.abspath(src_path)
+    src_ext = os.path.splitext(src_abs)[1] or ".jpg"
+    raw_dest = os.path.join(folder, product_image_filename(code, index, src_ext))
+    generated_sidecar = "_final" in os.path.basename(src_abs).lower()
+    if src_abs != os.path.abspath(raw_dest):
+        if os.path.isfile(raw_dest):
+            os.remove(raw_dest)
+        if src_abs.startswith(os.path.abspath(folder) + os.sep):
+            shutil.move(src_abs, raw_dest)
+        else:
+            shutil.copy2(src_abs, raw_dest)
+            if generated_sidecar and os.path.isfile(src_abs):
+                os.remove(src_abs)
+    else:
+        raw_dest = src_abs
+
+    processed = raw_dest
+    if run_pipeline:
+        from sync_app.core.smart_publish import apply_default_pipeline
+
+        processed = apply_default_pipeline(raw_dest, config or {}, code=code, product_url=product_url)
+
+    final_ext = os.path.splitext(processed)[1] or src_ext
+    final_dest = os.path.join(folder, product_image_filename(code, index, final_ext))
+    if os.path.abspath(processed) != os.path.abspath(final_dest):
+        if os.path.isfile(final_dest):
+            os.remove(final_dest)
+        shutil.move(processed, final_dest)
+    if os.path.abspath(raw_dest) != os.path.abspath(final_dest) and os.path.isfile(raw_dest):
+        os.remove(raw_dest)
+    discard_legacy_image_files(code)
+    return final_dest
+
+
 def _stage_one(dst_dir: str, subdir: str, sku_key: str, name_hint: str, blob: bytes, path: str, config: dict | None) -> str:
     """یه تصویر (blob یا path) رو تو پوشه‌ی مقصدِ مشترک (بدون زیرپوشه‌ی
     جداگانه به‌ازایِ هر SKU) ذخیره می‌کنه — نامِ فایل با sku_key شروع
@@ -166,13 +266,41 @@ def stage_erp_images(
     os.makedirs(dst_dir, exist_ok=True)
     rel_paths: list[str] = []
 
-    rel = _stage_one(dst_dir, subdir, sku_key, "erp_main", picture_blob, picture_path, config)
+    rel = _stage_named(dst_dir, subdir, sku_key, 0, picture_blob, picture_path, config)
     if rel and rel not in rel_paths:
         rel_paths.append(rel)
 
-    for idx, (extra_blob, extra_path) in enumerate(extra_images or []):
-        rel = _stage_one(dst_dir, subdir, sku_key, f"erp_extra_{idx}", extra_blob, extra_path, config)
+    for idx, (extra_blob, extra_path) in enumerate(extra_images or [], start=1):
+        rel = _stage_named(dst_dir, subdir, sku_key, idx, extra_blob, extra_path, config)
         if rel and rel not in rel_paths:
             rel_paths.append(rel)
 
+    if rel_paths:
+        discard_legacy_image_files(sku_key)
     return rel_paths
+
+
+def _stage_named(dst_dir: str, subdir: str, code: str, index: int, blob: bytes, path: str, config: dict | None) -> str:
+    """ذخیره با نام کد کالا یا کد$شماره. مسیر نسبی را برمی‌گرداند."""
+    blob = bytes(blob or b"")
+    if len(blob) > 64:
+        dst_name = product_image_filename(code, index, _detect_ext(blob))
+        dst_abs = os.path.join(dst_dir, dst_name)
+        try:
+            with open(dst_abs, "wb") as f:
+                f.write(blob)
+            return os.path.join(subdir, dst_name).replace("\\", "/")
+        except OSError:
+            pass
+
+    resolved = resolve_erp_picture_path(str(path or ""), config)
+    if resolved:
+        ext = os.path.splitext(resolved)[1] or ".jpg"
+        dst_name = product_image_filename(code, index, ext)
+        dst_abs = os.path.join(dst_dir, dst_name)
+        try:
+            shutil.copy2(resolved, dst_abs)
+            return os.path.join(subdir, dst_name).replace("\\", "/")
+        except OSError:
+            pass
+    return ""

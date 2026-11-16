@@ -1541,11 +1541,18 @@ class SettingsTab(QWidget):
             "پروفایل دیگر برای فروشگاه پرستاشاپ."
         )
         self.profile_switch_button.clicked.connect(self._open_profile_switcher)
+        self.profile_reset_match_button = QPushButton("پاک کردن تطبیق این پروفایل")
+        self.profile_reset_match_button.setToolTip(
+            "لینک کالا، دسته‌بندی، ویژگی و حافظهٔ «قبلاً ارسال شد» همین پروفایل پاک می‌شود. "
+            "اتصال دیتابیس و سایت و سفارش‌های ثبت‌شده می‌مانند."
+        )
+        self.profile_reset_match_button.clicked.connect(self._reset_current_profile_matches)
         profile_row = QWidget()
         profile_row_layout = QHBoxLayout(profile_row)
         profile_row_layout.setContentsMargins(0, 0, 0, 0)
         profile_row_layout.addWidget(QLabel(get_current_profile_id() or "—"))
         profile_row_layout.addWidget(self.profile_switch_button)
+        profile_row_layout.addWidget(self.profile_reset_match_button)
         profile_row_layout.addStretch()
         app_layout.addRow(QLabel("پروفایل فعال:"), profile_row)
 
@@ -3497,6 +3504,31 @@ class SettingsTab(QWidget):
 
     def _open_license_api_settings_page(self):
         self._open_external_url(self._wp_admin_url("wp-admin/admin.php?page=peecha-licenses"))
+
+    def _reset_current_profile_matches(self):
+        from sync_app.core.user_profile import get_current_profile_id, reset_profile_match_data
+
+        profile_id = get_current_profile_id() or "—"
+        answer = QMessageBox.question(
+            self,
+            "پاک کردن تطبیق",
+            f"تطبیق پروفایل «{profile_id}» پاک شود؟\n\n"
+            "لینک کالا، دسته‌بندی، ویژگی، متغیر و حافظهٔ ارسال عکس حذف می‌شود "
+            "تا ارسال بعدی از نو تطبیق کند.\n"
+            "اتصال دیتابیس، سایت و سفارش‌هایی که قبلاً ثبت شده‌اند می‌مانند.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        result = reset_profile_match_data()
+        QMessageBox.information(
+            self,
+            "انجام شد",
+            f"تطبیق پروفایل «{result.get('profile') or profile_id}» پاک شد "
+            f"({result.get('removed', 0)} فایل).\n"
+            "ارسال بعدی کالاها را از نو تطبیق و می‌فرستد.",
+        )
 
     def _open_profile_switcher(self):
         from sync_app.core.profile_switcher_dialog import ProfileSwitcherDialog
@@ -5721,6 +5753,15 @@ class SettingsTab(QWidget):
 
             config_to_save = self._apply_wc_sites_to_config_dict(config_to_save)
             config_to_save = self._apply_ps_sites_to_config_dict(config_to_save)
+            from sync_app.core.integrations.erp_provider import normalize_erp_provider_key
+            from sync_app.core.sync_utils import remember_selected_groups, swap_selected_groups_for_provider
+
+            old_provider = normalize_erp_provider_key(old_cfg.get("ERP_PROVIDER"))
+            new_provider = normalize_erp_provider_key(config_to_save.get("ERP_PROVIDER"))
+            if old_provider != new_provider:
+                swap_selected_groups_for_provider(config_to_save, old_provider, new_provider)
+            else:
+                remember_selected_groups(config_to_save)
             config_to_save["WC_PARALLEL_WORKERS"] = int(self.parallel_workers_spin.value())
             old_product_mode = str(self.config.get("PRODUCT_MODE", "with_variants"))
             new_product_mode = self.product_mode_combo.currentData()

@@ -748,14 +748,17 @@ def _batch_payload_from_var(var, vid=None, config=None, a_code=""):
     if not vid or is_field_enabled(config or {}, "SYNC_FIELD_VARIATION_PRICE"):
         payload["regular_price"] = var.get("regular_price")
     sku = str(var.get("sku") or "").strip()
+    from sync_app.core.sync_utils import site_sku_for_source
+
+    site_sku = site_sku_for_source(sku, config) if sku else ""
     if is_field_enabled(config or {}, "SYNC_FIELD_VARIATION_STOCK"):
         from sync_app.core.stock_mode import resolve_variation_stock_mode, apply_stock_mode_to_payload
         selected_groups = [str(g).strip() for g in (config or {}).get("SELECTED_SUB_GROUPS", []) if str(g).strip()]
         matched_group = next((g for g in selected_groups if str(a_code).startswith(g)), "")
         v_mode = resolve_variation_stock_mode(sku, str(a_code), matched_group, config or {})
         apply_stock_mode_to_payload(payload, v_mode, int(var.get("stock_quantity") or 0))
-    if sku:
-        payload["sku"] = sku
+    if site_sku:
+        payload["sku"] = site_sku
     if vid:
         payload["id"] = int(vid)
     return _apply_variation_field_rules(payload, var, vid, config)
@@ -849,18 +852,31 @@ def _save_variation_subset(wcapi, product_id, a_code, failed, id_by_sku, *, seri
 
 
 def _sku_aliases(sku):
-    """دو فرمت sku واریانت."""
+    """دو فرمت sku واریانت، به‌علاوهٔ کد سایتِ همین سرور و دیتابیس."""
     sku = str(sku or "").strip()
     if not sku:
         return set()
-    aliases = {sku}
-    m = re.match(r"^(.+)-V(\d+)$", sku, re.IGNORECASE)
-    if m:
-        aliases.add(f"V{m.group(2)}-{m.group(1)}")
-    m2 = re.match(r"^V(\d+)-(.+)$", sku, re.IGNORECASE)
-    if m2:
-        aliases.add(f"{m2.group(2)}-V{m2.group(1)}")
-    return aliases
+    from sync_app.core.sync_utils import erp_code_from_site_sku, site_sku_for_source
+
+    seeds = {sku, erp_code_from_site_sku(sku)}
+    aliases: set[str] = set()
+    for seed in seeds:
+        seed = str(seed or "").strip()
+        if not seed:
+            continue
+        aliases.add(seed)
+        scoped = site_sku_for_source(seed)
+        if scoped:
+            aliases.add(scoped)
+        m = re.match(r"^(.+)-V(\d+)$", seed, re.IGNORECASE)
+        if m:
+            aliases.add(f"V{m.group(2)}-{m.group(1)}")
+            aliases.add(site_sku_for_source(f"V{m.group(2)}-{m.group(1)}"))
+        m2 = re.match(r"^V(\d+)-(.+)$", seed, re.IGNORECASE)
+        if m2:
+            aliases.add(f"{m2.group(2)}-V{m2.group(1)}")
+            aliases.add(site_sku_for_source(f"{m2.group(2)}-V{m2.group(1)}"))
+    return {item for item in aliases if item}
 
 
 def _lookup_variation_id(by_sku, sku):
@@ -943,6 +959,69 @@ def _fetch_existing_variations_index(wcapi, product_id):
     return by_sku, by_id, by_trait
 
 
+def variation_attributes_need_rebuild(wcapi, product_id, attr_map) -> bool:
+    """فهرست ویژگیِ روی سایت با فهرستِ خوانده‌شده از دیتابیس یکی نیست."""
+    if not product_id or not attr_map:
+        return False
+
+    def _get():
+        response = wcapi.get(
+            f"products/{int(product_id)}",
+            params={"_fields": "attributes"},
+        )
+        data = response.json()
+        if not isinstance(data, dict):
+            raise RuntimeError(f"پاسخ نامعتبر attributes: {data}")
+        return data
+
+    try:
+        data = wc_call(wcapi, f"ویژگی‌های محصول #{product_id}", _get, retries=1)
+    except Exception:
+        return True
+
+    live: dict[str, set[str]] = {}
+    for attr in data.get("attributes") or []:
+        if not isinstance(attr, dict) or not attr.get("variation"):
+            continue
+        name = normalize_text(attr.get("name") or "")
+        if not name:
+            continue
+        live[name] = {
+            normalize_text(opt) for opt in (attr.get("options") or []) if str(opt).strip()
+        }
+    expected: dict[str, set[str]] = {}
+    for name, opts in (attr_map or {}).items():
+        key = normalize_text(name)
+        if not key:
+            continue
+        expected[key] = {normalize_text(opt) for opt in (opts or []) if str(opt).strip()}
+    return live != expected
+
+
+def replace_parent_variation_attributes(wcapi, product_id, a_code, attr_map, global_ids=None, config=None):
+    """ویژگی‌های متغیرِ کالا را دقیقاً برابر فهرست دیتابیس می‌گذارد."""
+    if not product_id or not attr_map:
+        return
+    if global_ids is None:
+        global_ids = _fetch_global_attribute_ids(wcapi)
+    product_attributes = _build_product_attributes(attr_map, global_ids)
+
+    def _put(body={"attributes": product_attributes}):
+        return wcapi.put(f"products/{int(product_id)}", body).json()
+
+    wc_call(
+        wcapi,
+        f"جایگزینی ویژگی‌های {a_code}",
+        _put,
+        retries=2,
+        backoff=(1.0, 2.0),
+    )
+    log.info(
+        f"▸ [{a_code}] ویژگی‌های متغیر برابر دیتابیس شد: "
+        + "، ".join(f"{name} ({len(opts)})" for name, opts in attr_map.items())
+    )
+
+
 def sync_variation_prices_quick(
     wcapi,
     conn,
@@ -954,6 +1033,8 @@ def sync_variation_prices_quick(
     size_label=None,
     color_label=None,
     variations=None,
+    attr_map=None,
+    global_ids=None,
 ):
     """فقط قیمت و موجودی واریانت‌های موجود — بدون bind/حذف/ساخت مجدد.
 
@@ -1067,6 +1148,9 @@ def sync_variation_prices_quick(
                 f"ℹ️ [{a_code}] {skipped_no_change} واریانت تطبیق داشت ولی چیزی برایِ ارسال نبود "
                 "(قیمت/موجودیِ متغیر خاموشه)."
             )
+            replace_parent_variation_attributes(
+                wcapi, product_id, a_code, attr_map, global_ids, config,
+            )
             _prune_orphan_variations(wcapi, product_id, a_code, variations, config=config)
             return skipped_no_change
         log.warning(
@@ -1079,6 +1163,9 @@ def sync_variation_prices_quick(
     result = _batch_variations(wcapi, product_id, body, "قیمت سریع", a_code)
     saved = _count_batch_ok(result, "update") + skipped_no_change
     log.info(f"✅ [{a_code}] قیمت {saved}/{len(updates) + skipped_no_change} واریانت → Woo #{product_id}")
+    replace_parent_variation_attributes(
+        wcapi, product_id, a_code, attr_map, global_ids, config,
+    )
     _prune_orphan_variations(wcapi, product_id, a_code, variations, config=config)
     return saved
 
@@ -1150,7 +1237,9 @@ def _build_variation_payload(
 
     sku = str(var.get("sku") or "").strip()
     if sku:
-        payload["sku"] = sku
+        from sync_app.core.sync_utils import site_sku_for_source
+
+        payload["sku"] = site_sku_for_source(sku)
     if vid:
         payload["id"] = vid
     payload.pop("sale_price", None)
@@ -2192,7 +2281,13 @@ def _main_prestashop(config, selected_groups, price_col):
                 stats["skipped"] += 1
                 continue
 
-            product_id = _resolve_product_id(api, a_code, product_map)
+            try:
+                product_id = _resolve_product_id(api, a_code, product_map)
+            except RuntimeError as exc:
+                log.warning(f"⚠️ [{a_code}] {exc}")
+                stats["failed"] += 1
+                stats["failed_skus"].append(a_code)
+                continue
             if not product_id:
                 log.warning(f"⚠️ {a_code} ({name}) محصول والد روی پرستاشاپ لینک/پیدا نشد — رد شد.")
                 stats["failed"] += 1
@@ -2203,6 +2298,24 @@ def _main_prestashop(config, selected_groups, price_col):
             skip, cache_entry, changed_parts = should_skip_unchanged(a_code, hash_payload, hash_cache, product_id)
             if force_full_sync:
                 skip = False
+            if skip:
+                try:
+                    from sync_app.core.ps_variation_helper import ps_list_combinations
+
+                    live_refs = {
+                        str(c.get("reference") or "").strip()
+                        for c in ps_list_combinations(config, int(product_id))
+                    }
+                    erp_refs = {str(v.get("sku") or "").strip() for v in erp_variations}
+                    live_refs.discard("")
+                    erp_refs.discard("")
+                    if live_refs != erp_refs:
+                        skip = False
+                        log.info(
+                            f"ℹ️ [{a_code}] ترکیب‌های پرستاشاپ با دیتابیس یکی نیست — دوباره ارسال می‌شود."
+                        )
+                except Exception:
+                    skip = False
             if skip:
                 skipped_unchanged += 1
                 stats["ok"] += 1
@@ -2265,6 +2378,12 @@ def _main_prestashop(config, selected_groups, price_col):
 
 
 def main():
+    from sync_app.core.integrations.erp_provider import catalog_sync_block_reason
+
+    blocked = catalog_sync_block_reason(load_secure_config(None) or {})
+    if blocked:
+        log.error(f"🛑 {blocked}")
+        raise RuntimeError(blocked)
     global _LAST_VARIATION_NETWORK_ERROR
     _LAST_VARIATION_NETWORK_ERROR = ""
     _LAST_VARIATION_FAIL_HINTS.clear()
@@ -2347,17 +2466,25 @@ def main():
                 dim_labels[2] if len(dim_labels) > 2 else "",
                 config=config,
             )
-            quick_saved = sync_variation_prices_quick(
-                wcapi,
-                conn,
-                config,
-                a_code,
-                raw_price,
-                product_map,
-                size_label=dim_labels[0] if dim_labels else None,
-                color_label=dim_labels[1] if len(dim_labels) > 1 else None,
-                variations=erp_variations,
-            )
+            try:
+                quick_saved = sync_variation_prices_quick(
+                    wcapi,
+                    conn,
+                    config,
+                    a_code,
+                    raw_price,
+                    product_map,
+                    size_label=dim_labels[0] if dim_labels else None,
+                    color_label=dim_labels[1] if len(dim_labels) > 1 else None,
+                    variations=erp_variations,
+                    attr_map=attr_map,
+                    global_ids=global_ids,
+                )
+            except RuntimeError as exc:
+                log.warning(f"⚠️ [{a_code}] {exc}")
+                stats["failed"] += 1
+                stats["failed_skus"].append(a_code)
+                continue
             product_id = _resolve_product_id(wcapi, a_code, product_map)
             if quick_saved >= len(erp_variations) and erp_variations:
                 skip_full = True

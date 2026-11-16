@@ -111,7 +111,7 @@ def save_product_woo_map(product_map: dict) -> None:
         log.warning(f"⚠️ ذخیره product_woo_map.json: {exc}")
 
 
-_PRODUCT_FIELDS = "id,status,sku,name,type,parent_id,date_created_gmt"
+_PRODUCT_FIELDS = "id,status,sku,name,type,parent_id,date_created_gmt,meta_data"
 
 
 def fetch_product_by_id(wcapi, product_id: int):
@@ -205,7 +205,9 @@ def check_mapped_product_identity(sku: str, info: dict | None, link_meta: dict |
             )
         if "wc_sku" in meta:
             rec_sku = str(meta.get("wc_sku") or "").strip()
-            if site_sku.casefold() in (rec_sku.casefold(), erp_sku.casefold()):
+            from sync_app.core.sync_utils import site_sku_matches_erp
+
+            if site_sku_matches_erp(site_sku, erp_sku) or site_sku_matches_erp(site_sku, rec_sku):
                 return True, ""
             return False, (
                 f"SKUِ محصولِ #{pid} رویِ سایت «{site_sku or '—'}» است، "
@@ -213,7 +215,9 @@ def check_mapped_product_identity(sku: str, info: dict | None, link_meta: dict |
             )
         return True, ""
 
-    if erp_sku and site_sku.casefold() == erp_sku.casefold():
+    from sync_app.core.sync_utils import site_sku_matches_erp
+
+    if site_sku_matches_erp(site_sku, erp_sku):
         return True, ""
     return False, f"محصولِ #{pid} رویِ سایت SKUِ «{site_sku or '—'}» دارد، نه «{erp_sku}»"
 
@@ -253,7 +257,7 @@ def find_product_by_sku(wcapi, sku: str):
                 "sku": sku,
                 "status": "any",
                 "per_page": 20,
-                "_fields": "id,status,sku,name,type",
+                "_fields": "id,status,sku,name,type,meta_data",
             },
         )
         data = wc_parse_json(resp, f"جستجوی SKU {sku}")
@@ -287,7 +291,7 @@ def _find_trashed_products_by_sku(wcapi, sku: str) -> list[dict]:
                 "sku": sku,
                 "status": "trash",
                 "per_page": 20,
-                "_fields": "id,status,sku,name,type",
+                "_fields": "id,status,sku,name,type,meta_data",
             },
         )
         data = wc_parse_json(resp, f"جستجوی SKU {sku} در سطل‌زباله")
@@ -389,21 +393,49 @@ def resolve_existing_product_id(wcapi, sku: str, product_map: dict | None = None
                     record_product_link_fingerprint(
                         sku, int(info["id"]), wc_sku=mapped_sku, wc_created=info.get("date_created_gmt"),
                     )
-                if mapped_sku != sku:
+                if link_meta and link_meta.get("manual") and mapped_sku != sku:
                     log.info(f"ℹ️ [{sku}] تطبیق دستی → Woo #{cached} (SKU سایت: {mapped_sku or '—'})")
                 if int(product_map.get(sku) or 0) != int(info["id"]):
                     product_map[sku] = int(info["id"])
                     save_product_woo_map(product_map)
-                return int(info["id"]), product_map
-            log.warning(
-                f"⚠️ [{sku}] لینکِ ذخیره‌شده به #{cached} دیگه معتبر نیست ({why}) — "
-                "به این محصول دست زده نمی‌شه؛ لینکِ قدیمی پاک شد و از نو بررسی می‌شه."
-            )
-            forget_product_site_state(sku, product_map)
+                from sync_app.core.sync_utils import product_is_other_source, source_product_mark
 
-    hit = find_product_by_sku(wcapi, sku)
-    if hit and hit.get("id") and _is_active_wc_product(hit):
+                manual = bool(link_meta and link_meta.get("manual"))
+                if not manual and product_is_other_source(info, int(info["id"])):
+                    mark = source_product_mark() or "سرور دیگر"
+                    log.info(
+                        f"ℹ️ [{sku}] محصول #{int(info['id'])} مال منبع دیگری است — "
+                        f"کالای «{mark}» جدا ساخته می‌شود و روی آن نوشته نمی‌شود."
+                    )
+                    forget_product_site_state(sku, product_map)
+                else:
+                    return int(info["id"]), product_map
+            else:
+                log.warning(
+                    f"⚠️ [{sku}] لینکِ ذخیره‌شده به #{cached} دیگه معتبر نیست ({why}) — "
+                    "به این محصول دست زده نمی‌شه؛ لینکِ قدیمی پاک شد و از نو بررسی می‌شه."
+                )
+                forget_product_site_state(sku, product_map)
+
+    from sync_app.core.sync_utils import product_is_other_source, site_sku_for_source, source_product_mark
+
+    seen: set[int] = set()
+    for candidate in dict.fromkeys([site_sku_for_source(sku), sku]):
+        hit = find_product_by_sku(wcapi, candidate)
+        if not hit or not hit.get("id") or not _is_active_wc_product(hit):
+            continue
         pid = int(hit["id"])
+        if pid in seen:
+            continue
+        seen.add(pid)
+        full = fetch_product_by_id(wcapi, pid) or hit
+        if product_is_other_source(full, pid):
+            mark = source_product_mark() or "این سرور"
+            log.info(
+                f"ℹ️ [{sku}] محصول #{pid} مال منبع دیگری است — "
+                f"برای «{mark}» کالای جدا ساخته می‌شود."
+            )
+            continue
         mapped = product_map.get(sku)
         if mapped and int(mapped) != pid:
             log.warning(
@@ -411,9 +443,9 @@ def resolve_existing_product_id(wcapi, sku: str, product_map: dict | None = None
                 f"جستجوی SKU → #{pid} — فقط #{mapped} استفاده می‌شود."
             )
             mapped_info = fetch_product_by_id(wcapi, int(mapped))
-            if mapped_info and _is_active_wc_product(mapped_info):
+            if mapped_info and _is_active_wc_product(mapped_info) and not product_is_other_source(mapped_info, int(mapped)):
                 return int(mapped), product_map
-            return None, product_map
+            continue
         product_map[sku] = pid
         save_product_woo_map(product_map)
         return pid, product_map

@@ -544,6 +544,7 @@ def ps_sync_product_variations(
 
     ok_count = 0
     failed_count = 0
+    kept_ids: set[int] = set()
     for var in variations:
         sku = str(var.get("sku") or "").strip()
         if not sku:
@@ -601,14 +602,17 @@ def ps_sync_product_variations(
                 stock_out_of_stock = 1 if always_available else 0
 
         try:
-            existing_combo = existing_by_ref.get(sku)
+            from sync_app.core.sync_utils import site_sku_for_source
+
+            site_ref = site_sku_for_source(sku, config)
+            existing_combo = existing_by_ref.get(site_ref) or existing_by_ref.get(sku)
             if existing_combo:
                 combo_id = int(existing_combo["id"])
                 # قیمت فقط طبقِ چک‌باکسِ «قیمتِ محصول» به‌روزرسانی می‌شه —
                 # price_impact=None به ps_update_combination می‌گه قیمتِ
                 # فعلیِ ترکیب رو دست‌نزنه (دقیقاً هم‌الگویِ رفتارِ ووکامرس).
                 ps_update_combination(
-                    config, combo_id,
+                    config, combo_id, reference=site_ref,
                     price_impact=price_impact if price_field_enabled else None,
                     option_value_ids=option_ids, timeout=timeout,
                 )
@@ -617,7 +621,7 @@ def ps_sync_product_variations(
                 # ووکامرس، برایِ ساختِ اولیه همیشه قیمت ست می‌شه.
                 is_default = not has_default
                 combo_id = ps_create_combination(
-                    config, product_id, reference=sku, price_impact=price_impact,
+                    config, product_id, reference=site_ref, price_impact=price_impact,
                     option_value_ids=option_ids, default_on=is_default, timeout=timeout,
                 )
                 if is_default:
@@ -627,6 +631,7 @@ def ps_sync_product_variations(
                     config, product_id, stock_qty, product_attribute_id=combo_id,
                     out_of_stock=stock_out_of_stock, known_row=stock_rows_by_attr.get(combo_id), timeout=timeout,
                 )
+            kept_ids.add(int(combo_id))
             ok_count += 1
             price_label = f"{var_price:g}" if price_field_enabled or not existing_combo else "دست‌نخورده (فیلد قیمت غیرفعال)"
             stock_label = str(stock_qty) if stock_field_enabled else "دست‌نخورده (فیلد موجودی غیرفعال)"
@@ -634,6 +639,16 @@ def ps_sync_product_variations(
         except Exception as exc:
             log.error(f"❌ واریانت {sku} روی پرستاشاپ: {exc}")
             failed_count += 1
+
+    if failed_count == 0:
+        for combo in existing_by_ref.values():
+            combo_id = int(combo.get("id") or 0)
+            if combo_id and combo_id not in kept_ids:
+                try:
+                    ps_delete_combination(config, combo_id, timeout=timeout)
+                    log.info(f"▸ [{a_code}] ترکیب #{combo_id} دیگر در دیتابیس نیست — حذف شد.")
+                except Exception as exc:
+                    log.warning(f"⚠️ [{a_code}] حذف ترکیب #{combo_id} ناموفق: {exc}")
 
     log.info(f"📊 واریانت‌های [{a_code}] روی پرستاشاپ: {ok_count} موفق، {failed_count} خطا (از {len(variations)}).")
     return failed_count == 0

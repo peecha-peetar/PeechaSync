@@ -793,13 +793,22 @@ class MediaCenterTab(QWidget):
                         if not append_mode:
                             for existing_id in ps_get_product_image_ids(config, pid):
                                 ps_delete_product_image(config, pid, existing_id)
+                        from sync_app.core.media_upload_ledger import file_digest, known_media_id, remember_media
+
+                        current_ids = set(ps_get_product_image_ids(config, pid))
+                        from sync_app.core.erp_image_helper import publish_product_image
+
                         for _idx, path in items:
-                            # روشِ پردازشِ تصویرِ پیش‌فرض — همون نقطه‌ی مشترکی که
-                            # همه‌ی روش‌هایِ انتقالِ تصویر ازش استفاده می‌کنن.
-                            final_path = apply_default_pipeline(path, config, code=a_code)
+                            digest = file_digest(path)
+                            known = known_media_id("prestashop", a_code, digest)
+                            if known and known in current_ids:
+                                continue
+                            final_path = publish_product_image(path, config, a_code, int(_idx or 0))
                             with open(final_path, "rb") as f:
                                 data = f.read()
-                            ps_upload_product_image(config, pid, data, os.path.basename(final_path))
+                            image_id = ps_upload_product_image(config, pid, data, os.path.basename(final_path))
+                            remember_media("prestashop", a_code, digest, image_id)
+                            current_ids.add(int(image_id or 0))
                         mark_bulk_import_uploaded([p for _idx, p in items], a_code)
                         ok_count += 1
                         continue
@@ -811,8 +820,23 @@ class MediaCenterTab(QWidget):
                         existing = data_existing.get("images") or [] if isinstance(data_existing, dict) else []
                         image_ids = [{"id": im.get("id")} for im in existing if isinstance(im, dict) and im.get("id")]
 
+                    from sync_app.core.media_upload_ledger import file_digest, remember_media, reusable_media_id
+
+                    gallery = existing if append_mode else []
                     for _idx, path in items:
-                        final_path = apply_default_pipeline(path, config, code=a_code)
+                        digest = file_digest(path)
+                        reused = reusable_media_id(
+                            "woocommerce", a_code, digest, gallery, os.path.basename(path),
+                        )
+                        if reused and any(int(img.get("id") or 0) == int(reused) for img in image_ids):
+                            continue
+                        if reused:
+                            remember_media("woocommerce", a_code, digest, reused)
+                            image_ids.append({"id": int(reused)})
+                            continue
+                        from sync_app.core.erp_image_helper import publish_product_image
+
+                        final_path = publish_product_image(path, config, a_code, int(_idx or 0))
                         with open(final_path, "rb") as f:
                             data = f.read()
                         ok, media_id, _url, err = wp_upload_media_ex(
@@ -820,6 +844,7 @@ class MediaCenterTab(QWidget):
                         )
                         if not ok:
                             raise RuntimeError(err)
+                        remember_media("woocommerce", a_code, digest, media_id)
                         image_ids.append({"id": media_id})
                     ok2, _resp, err2 = update_wc_product_images(config, wc_id, image_ids)
                     if not ok2:

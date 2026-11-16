@@ -1,4 +1,3 @@
-import requests
 import pyodbc
 import re
 from collections import defaultdict
@@ -192,7 +191,16 @@ def resolve_line_item_variant(cursor, item):
                     if forced_poshak_id is not None and forced_r_arcode_c is not None:
                         return forced_parent_sku, forced_poshak_id, forced_r_arcode_c, infer_line_item_sku(item)
 
-    sku = infer_line_item_sku(item)
+    site_sku = infer_line_item_sku(item)
+    from sync_app.core.sync_utils import order_line_erp_sku
+
+    sku, other_source = order_line_erp_sku(site_sku)
+    if other_source:
+        log.warning(
+            "خط سفارش مال سرور/دیتابیس دیگری است و در دیتابیس فعلی ثبت نمی‌شود: "
+            f"{site_sku}"
+        )
+        return None, None, None, site_sku
     a_code, poshak_id_c, parts = parse_sku(sku)
 
     poshak_id_f = None
@@ -284,31 +292,153 @@ def _line_unit_price(item, config):
     return wc_total_to_erp_amount(price_val, config)
 
 
-def _calculate_order_sum_price(order, config):
-    """جمع خطوط سفارش (qty × unit)."""
+def _as_amount(value) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def order_payable_amount(order, config) -> float:
+    """مبلغ قابل‌ثبت در سربرگ فاکتور ERP.
+
+    اگر سایت جمع نهایی را فرستاده باشد (ووکامرس total، پرستاشاپ
+    total_paid_tax_incl) همان استفاده می‌شود: کالا + مالیات + ارسال +
+    کارمزد، بعد از تخفیف. وگرنه جمع فی خطوط به اضافهٔ ارسال و کارمزد.
+    """
+    site_total = order.get("total") if isinstance(order, dict) else None
+    if site_total not in (None, ""):
+        amount = wc_total_to_erp_amount(site_total, config)
+        if amount > 0:
+            return amount
+
     total = 0.0
-    for item in order.get("line_items", []):
+    for item in (order or {}).get("line_items") or []:
         qty = float(item.get("quantity", 0) or 0.0)
         if qty <= 0:
             continue
         total += _line_unit_price(item, config) * qty
-    return total
+
+    extra = _as_amount((order or {}).get("shipping_total")) + _as_amount((order or {}).get("shipping_tax"))
+    for fee in (order or {}).get("fee_lines") or []:
+        if isinstance(fee, dict):
+            extra += _as_amount(fee.get("total")) + _as_amount(fee.get("total_tax"))
+    return total + wc_total_to_erp_amount(extra, config)
+
+
+def _calculate_order_sum_price(order, config):
+    """جمع قابل‌پرداخت سفارش برای SumPrice."""
+    return order_payable_amount(order, config)
 
 
 # ---------------------------------------------------------
 # 📌 به‌روزرسانی وضعیت سفارش در ووکامرس
 # ---------------------------------------------------------
-def mark_order_completed(order_id):
+def mark_order_completed(order_id) -> bool:
     if is_ps_mode():
         # طبق تصمیم کاربر: فعلاً وضعیت سفارش روی پرستاشاپ تغییر داده نمی‌شود —
         # فقط در ERP ثبت می‌شود.
-        return
+        return True
     try:
-        url = f"{WC_ORDERS_ENDPOINT}/{order_id}"
-        requests.put(url, auth=WC_AUTH, json={"status": "completed"})
+        from sync_app.core.wc_sync_helper import wc_rest_request
+
+        cfg = load_secure_config(None) or {}
+        resp = wc_rest_request(
+            cfg, "PUT", f"orders/{order_id}", json_body={"status": "completed"}, timeout=30,
+        )
+        if int(getattr(resp, "status_code", 0) or 0) >= 400:
+            log.error(
+                f"❌ خطا در آپدیت وضعیت سفارش {order_id} در ووکامرس: "
+                f"HTTP {resp.status_code} — {getattr(resp, 'text', '')[:300]}"
+            )
+            return False
         log.info(f"✅ وضعیت سفارش {order_id} در ووکامرس به 'completed' تغییر کرد.")
+        return True
     except Exception as e:
         log.error(f"❌ خطا در آپدیت وضعیت سفارش {order_id} در ووکامرس: {e}")
+        return False
+
+
+def fetch_wc_processing_orders(config, timeout=30) -> list:
+    """همهٔ سفارش‌های processing، صفحه‌به‌صفحه.
+
+    ووکامرس بدون per_page فقط ۱۰ سفارش اول را برمی‌گرداند. پیش‌نمایش تب
+    تا ۱۰۰ تا را نشان می‌دهد؛ این تابع همان صف را تا آخر می‌خواند.
+    """
+    from sync_app.core.wc_sync_helper import wc_http_error_message, wc_rest_request
+
+    orders: list = []
+    page = 1
+    while page <= 50:
+        response = wc_rest_request(
+            config,
+            "GET",
+            "orders",
+            params={
+                "status": "processing",
+                "per_page": 100,
+                "page": page,
+                "orderby": "date",
+                "order": "desc",
+            },
+            timeout=timeout,
+        )
+        code = int(getattr(response, "status_code", 0) or 0)
+        if code >= 400:
+            # صفحهٔ بعد از آخر معمولاً 400 است، نه لیست خالی.
+            if page > 1:
+                break
+            raise RuntimeError(wc_http_error_message(response, config, prefix="خطا در دریافت سفارشات"))
+        batch = response.json()
+        if not isinstance(batch, list) or not batch:
+            break
+        orders.extend(batch)
+        log.info(f"📡 ووکامرس صفحه {page}: {len(batch)} سفارش processing")
+        if len(batch) < 100:
+            break
+        page += 1
+    return orders
+
+
+def _order_sync_outcome(order_id, status: str, detail: str = "") -> dict:
+    return {"id": order_id, "status": status, "detail": detail}
+
+
+def finish_order_batch(orders, order_ids, outcomes: list) -> dict:
+    """اگر چیزی جا مانده یا ثبت نشده، به‌جای پیام موفقیت خطا برمی‌گرداند."""
+    inserted = [o for o in outcomes if o.get("status") == "inserted"]
+    problems = [o for o in outcomes if o.get("status") not in ("inserted", "duplicate")]
+    fetched_ids = {int(o.get("id") or 0) for o in orders}
+    missing = []
+    if order_ids is not None:
+        missing = sorted(int(i) for i in order_ids if int(i) not in fetched_ids)
+
+    if not problems and not missing:
+        log.info("✅ پایان عملیات همگام‌سازی سفارشات.")
+        return {"ok": True, "orders": len(inserted)}
+
+    lines = []
+    labels = {
+        "failed": "خطا در ثبت",
+        "incomplete": "ناقص ماند و ثبت نشد (قلم بدون کالای ERP)",
+        "empty": "هیچ قلم معتبری نداشت و ثبت نشد",
+        "inserted_status_failed": "در ERP ثبت شد ولی وضعیت سایت به تکمیل‌شده نرفت",
+        "split_pending": "بخش این سرور ثبت شد یا منتظر ماند؛ بخش سرور دیگر هنوز باز است و سفارش سایت بسته نشد",
+    }
+    for outcome in problems:
+        label = labels.get(outcome.get("status"), outcome.get("status"))
+        detail = outcome.get("detail") or ""
+        extra = f" — {detail}" if detail else ""
+        lines.append(f"سفارش {outcome.get('id')}: {label}{extra}")
+    if missing:
+        shown = ", ".join(str(i) for i in missing[:30])
+        lines.append(
+            "این شماره‌ها بین سفارش‌های قابل‌انتقال (ووکامرس: در حال انجام، پرستاشاپ: پرداخت‌شده) پیدا نشدند: "
+            + shown
+        )
+    message = "همگام‌سازی سفارش کامل نشد.\n" + "\n".join(lines)
+    log.error(message)
+    raise RuntimeError(message)
 
 
 _column_max_length_cache: dict[tuple[str, str], int | None] = {}
@@ -365,6 +495,9 @@ def _fit_to_column(cursor, table: str, column: str, value, *, order_id=None) -> 
 def insert_order(order):
     order_id = order.get("id")
     config = load_secure_config(None) or {}
+    from sync_app.core.split_order import plan_split, record_split, split_closed
+
+    plan = plan_split(order, config)
     total_price = _calculate_order_sum_price(order, config)
     log.info(f"💰 SumPrice سفارش {order_id}: {total_price:,.0f} (جمع خطوط)")
     conn = None
@@ -391,9 +524,29 @@ def insert_order(order):
             if not recycled:
                 if verdict == UNKNOWN:
                     record_imported_order(order_id, order)
+                if plan["active"]:
+                    state = record_split(
+                        order, config,
+                        own_mark=plan["own_mark"],
+                        own_status="inserted",
+                        own_skus=[],
+                        own_amount=0,
+                        own_invoice=str(existing_row[0]),
+                        others=plan["others"],
+                        unassigned=[],
+                        shipping_on=plan["shipping_on"],
+                        shipping_amount=plan["shipping_amount"],
+                    )
+                    if split_closed(state):
+                        if mark_order_completed(order_id):
+                            return _order_sync_outcome(order_id, "duplicate")
+                        return _order_sync_outcome(order_id, "inserted_status_failed")
+                    log.info(f"ℹ️ سفارش {order_id} بخش این سرور را دارد؛ بخش سرور دیگر هنوز باز است.")
+                    return _order_sync_outcome(order_id, "split_pending", state.get("note") or "")
                 log.info(f"ℹ️ سفارش {order_id} قبلاً در {erp_provider_label(config)} ثبت شده — رد شد.")
-                mark_order_completed(order_id)
-                return
+                if mark_order_completed(order_id):
+                    return _order_sync_outcome(order_id, "duplicate")
+                return _order_sync_outcome(order_id, "inserted_status_failed")
             log.warning(
                 f"⚠️ شماره‌یِ سفارشِ {order_id} قبلاً برایِ یک سفارشِ دیگه (قبل از ریستِ سایت یا از سایتِ دیگری) "
                 f"در {erp_provider_label(config)} ثبت شده بود — این یک سفارشِ تازه‌ست و ثبت می‌شه."
@@ -423,6 +576,13 @@ def insert_order(order):
             qty = float(item.get("quantity", 0) or 0.0)
             if qty <= 0:
                 continue
+
+            if plan["active"]:
+                from sync_app.core.split_order import line_origin
+
+                kind, _mark, _erp = line_origin(item.get("sku"), config)
+                if kind == "other":
+                    continue
 
             a_code, poshak_id_f, r_arcode_c, sku = resolve_line_item_variant(cursor, item)
             if not a_code:
@@ -461,96 +621,183 @@ def insert_order(order):
                 "poshak_id_f": poshak_id_f,
                 "qty": qty,
                 "unit_price": unit_price,
-                "line_cost": unit_price * qty,
                 "r_commen_part": r_commen_part,
                 "item_name": (item.get("name") or "").strip(),
             })
 
         if not groups:
             conn.rollback()
+            if plan["active"] and skipped:
+                detail = ", ".join(skipped)
+                record_split(
+                    order, config,
+                    own_mark=plan["own_mark"],
+                    own_status="pending",
+                    own_skus=[],
+                    own_amount=0,
+                    others=plan["others"],
+                    unassigned=skipped,
+                    shipping_on=plan["shipping_on"],
+                    shipping_amount=plan["shipping_amount"],
+                )
+                log.error(
+                    f"❌ سفارش {order_id} ناقص ماند و در ERP ثبت نشد. خطوط بدون کالای ERP: {detail}"
+                )
+                return _order_sync_outcome(order_id, "incomplete", detail)
+            if plan["active"]:
+                state = record_split(
+                    order, config,
+                    own_mark=plan["own_mark"],
+                    own_status="",
+                    own_skus=[],
+                    own_amount=0,
+                    others=plan["others"],
+                    unassigned=skipped,
+                    shipping_on=plan["shipping_on"],
+                    shipping_amount=plan["shipping_amount"],
+                )
+                log.info(f"ℹ️ سفارش {order_id} کالای این سرور را ندارد و برای سرور دیگر باز می‌ماند.")
+                return _order_sync_outcome(order_id, "split_pending", state.get("note") or "")
             log.warning(f"⚠️ سفارش {order_id} هیچ ردیف معتبری نداشت، رول‌بک شد.")
-            return
+            return _order_sync_outcome(order_id, "empty")
 
+        if skipped:
+            conn.rollback()
+            detail = ", ".join(skipped)
+            if plan["active"]:
+                record_split(
+                    order, config,
+                    own_mark=plan["own_mark"],
+                    own_status="pending",
+                    own_skus=[],
+                    own_amount=0,
+                    others=plan["others"],
+                    unassigned=skipped,
+                    shipping_on=plan["shipping_on"],
+                    shipping_amount=plan["shipping_amount"],
+                )
+            log.error(
+                f"❌ سفارش {order_id} ناقص ماند و در ERP ثبت نشد. خطوط بدون کالای ERP: {detail}"
+            )
+            return _order_sync_outcome(order_id, "incomplete", detail)
+
+        if plan["active"]:
+            own_amount = sum(
+                float(variant["unit_price"]) * float(variant["qty"])
+                for variants in groups.values()
+                for variant in variants
+            )
+            total_price = own_amount + (plan["shipping_amount"] if plan["charge_shipping"] else 0)
+            cursor.execute("UPDATE RqTitle SET SumPrice = ? WHERE RqIndex = ?", (total_price, rqindex_id))
+            log.info(f"💰 SumPrice بخش این سرور برای سفارش {order_id}: {total_price:,.0f}")
+
+        # R_Cost در دژاوو فی واحد است، نه مبلغ سطر. واریانت‌های یک کد با فی
+        # یکسان در یک ردیف می‌مانند؛ اگر فی فرق کند ردیف جدا می‌گیرند تا
+        # جمع سطر داخل فی کالا ننشیند.
         detail_index = 0
         for a_code, variants in groups.items():
-            detail_index += 1
-
             cursor.execute("SELECT A_code_c, A_name FROM Article WHERE A_code = ?", (a_code,))
             article_row = cursor.fetchone()
             a_code_c = article_row[0] if article_row else ""
             a_name = article_row[1] if article_row else (variants[0].get("item_name") or "")
 
-            total_qty = sum(v["qty"] for v in variants)
-            total_cost = sum(v["line_cost"] for v in variants)
-            commen_parts = [v["r_commen_part"] for v in variants if v["r_commen_part"]]
-            r_commen = "/".join(commen_parts)
-            if not r_commen:
-                r_commen = variants[0].get("item_name") or a_name or ""
-
-            # کوتاه‌سازیِ دفاعی طبقِ حداکثرِ طولِ واقعیِ هر ستون — وگرنه یک
-            # کدِ دستیِ نامتعارف‌طولانی، یا نامِ کالا، یا کامنتِ سایز/رنگِ
-            # چندین واریانتِ یک کد در یک سفارش (که رویِ هم جمع می‌شه)، کلِ
-            # سفارش رو با خطایِ SQL 22001 رول‌بک می‌کرد.
-            a_code_ins = _fit_to_column(cursor, "RqDetail", "R_ArCode", a_code, order_id=order_id)
-            a_code_c_ins = _fit_to_column(cursor, "RqDetail", "R_ArCode_C", a_code_c, order_id=order_id)
-            a_name_ins = _fit_to_column(cursor, "RqDetail", "R_ArName", a_name, order_id=order_id)
-            r_commen_ins = _fit_to_column(cursor, "RqDetail", "R_Commen", r_commen, order_id=order_id)
-
-            cursor.execute("""
-                INSERT INTO RqDetail (
-                    RqIndex, RqType,
-                    R_ArCode, R_ArCode_C,
-                    R_ArName, R_Few, R_FewAval,
-                    R_Cost, R_Commen, Unit_Code,
-                    OkReceive, Show_Or_Hide, IndexHlp
-                )
-                VALUES (?, 'F',
-                        ?, ?,
-                        ?, ?, ?,
-                        ?, ?, 0,
-                        0, NULL, ?)
-            """, (
-                rqindex_id,
-                a_code_ins, a_code_c_ins,
-                a_name_ins, total_qty, total_qty,
-                total_cost, r_commen_ins, detail_index
-            ))
-
+            price_buckets = defaultdict(list)
             for variant in variants:
-                if variant["poshak_id_f"] is None:
-                    # کالایِ کاملاً ساده — دقیقاً مثلِ خودِ دژاوو، ItemFact
-                    # براش ساخته نمی‌شه (فقط RqDetailِ بالا کافیه).
-                    continue
+                price_buckets[round(float(variant["unit_price"]), 2)].append(variant)
+
+            for unit_price, bucket in price_buckets.items():
+                detail_index += 1
+                total_qty = sum(v["qty"] for v in bucket)
+                commen_parts = [v["r_commen_part"] for v in bucket if v["r_commen_part"]]
+                r_commen = "/".join(commen_parts)
+                if not r_commen:
+                    r_commen = bucket[0].get("item_name") or a_name or ""
+
+                # کوتاه‌سازیِ دفاعی طبقِ حداکثرِ طولِ واقعیِ هر ستون — وگرنه یک
+                # کدِ دستیِ نامتعارف‌طولانی، یا نامِ کالا، یا کامنتِ سایز/رنگِ
+                # چندین واریانتِ یک کد در یک سفارش (که رویِ هم جمع می‌شه)، کلِ
+                # سفارش رو با خطایِ SQL 22001 رول‌بک می‌کرد.
+                a_code_ins = _fit_to_column(cursor, "RqDetail", "R_ArCode", a_code, order_id=order_id)
+                a_code_c_ins = _fit_to_column(cursor, "RqDetail", "R_ArCode_C", a_code_c, order_id=order_id)
+                a_name_ins = _fit_to_column(cursor, "RqDetail", "R_ArName", a_name, order_id=order_id)
+                r_commen_ins = _fit_to_column(cursor, "RqDetail", "R_Commen", r_commen, order_id=order_id)
+
                 cursor.execute("""
-                    INSERT INTO ItemFact (
-                        Fac_Code, Fac_Type, A_Code, A_Index,
-                        PoshakIDF, Few, [Index], Price, SelPriceID
+                    INSERT INTO RqDetail (
+                        RqIndex, RqType,
+                        R_ArCode, R_ArCode_C,
+                        R_ArName, R_Few, R_FewAval,
+                        R_Cost, R_Commen, Unit_Code,
+                        OkReceive, Show_Or_Hide, IndexHlp
                     )
-                    VALUES (?, 'J', ?, ?, ?, ?, 0, 0, 1)
+                    VALUES (?, 'F',
+                            ?, ?,
+                            ?, ?, ?,
+                            ?, ?, 0,
+                            0, NULL, ?)
                 """, (
-                    fac_code_str, a_code, detail_index,
-                    variant["poshak_id_f"], variant["qty"]
+                    rqindex_id,
+                    a_code_ins, a_code_c_ins,
+                    a_name_ins, total_qty, total_qty,
+                    unit_price, r_commen_ins, detail_index
                 ))
+
+                for variant in bucket:
+                    if variant["poshak_id_f"] is None:
+                        # کالایِ کاملاً ساده — دقیقاً مثلِ خودِ دژاوو، ItemFact
+                        # براش ساخته نمی‌شه (فقط RqDetailِ بالا کافیه).
+                        continue
+                    cursor.execute("""
+                        INSERT INTO ItemFact (
+                            Fac_Code, Fac_Type, A_Code, A_Index,
+                            PoshakIDF, Few, [Index], Price, SelPriceID
+                        )
+                        VALUES (?, 'J', ?, ?, ?, ?, 0, 0, 1)
+                    """, (
+                        fac_code_str, a_code, detail_index,
+                        variant["poshak_id_f"], variant["qty"]
+                    ))
 
         conn.commit()
         from sync_app.core.order_import_ledger import record_imported_order
 
         record_imported_order(order_id, order)
-        inserted_details = len(groups)
+        inserted_details = detail_index
         inserted_facts = sum(1 for v in groups.values() for variant in v if variant["poshak_id_f"] is not None)
         log.info(
             f"✅ سفارش {order_id} ثبت شد. "
             f"(RqIndex={rqindex_id}, RQDetail={inserted_details}, ItemFact={inserted_facts})"
         )
-        if skipped:
-            log.warning(f"⚠️ خطوط ردشده سفارش {order_id}: {', '.join(skipped)}")
-
-        mark_order_completed(order_id)
+        if plan["active"]:
+            own_amount = sum(
+                float(variant["unit_price"]) * float(variant["qty"])
+                for variants in groups.values()
+                for variant in variants
+            )
+            state = record_split(
+                order, config,
+                own_mark=plan["own_mark"],
+                own_status="inserted",
+                own_skus=list(groups.keys()),
+                own_amount=own_amount,
+                own_invoice=str(rqindex_id),
+                others=plan["others"],
+                unassigned=[],
+                shipping_on=plan["shipping_on"],
+                shipping_amount=plan["shipping_amount"],
+            )
+            if not split_closed(state):
+                log.info(f"ℹ️ سفارش {order_id} دو قسمتی است؛ بخش این سرور ثبت شد و سفارش سایت باز ماند.")
+                return _order_sync_outcome(order_id, "split_pending", state.get("note") or "")
+        if mark_order_completed(order_id):
+            return _order_sync_outcome(order_id, "inserted")
+        return _order_sync_outcome(order_id, "inserted_status_failed")
 
     except Exception as e:
         if conn:
             conn.rollback()
         log.error(f"❌ خطا در ثبت سفارش {order_id}: {e}")
+        return _order_sync_outcome(order_id, "failed", str(e))
 
     finally:
         if conn:
@@ -577,15 +824,14 @@ def _main_prestashop(order_ids=None):
         orders = [o for o in orders if int(o.get("id") or 0) in order_ids]
 
     log.info(f"📦 تعداد سفارش‌های پرداخت‌شده (valid=1): {len(orders)}")
-    if not orders:
+    if not orders and not order_ids:
         log.info("ℹ️ سفارش جدیدی یافت نشد.")
         return {"ok": True, "orders": 0}
 
+    outcomes = []
     for order in orders:
-        insert_order(order)
-
-    log.info("✅ پایان عملیات همگام‌سازی سفارشات.")
-    return {"ok": True, "orders": len(orders)}
+        outcomes.append(insert_order(order))
+    return finish_order_batch(orders, order_ids, outcomes)
 
 
 # ---------------------------------------------------------
@@ -594,6 +840,13 @@ def _main_prestashop(order_ids=None):
 def main(order_ids=None):
     log.info("▶️ شروع همگام‌سازی سفارشات...")
     init_runtime_config()
+    from sync_app.core.integrations.erp_provider import catalog_sync_block_reason
+    from sync_app.core.secure_config_loader import load_secure_config
+
+    blocked = catalog_sync_block_reason(load_secure_config(None) or {})
+    if blocked:
+        log.error(f"🛑 {blocked}")
+        raise RuntimeError(blocked)
 
     if is_ps_mode():
         return _main_prestashop(order_ids)
@@ -632,40 +885,21 @@ def main(order_ids=None):
         log.info("✅ صفحات Cart/Checkout آماده‌اند")
 
     try:
-        from sync_app.core.wc_sync_helper import wc_rest_request, wc_http_error_message
-
         cfg = load_secure_config(None) or {}
-        response = wc_rest_request(
-            cfg,
-            "GET",
-            "orders",
-            params={"status": "processing"},
-            timeout=30,
-        )
-        log.info(f"📡 پاسخ ووکامرس: status={response.status_code}")
-
-        if int(response.status_code or 0) >= 400:
-            msg = wc_http_error_message(
-                response,
-                cfg,
-                prefix="خطا در دریافت سفارشات",
-            )
-            log.error(f"❌ {msg}")
-            raise RuntimeError(msg)
-
-        orders = response.json()
+        orders = fetch_wc_processing_orders(cfg, timeout=30)
 
         if order_ids is not None:
             orders = [o for o in orders if int(o.get("id") or 0) in order_ids]
 
         log.info(f"📦 تعداد سفارش‌های دریافتی: {len(orders)}")
 
-        if not orders:
+        if not orders and not order_ids:
             log.info("ℹ️ سفارش جدیدی یافت نشد.")
             return {"ok": True, "orders": 0}
 
+        outcomes = []
         for order in orders:
-            insert_order(order)
+            outcomes.append(insert_order(order))
 
     except StorePagesNotReadyError:
         raise
@@ -675,8 +909,7 @@ def main(order_ids=None):
         log.error(f"❌ خطا در ارتباط با ووکامرس: {e}")
         raise RuntimeError(f"خطا در ارتباط با ووکامرس: {e}") from e
 
-    log.info("✅ پایان عملیات همگام‌سازی سفارشات.")
-    return {"ok": True, "orders": len(orders)}
+    return finish_order_batch(orders, order_ids, outcomes)
 
 
 if __name__ == "__main__":

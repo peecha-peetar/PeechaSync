@@ -63,6 +63,52 @@ def ensure_profile_dir(profile_id: str | None = None) -> str:
     return path
 
 
+_KEEP_ON_MATCH_RESET = {
+    "scope.json",
+    "sepidar_order_map.json",
+    "imported_orders_ledger.json",
+}
+
+
+def reset_profile_match_data(profile_id: str | None = None) -> dict:
+    """لینک تطبیق و حافظهٔ ارسال همین پروفایل پاک می‌شود.
+
+    تنظیم اتصال (دیتابیس و سایت) و دفتر سفارش‌های ثبت‌شده می‌مانند تا
+    ارسال بعدی کالا از نو تطبیق شود و سفارش قدیمی دوباره فاکتور نشود.
+    """
+    root = ensure_profile_dir(profile_id)
+    removed = 0
+    for name in USER_DATA_FILES:
+        if name == "sync.log":
+            continue
+        path = os.path.join(root, name)
+        if os.path.isfile(path):
+            try:
+                os.remove(path)
+                removed += 1
+            except OSError:
+                pass
+    sites = os.path.join(root, "sites")
+    if os.path.isdir(sites):
+        for dirpath, _dirnames, filenames in os.walk(sites):
+            for name in filenames:
+                if name in _KEEP_ON_MATCH_RESET:
+                    continue
+                path = os.path.join(dirpath, name)
+                try:
+                    os.remove(path)
+                    removed += 1
+                except OSError:
+                    pass
+    try:
+        from sync_app.core import sync_utils
+
+        sync_utils._other_db_product_ids = None
+    except Exception:
+        pass
+    return {"removed": removed, "profile": os.path.basename(root)}
+
+
 def profile_data_path(*parts, profile_id: str | None = None) -> str:
     return os.path.join(ensure_profile_dir(profile_id), *parts)
 

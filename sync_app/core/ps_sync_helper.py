@@ -565,6 +565,7 @@ def _product_to_wc_shape(entry: dict, lang_id: int, *, stock_quantity: int | Non
         # اثرِ انگشتِ تغییرناپذیرِ محصول — برایِ تشخیصِ «شناسه‌یِ قدیمی الان
         # مالِ محصولِ دیگری‌ست» (check_mapped_product_identity).
         "date_created_gmt": str(entry.get("date_add") or ""),
+        "meta_data": _source_database_meta(entry.get("location")),
     }
 
 
@@ -678,6 +679,18 @@ def ps_get_product(config, product_id: int, *, timeout=None) -> dict | None:
     return _product_to_wc_shape(entry, lang_id, stock_quantity=qty)
 
 
+def _source_database_meta(location) -> list[dict]:
+    from sync_app.core.sync_utils import PS_LOCATION_PREFIX, SOURCE_DB_META
+
+    text = str(location or "")
+    if not text.startswith(PS_LOCATION_PREFIX):
+        return []
+    token = text[len(PS_LOCATION_PREFIX):].strip()
+    if not token:
+        return []
+    return [{"key": SOURCE_DB_META, "value": token}]
+
+
 def _visibility_from_wc(catalog_visibility: str) -> str:
     return "none" if (catalog_visibility or "").strip() == "hidden" else "both"
 
@@ -686,7 +699,7 @@ def ps_create_product(
     config, *, sku: str, name: str, price, description: str = "",
     category_ids: list[int] | None = None, active: bool = True,
     catalog_visibility: str = "visible", out_of_stock: int | None = None,
-    has_variants: bool = False, timeout=None,
+    has_variants: bool = False, source_database: str | None = None, timeout=None,
 ) -> dict:
     cfg = config or {}
     all_lang_ids = ps_all_lang_ids(cfg, timeout=timeout)
@@ -717,6 +730,9 @@ def ps_create_product(
         # بعدیِ محصول (مثلاً تنظیم سئو) بی‌صدا مقدارِ درستِ stock_availables رو
         # به «۲ = پیش‌فرض فروشگاه» ریست می‌کنه.
         _set_text(node, "out_of_stock", int(out_of_stock) if out_of_stock is not None else 2)
+        from sync_app.core.sync_utils import ps_location_for_source_database
+
+        _set_text(node, "location", ps_location_for_source_database(source_database or ""))
         if cat_ids:
             assoc = ET.SubElement(node, "associations")
             cats_node = ET.SubElement(assoc, "categories")
@@ -738,7 +754,7 @@ def ps_update_product(
     price=None, description: str | None = None, category_ids: list[int] | None = None,
     active: bool | None = None, catalog_visibility: str | None = None,
     out_of_stock: int | None = None, has_variants: bool | None = None,
-    manufacturer_id: int | None = None, timeout=None,
+    manufacturer_id: int | None = None, source_database: str | None = None, timeout=None,
 ) -> dict:
     cfg = config or {}
     lang_id = ps_lang_id(cfg)
@@ -807,6 +823,12 @@ def ps_update_product(
             else int(current.get("id_manufacturer") or 0)
         )
         _set_text(node, "id_manufacturer", final_manufacturer)
+        from sync_app.core.sync_utils import ps_location_for_source_database
+
+        _set_text(
+            node, "location",
+            ps_location_for_source_database(source_database or "", str(current.get("location") or "")),
+        )
         # این تابع اصلاً پارامتری برای description_short/meta_* نمی‌گیره — این
         # فیلدها فقط از طریق دستیار هوشمندِ سئو (ps_update_product_seo) نوشته
         # می‌شن، نه از ERP. قبلاً چون این‌جا کلاً جا نمی‌افتادن، هر سینکِ عادیِ
